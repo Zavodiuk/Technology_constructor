@@ -1,0 +1,317 @@
+# =====================================================================
+# PENTANARY SYMMETRIC OS & ARCHITECTURE - FULL INTEGRATED MONOLITH
+# =====================================================================
+
+print("=== СТАРТ ИНТЕГРАЦИОННОЙ ПРОВЕРКИ ПЕНТА-СИСТЕМЫ ===\n")
+
+# 1. Базовые компоненты и АЛУ
+class MockTechnologyConstructor:
+    def binary_stream_to_pentanary(self, binary_data):
+        return [b % 5 - 2 for b in binary_data]
+
+class PentanaryALU:
+    def balanced_add(self, a, b):
+        s = a + b
+        carry = 0
+        if s > 2:
+            s -= 5
+            carry = 1
+        elif s < -2:
+            s += 5
+            carry = -1
+        return s, carry
+
+    def trit_invert(self, trit):
+        return -trit
+
+constructor = MockTechnologyConstructor()
+alu_instance = PentanaryALU()
+
+
+# БЛОК 1: Компилятор
+print("[1/10] Инициализация PentanaryCompiler...")
+class PentanaryCompiler:
+    def __init__(self):
+        self.token_map = {
+            "IF_NEGATIVE": -1,
+            "IF_NEUTRAL": 0,
+            "IF_POSITIVE": 1,
+            "MAX_NEG": -2,
+            "MAX_POS": 2
+        }
+
+    def compile_conditional(self, expression_string):
+        clean_expr = expression_string.upper().strip()
+        if "LESS THAN ZERO" in clean_expr:
+            return self.token_map["IF_NEGATIVE"]
+        elif "GREATER THAN ZERO" in clean_expr:
+            return self.token_map["IF_POSITIVE"]
+        elif "EQUALS ZERO" in clean_expr:
+            return self.token_map["IF_NEUTRAL"]
+        elif "CRITICAL FAILURE" in clean_expr:
+            return self.token_map["MAX_NEG"]
+        else:
+            return self.token_map["MAX_POS"]
+
+    def optimize_abstract_syntax_tree(self, operation_list):
+        optimized_instructions = []
+        for op in operation_list:
+            if op in ["round", "floor", "ceil"]:
+                optimized_instructions.append("TRIT_TRUNCATE")
+            else:
+                optimized_instructions.append(f"EXEC_{op.upper()}")
+        return optimized_instructions
+
+compiler = PentanaryCompiler()
+print(f"  -> Условие 'LESS THAN ZERO' -> trit: {compiler.compile_conditional('LESS THAN ZERO')}")
+
+
+# БЛОК 2: Аппаратная ячейка
+print("[2/10] Инициализация PentanaryHardwareCell...")
+class PentanaryHardwareCell:
+    def __init__(self):
+        self.voltage_levels = {-2: -2.0, -1: -1.0, 0: 0.0, 1: 1.0, 2: 2.0}
+        self.current_state = 0
+
+    def apply_voltage(self, voltage):
+        closest_trit = min(self.voltage_levels.keys(), key=lambda k: abs(self.voltage_levels[k] - voltage))
+        if abs(self.voltage_levels[closest_trit] - voltage) > 0.4:
+            self.current_state = 0
+            return f"Signal Noise Detected! Cell reset to Neutral (0)."
+        self.current_state = closest_trit
+        return f"Cell stabilized at state {closest_trit} ({self.voltage_levels[closest_trit]}V)"
+
+    def read_physical_value(self):
+        return self.current_state
+
+cell = PentanaryHardwareCell()
+print(f"  -> Подача 1.8V: {cell.apply_voltage(1.8)}")
+
+
+# БЛОК 3: Файловая система и HAL
+print("[3/10] Инициализация PentanaryFileSystem & HAL...")
+class PentanaryFileSystem:
+    def __init__(self):
+        self.storage = {}
+        
+    def _trit_to_string_address(self, trit_vector):
+        return "".join(str(t) for t in trit_vector)
+
+    def create_file(self, address_vector, filename, size_blocks, access_trit):
+        str_addr = self._trit_to_string_address(address_vector)
+        if str_addr in self.storage:
+            return "Error: Address collision in Pentanary Tree"
+        self.storage[str_addr] = {
+            "name": filename,
+            "size": size_blocks,
+            "access": access_trit,
+            "data": [0] * size_blocks
+        }
+        return f"File '{filename}' successfully allocated at PFS address [{str_addr}]"
+
+class OS_HardwareAbstractionLayer:
+    def __init__(self, host_platform):
+        self.host = host_platform
+        self.pfs = PentanaryFileSystem()
+
+    def bridge_read_request(self, address_vector, current_user_privilege):
+        str_addr = self.pfs._trit_to_string_address(address_vector)
+        if str_addr not in self.pfs.storage:
+            return "OS Error: 404 File Not Found"
+        file_meta = self.pfs.storage[str_addr]
+        if current_user_privilege < file_meta["access"]:
+            return "OS Security Violation: Insufficient Pentanary Privilege Level"
+        return f"[HAL_{self.host}] Streaming data from file: {file_meta['name']}"
+
+hal_apple = OS_HardwareAbstractionLayer("Apple_Silicon")
+print(f"  -> Создание файла в PFS: {hal_apple.pfs.create_file([1, 0, -1], 'kernel_core.p5', 16, 1)}")
+
+
+# БЛОК 4: Сетевой стек (PTCP)
+print("[4/10] Инициализация PentanaryNetworkStack (PTCP)...")
+class PentanaryNetworkStack:
+    def __init__(self):
+        self.network_states = {
+            -2: "ROUTE_BLOCKED", -1: "PACKET_DROPPED", 0: "IDLE_CHANNEL", 1: "ROUTING_SUCCESS", 2: "BROADCAST_MODE"
+        }
+    def calculate_checksum(self, trit_stream):
+        return sum(trit_stream)
+    def create_packet(self, address_vector, payload_trits):
+        checksum = self.calculate_checksum(payload_trits)
+        compressed_checksum = max(-2, min(2, checksum))
+        packet = address_vector + payload_trits + [compressed_checksum]
+        return packet
+    def receive_and_route(self, packet_stream):
+        if not packet_stream:
+            return self.network_states[0], "Channel Empty"
+        payload = packet_stream[:-1]
+        declared_checksum = packet_stream[-1]
+        actual_checksum = self.calculate_checksum(payload)
+        actual_checksum_trit = max(-2, min(2, actual_checksum))
+        if actual_checksum_trit != declared_checksum:
+            return self.network_states[-1], "Error: Network Packet Corrupted"
+        return self.network_states[1], f"Packet routed successfully. Payload size: {len(payload)} trits"
+
+net_node = PentanaryNetworkStack()
+pkt = net_node.create_packet([1, -1], [2, 0, -2, 1])
+print(f"  -> Тест PTCP маршрутизации: {net_node.receive_and_route(pkt)[0]}")
+
+
+# БЛОК 5: Графический движок (V-Matrix UI)
+print("[5/10] Инициализация VMatrixGraphicsEngine...")
+class VMatrixGraphicsEngine:
+    def __init__(self, width=5, height=5):
+        self.half_w = width // 2
+        self.half_h = height // 2
+        self.canvas = {}
+        for x in range(-self.half_w, self.half_w + 1):
+            for y in range(-self.half_h, self.half_h + 1):
+                self.canvas[(x, y)] = 0
+    def draw_pixel(self, x, y, intensity_trit):
+        if not (-self.half_w <= x <= self.half_w) or not (-self.half_h <= y <= self.half_h):
+            return "UI Error: Out of V-Matrix canvas bounds"
+        if intensity_trit not in {-2, -1, 0, 1, 2}:
+            return "UI Error: Invalid intensity trit"
+        self.canvas[(x, y)] = intensity_trit
+        return f"Pixel rendered at ({x}, {y}) with value {intensity_trit}"
+    def render_to_host_rgba(self):
+        binary_rgba_buffer = {}
+        trit_to_brightness = {-2: 0, -1: 64, 0: 128, 1: 192, 2: 255}
+        for coords, trit_val in self.canvas.items():
+            brightness = trit_to_brightness.get(trit_val, 128)
+            binary_rgba_buffer[coords] = (brightness, brightness, brightness, 255)
+        return binary_rgba_buffer
+
+ui_engine = VMatrixGraphicsEngine(width=3, height=3)
+print(f"  -> Рендеринг пикселя UI: {ui_engine.draw_pixel(0, 0, 2)}")
+
+
+# БЛОК 6: Шина ввода-вывода (I/O Bridge)
+print("[6/10] Инициализация PentanaryIOBridge...")
+class PentanaryIOBridge:
+    def __init__(self, technology_constructor):
+        self.translator = technology_constructor
+        self.device_ports = {"USB_0": 0, "INPUT_DEVICE": 0, "NETWORK_CARD": 0}
+    def register_peripheral_event(self, port_name, binary_event_data):
+        if port_name not in self.device_ports:
+            return "IO Error: Unknown peripheral port"
+        if self.device_ports[port_name] == -2:
+            return f"IO Error: Port {port_name} is CRITICALLY_BLOCKED"
+        if not binary_event_data or len(binary_event_data) == 0:
+            self.device_ports[port_name] = -2
+            return f"IO Alert: Malformed stream. Port {port_name} isolated."
+        self.device_ports[port_name] = 1
+        pentanary_vector = self.translator.binary_stream_to_pentanary(binary_event_data)
+        self.device_ports[port_name] = 0
+        return {
+            "status": "Event Processed",
+            "port": port_name,
+            "interpreted_trit_vector": pentanary_vector,
+            "kernel_interrupt_ready": True
+        }
+
+io_bridge = PentanaryIOBridge(constructor)
+print(f"  -> Прерывание USB обработано: {io_bridge.register_peripheral_event('USB_0', [10, 25])['status']}")
+
+
+# БЛОК 7 & 8: Криптография и Блокчейн (P-Chain)
+print("[7/10 & 8/10] Инициализация PentanaryCryptography & Blockchain...")
+class PentanaryCryptography:
+    def __init__(self):
+        self.alu = PentanaryALU()
+    def generate_p_hash(self, trit_stream):
+        hash_vector = [0, -1, 2, -2, 1, 0, 1, -1, 2]
+        if not trit_stream:
+            return hash_vector
+        for i, trit in enumerate(trit_stream):
+            target_index = i % len(hash_vector)
+            res, carry = self.alu.balanced_add(hash_vector[target_index], trit)
+            hash_vector[target_index] = self.alu.trit_invert(res)
+            next_index = (target_index + 1) % len(hash_vector)
+            hash_vector[next_index], _ = self.alu.balanced_add(hash_vector[next_index], carry)
+        return hash_vector
+
+class PentanaryBlockchain:
+    def __init__(self):
+        self.crypto = PentanaryCryptography()
+        self.chain = []
+        self.create_genesis_block()
+    def create_genesis_block(self):
+        genesis_hash = [0] * 9
+        genesis_payload = [1, 2, -2, -1, 0]
+        block_hash = self.crypto.generate_p_hash(genesis_payload)
+        self.chain.append({
+            "index": 0,
+            "prev_hash": genesis_hash,
+            "payload": genesis_payload,
+            "nonce": [0, 0, 0],
+            "hash": block_hash
+        })
+    def add_block(self, transaction_trits, nonce_vector):
+        prev_block = self.chain[-1]
+        prev_hash = prev_block["hash"]
+        raw_block_data = prev_hash + transaction_trits + nonce_vector
+        current_hash = self.crypto.generate_p_hash(raw_block_data)
+        new_block = {
+            "index": len(self.chain),
+            "prev_hash": prev_hash,
+            "payload": transaction_trits,
+            "nonce": nonce_vector,
+            "hash": current_hash
+        }
+        self.chain.append(new_block)
+        return f"Block #{new_block['index']} successfully mined and locked."
+    def verify_chain_integrity(self):
+        for i in range(1, len(self.chain)):
+            current = self.chain[i]
+            previous = self.chain[i-1]
+            if current["prev_hash"] != previous["hash"]:
+                return f"ALERT: Chain broken at block {i}!"
+            raw_data = current["prev_hash"] + current["payload"] + current["nonce"]
+            recalculated_hash = self.crypto.generate_p_hash(raw_data)
+            if current["hash"] != recalculated_hash:
+                return f"ALERT: Data tampering detected in block {i}!"
+        return "Blockchain Integrity: VERIFIED. Secure."
+
+p_chain = PentanaryBlockchain()
+print(f"  -> Майнинг блока P-Chain: {p_chain.add_block([2, -1, 1], [1, 0, -1])}")
+
+
+# БЛОК 9 & 10: Смарт-контракты и SecureOSIntegrator
+print("[9/10 & 10/10] Инициализация SmartContracts & SecureOSIntegrator...")
+class PentanarySmartContract:
+    def __init__(self, contract_id):
+        self.contract_id = contract_id
+        self.contract_state = 0 
+    def evaluate_contract(self, execution_trit_vector):
+        score = sum(execution_trit_vector)
+        if score >= 3: self.contract_state = 2
+        elif score in (1, 2): self.contract_state = 1
+        elif score == 0: self.contract_state = 0
+        elif score in (-1, -2): self.contract_state = -1
+        else: self.contract_state = -2
+        states_map = {-2: "ARBITRAGE_FORFEIT", -1: "PENALTY_REFUND", 0: "WAITING_ORACLE", 1: "PARTIAL_FULFILL", 2: "TOTAL_EXECUTION"}
+        return f"Contract {self.contract_id} status: {states_map[self.contract_state]}"
+
+class PentanaryAsymmetricCrypto:
+    def __init__(self):
+        self.crypto_core = PentanaryCryptography()
+    def generate_key_pair(self, seed_trits):
+        private_key = self.crypto_core.generate_p_hash(seed_trits)
+        public_key = [self.crypto_core.alu.trit_invert(t) for t in private_key]
+        return {"public_key": public_key, "private_key": private_key}
+
+class SecureOSIntegrator:
+    def __init__(self, file_system, blockchain):
+        self.pfs = file_system
+        self.blockchain = blockchain
+    def secure_save_file(self, address_vector, filename, size, access_trit, data_trits):
+        allocation_result = self.pfs.create_file(address_vector, filename, size, access_trit)
+        file_hash = self.blockchain.crypto.generate_p_hash(data_trits)
+        self.blockchain.add_block(transaction_trits=file_hash, nonce_vector=[1, 0, -1])
+        return f"{allocation_result} | File cryptographically sealed in P-Chain."
+
+secure_gate = SecureOSIntegrator(hal_apple.pfs, p_chain)
+print(f"  -> Защищенное сохранение файла в P-Chain: {secure_gate.secure_save_file([-1, 1, 0], 'vault.p5', 8, -1, [1, -2, 1, 0])}")
+
+print("\n=== ВСЕ КОМПОНЕНТЫ ПЕНТА-СИСТЕМЫ УСПЕШНО ЗАГРУЖЕНЫ И ГОТОВЫ К РАБОТЕ ===")
