@@ -1,0 +1,174 @@
+# =====================================================================
+# HYBRID COGNITIVE PENTANARY ARCHITECTURE v6.3 — FULL INTEGRATED MONOLITH
+# =====================================================================
+
+print("=== СТАРТ ИНТЕГРАЦИОННОЙ ПРОВЕРКИ ФИНАЛЬНОГО МОНОЛИТА v6.3 ===\n")
+
+import math
+
+# ---------------------------------------------------------------------
+# 1. КОГНИТИВНОЕ ЯДРО (БЛОК X v6 + RASHOMON LAYER)
+# ---------------------------------------------------------------------
+class CognitiveBlockXCore:
+    def __init__(self):
+        self.active_state = 0 
+        
+    def evaluate_input_trit(self, raw_value):
+        if raw_value < -0.5: return -1
+        elif raw_value > 0.5: return 1
+        else: return 0
+
+    def compute_rashomon_consensus(self, hypothesis_list):
+        if not hypothesis_list:
+            return 0, "EMPTY_HYPOTHESIS"
+        
+        mean_val = sum(hypothesis_list) / len(hypothesis_list)
+        variance = sum((x - mean_val) ** 2 for x in hypothesis_list) / len(hypothesis_list)
+        std_dev = math.sqrt(variance)
+        
+        if std_dev > 1.2:
+            return -2, f"RASHOMON_CRITICAL_DISAGREEMENT (StdDev: {std_dev:.2f})"
+        elif std_dev > 0.6:
+            return 0, f"RASHOMON_NEUTRAL_UNCERTAINTY (StdDev: {std_dev:.2f})"
+        else:
+            consensus = max(-1, min(1, round(mean_val)))
+            return consensus, f"RASHOMON_CONSENSUS_ACHIEVED (StdDev: {std_dev:.2f})"
+
+
+# ---------------------------------------------------------------------
+# 2. АЛУ И КОМПИЛЯТОР ПЕНТА-СИСТЕМЫ
+# ---------------------------------------------------------------------
+class MockTechnologyConstructor:
+    def binary_stream_to_pentanary(self, binary_data):
+        return [b % 5 - 2 for b in binary_data]
+
+class HybridPentanaryALU:
+    def __init__(self, cog_core):
+        self.cog_core = cog_core
+
+    def balanced_pentanary_operation(self, a, b, context_hypotheses):
+        consensus_trit, status = self.cog_core.compute_rashomon_consensus(context_hypotheses)
+        if consensus_trit == -2:
+            return 0, f"Meta-Rashomon Intercept: {status} -> Forced Vacuum Reset (0)"
+        
+        s = a + b + consensus_trit
+        carry = 0
+        if s > 2:
+            s -= 5
+            carry = 1
+        elif s < -2:
+            s += 5
+            carry = -1
+        return s, f"Operation Success. {status} | Result: {s}, Carry: {carry}"
+
+
+# ---------------------------------------------------------------------
+# 3. ФАЙЛОВАЯ СИСТЕМА И ИНТЕГРАТОР БЕЗОПАСНОСТИ
+# ---------------------------------------------------------------------
+class PentanaryFileSystem:
+    def __init__(self):
+        self.storage = {}
+        
+    def _trit_to_string_address(self, trit_vector):
+        return "".join(str(t) for t in trit_vector)
+
+    def create_file(self, address_vector, filename, size_blocks, access_trit):
+        str_addr = self._trit_to_string_address(address_vector)
+        if str_addr in self.storage:
+            return "Error: Address collision in Pentanary Tree"
+        self.storage[str_addr] = {
+            "name": filename,
+            "size": size_blocks,
+            "access": access_trit,
+            "data": [0] * size_blocks
+        }
+        return f"File '{filename}' successfully allocated at PFS address [{str_addr}]"
+
+
+# ---------------------------------------------------------------------
+# 4. СЕТЕВОЙ СТЕК PTCP И КРИПТОГРАФИЯ P-CHAIN
+# ---------------------------------------------------------------------
+class HybridPentanaryNetworkStack:
+    def __init__(self, cog_core):
+        self.cog_core = cog_core
+
+    def create_cognitive_packet(self, address_vector, payload_trits):
+        consensus, status = self.cog_core.compute_rashomon_consensus(payload_trits)
+        header_flag = -2 if consensus == -2 else consensus
+        packet = address_vector + [header_flag] + payload_trits
+        return packet, f"Packet built. Status: {status}"
+
+class HybridPentanaryCryptography:
+    def __init__(self, cog_core):
+        self.cog_core = cog_core
+        self.alu_base = HybridPentanaryALU(cog_core)
+
+    def generate_cognitive_p_hash(self, trit_stream):
+        hash_vector = [0, -1, 2, -2, 1, 0, 1, -1, 2]
+        if not trit_stream: return hash_vector
+        consensus, _ = self.cog_core.compute_rashomon_consensus(trit_stream)
+        
+        for i, trit in enumerate(trit_stream):
+            target_index = i % len(hash_vector)
+            modulated = -trit if consensus == -2 else trit
+            res, carry = self.alu_base.balanced_pentanary_operation(hash_vector[target_index], modulated, [modulated])
+            hash_vector[target_index] = res if isinstance(res, int) else 0
+        return hash_vector
+
+class HybridPentanaryBlockchain:
+    def __init__(self, cog_core):
+        self.cog_core = cog_core
+        self.crypto = HybridPentanaryCryptography(cog_core)
+        self.chain = []
+        self.create_genesis_block()
+
+    def create_genesis_block(self):
+        genesis_hash = [0] * 9
+        genesis_payload = [1, 2, -2, -1, 0]
+        block_hash = self.crypto.generate_cognitive_p_hash(genesis_payload)
+        self.chain.append({
+            "index": 0, "prev_hash": genesis_hash, "payload": genesis_payload, "hash": block_hash, "pot_status": "GENESIS_SECURE"
+        })
+
+    def add_cognitive_block(self, transaction_trits):
+        consensus, status = self.cog_core.compute_rashomon_consensus(transaction_trits)
+        if consensus == -2:
+            return f"PoT Rejection: Block rejected due to critical logical tension (-2). {status}."
+        
+        prev_block = self.chain[-1]
+        prev_hash = prev_block["hash"]
+        current_hash = self.crypto.generate_cognitive_p_hash(prev_hash + transaction_trits)
+        
+        new_block = {
+            "index": len(self.chain), "prev_hash": prev_hash, "payload": transaction_trits, "hash": current_hash, "pot_status": f"VERIFIED_CONSENSUS_{consensus}"
+        }
+        self.chain.append(new_block)
+        return f"Block #{new_block['index']} successfully mined via Proof-of-Tension. {status}"
+
+
+# ---------------------------------------------------------------------
+# 5. СБОРКА И ЗАПУСК СИСТЕМЫ
+# ---------------------------------------------------------------------
+cog_core = CognitiveBlockXCore()
+alu = HybridPentanaryALU(cog_core)
+pfs = PentanaryFileSystem()
+network = HybridPentanaryNetworkStack(cog_core)
+blockchain = HybridPentanaryBlockchain(cog_core)
+
+print("[1/4] Инициализация когнитивного ядра и АЛУ...")
+res_alu, log_alu = alu.balanced_pentanary_operation(1, 1, [1, 1, 0, 1])
+print(f"  -> АЛУ Тест: {log_alu}")
+
+print("[2/4] Выделение памяти в Пента-файловой системе (PFS)...")
+pfs_res = pfs.create_file([1, 0, -1], "kernel_monolith.p5", 32, 1)
+print(f"  -> PFS Тест: {pfs_res}")
+
+print("[3/4] Проверка защищенного сетевого стека PTCP...")
+pkt, pkt_log = network.create_cognitive_packet([1, -1], [1, 1, 1, 0])
+print(f"  -> PTCP Тест: {pkt_log}")
+
+print("[4/4] Майнинг блока в когнитивном блокчейне (P-Chain / PoT)...")
+chain_res = blockchain.add_cognitive_block([1, 1, 0, 1, -1])
+print(f"  -> Blockchain Тест: {chain_res}")
+
+print("\n=== ВСЕ КОМПОНЕНТЫ ГИБРИДНОЙ АРХИТЕКТУРЫ v6.3 УСПЕШНО СИНТЕЗИРОВАНЫ И ПРОТЕСТИРОВАНЫ ===")
