@@ -1,0 +1,27 @@
+# Базовый домен: Пента-логика [-2, -1, 0, 1, 2], Троичный выход [-1, 0, 1]
+def process_cognitive_frame(input_hypotheses, noise_threshold=0.3):
+    # --- СЛОЙ 1: Входной контур Рашомона (Фильтрация шума) ---
+    filtered_stream = []
+    for h in input_hypotheses:
+        # Если дисперсия (шум) гипотезы ниже порога, гасим её в вакуумный ноль
+        variance = calculate_variance(h)
+        filtered_stream.append(0 if variance < noise_threshold else h.pentanary_state)
+        
+    # --- СЛОЙ 2: Выходной контур Рашомона (Meta-Rashomon Interceptor) ---
+    # Проверка на критическое противоречие полярных полюсов [-2] и [+2]
+    if (-2 in filtered_stream) and (2 in filtered_stream):
+        return 0  # Асинхронный вакуумный сброс всей системы при коллапсе логики
+        
+    # --- СЛОЙ 3: Троичный сумматор (Ternary Output Accumulator) ---
+    ternary_accumulator = 0
+    for state in filtered_stream:
+        # Схлопывание 5-уровневых состояний в троичные триты [-1, 0, +1]
+        if state > 0:
+            ternary_accumulator += 1   # Сборка уверенной истины (+1)
+        elif state < 0:
+            ternary_accumulator -= 1  # Сборка уверенного отрицания (-1)
+            
+    # Финальное насыщение троичного выхода (Saturation логика)
+    if ternary_accumulator > 0: return 1
+    if ternary_accumulator < 0: return -1
+    return 0
