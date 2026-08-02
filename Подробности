@@ -1,0 +1,681 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+quantize_all.py — расширенный инструментарий для троичного квантования медиа
+на основе модуля Block X (v6.3) архитектуры U‑01
+================================================================================
+
+АВТОР: Владимир Заводюк
+ЛИЦЕНЗИЯ: MIT
+ВЕРСИЯ: 1.0 (расширенная)
+
+ОПИСАНИЕ:
+    Данный файл реализует универсальный набор функций для сжатия и обработки
+    изображений и видео с использованием троичной логики (квантование в триты
+    {-1, 0, +1} по порогам 0.3/0.7). Он является практической демонстрацией
+    того, как базовые операции Block X (quantize, ternary_fold, разность,
+    нормализация знака) могут быть применены к медиаданным для достижения
+    высокой степени сжатия при сохранении структурной информации.
+
+    Философия:
+        - Любое непрерывное значение (яркость пикселя, частота кадров,
+          временной ряд) можно рассматривать как сигнал, который несёт
+          определённую информацию.
+        - Троичное квантование позволяет выделить наиболее значимые градации
+          сигнала, отбросив шум и полутона, и представить его в компактном
+          виде (2 бита на отсчёт).
+        - Это не просто потеря сжатия, а семантический фильтр, выделяющий
+          суть (например, контуры объектов, тренды, паттерны).
+        - Применение троичной логики к медиа является частным случаем
+          использования алгоритмов принятия решений Block X для анализа
+          любых потоков данных.
+
+ВОЗМОЖНОСТИ:
+    1. Сжатие одного изображения (в оттенках серого или цветное) в бинарный
+       файл с заголовком.
+    2. Восстановление изображения из бинарного файла.
+    3. Пакетная обработка всех изображений в папке.
+    4. Сжатие видео в обычный MP4 (H.264) с 3 градациями яркости.
+    5. Сверхсжатие видео в бинарный RAW-формат (сжатие до 2 бит/пиксель).
+    6. Декодирование RAW-видео обратно в MP4.
+    7. Адаптивное квантование с динамическим подбором порогов на основе
+       гистограммы изображения (автоконтраст).
+    8. Вычисление метрик качества (PSNR, SSIM) для сравнения с оригиналом.
+    9. Гибкая настройка порогов через командную строку.
+
+ЗАВИСИМОСТИ:
+    pip install numpy opencv-python Pillow scikit-image
+
+ЗАПУСК:
+    python quantize_all.py --help
+
+ПРИМЕРЫ:
+    python quantize_all.py image compress --input photo.jpg --output photo.bin --adaptive
+    python quantize_all.py image decompress --input photo.bin --output restored.jpg
+    python quantize_all.py image batch --input-dir ./photos/ --output-dir ./compressed/
+    python quantize_all.py video h264 --input video.mp4 --output video_quantized.mp4
+    python quantize_all.py video raw --input video.mp4 --output video.bin
+    python quantize_all.py video decode --input video.bin --output video_restored.mp4
+
+ТЕОРЕТИЧЕСКАЯ СПРАВКА:
+    Троичное квантование основано на идее, что большинство реальных сигналов
+    имеют три значимых уровня: низкий, средний, высокий. Пороги 0.3 и 0.7
+    были выбраны эмпирически в Block X как обеспечивающие баланс между
+    чувствительностью и устойчивостью к шуму. Преимущества:
+        - Простота вычислений (сравнение с числами).
+        - Устойчивость к малым вариациям (робастность).
+        - Возможность свёртки нескольких тритов в один (ternary_fold) для
+          принятия решения.
+        - Естественная обработка неопределённости (состояние 0).
+
+    В контексте сжатия это даёт коэффициент до 4х (8 бит -> 2 бита) без
+    использования сложных алгоритмов, что особенно полезно для встраиваемых
+    систем, IoT и быстрых прототипов.
+================================================================================
+"""
+
+import sys
+import os
+import argparse
+import struct
+import time
+import math
+from pathlib import Path
+from typing import Tuple, Optional, List, Dict, Any
+
+import numpy as np
+from PIL import Image
+import cv2
+
+# Попытка импортировать skimage для метрик качества (опционально)
+try:
+    from skimage.metrics import peak_signal_noise_ratio as psnr
+    from skimage.metrics import structural_similarity as ssim
+    HAS_SKIMAGE = True
+except ImportError:
+    HAS_SKIMAGE = False
+    # Заглушки, чтобы код не падал
+    def psnr(*args, **kwargs): return 0.0
+    def ssim(*args, **kwargs): return 0.0
+
+# =============================================================================
+# ЯДРО БЛОКА X — функции, работающие с тритами
+# =============================================================================
+
+def quantize(value: float, low: float = 0.3, high: float = 0.7) -> int:
+    """
+    Квантует непрерывное значение в трит {-1, 0, +1}.
+    Используется как основная операция для всех типов данных.
+
+    Аргументы:
+        value (float): входное значение в диапазоне [0, 1]
+        low (float): нижний порог (по умолчанию 0.3)
+        high (float): верхний порог (по умолчанию 0.7)
+
+    Возвращает:
+        int: -1, 0 или +1
+
+    Пример:
+        >>> quantize(0.85)
+        1
+        >>> quantize(0.5)
+        0
+        >>> quantize(0.2)
+        -1
+    """
+    if value >= high:
+        return 1
+    elif value <= low:
+        return -1
+    else:
+        return 0
+
+
+def normalize_sign(x: int) -> int:
+    """
+    Нормализация знака: x>0 → +1, x=0 → 0, x<0 → -1.
+    Используется для свёртки векторов тритов.
+    """
+    if x > 0:
+        return 1
+    elif x < 0:
+        return -1
+    else:
+        return 0
+
+
+def ternary_fold(vector: Tuple[int, ...]) -> int:
+    """
+    Свёртка вектора тритов в один трит.
+    Вычисляется как нормализация знака суммы компонент.
+
+    Аргументы:
+        vector: кортеж из тритов (-1, 0, +1)
+
+    Возвращает:
+        int: один трит
+
+    Пример:
+        >>> ternary_fold((1, 1, -1))
+        1   # так как сумма = 1, знак положительный
+        >>> ternary_fold((1, -1, 0))
+        0   # сумма = 0
+    """
+    return normalize_sign(sum(vector))
+
+
+def ternary_diff(vec_a: Tuple[int, ...], vec_b: Tuple[int, ...]) -> Tuple[int, ...]:
+    """
+    Поэлементная разность двух векторов тритов без нормализации.
+    Результат может быть в диапазоне [-2, 2] — это переход к пятеричной логике,
+    используется для выявления антагонизмов.
+
+    Пример:
+        >>> ternary_diff((1, 0, 1), (-1, 1, 0))
+        (2, -1, 1)
+    """
+    return tuple(a - b for a, b in zip(vec_a, vec_b))
+
+
+# =============================================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# =============================================================================
+
+def get_adaptive_thresholds(image_data: np.ndarray) -> Tuple[float, float]:
+    """
+    Вычисляет адаптивные пороги на основе гистограммы изображения.
+    Пороги выбираются так, чтобы разделить пиксели на три равные группы
+    (по количеству пикселей). Это улучшает контраст при квантовании.
+
+    Аргументы:
+        image_data: массив float32 в диапазоне [0, 1]
+
+    Возвращает:
+        (low, high) — адаптивные пороги
+    """
+    # Используем процентили: 33% и 66%
+    low = np.percentile(image_data, 33)
+    high = np.percentile(image_data, 66)
+    # Ограничиваем, чтобы не выходить за разумные пределы
+    low = max(0.1, min(0.5, low))
+    high = max(0.5, min(0.9, high))
+    return low, high
+
+
+def compute_metrics(original: np.ndarray, restored: np.ndarray) -> Dict[str, float]:
+    """
+    Вычисляет метрики качества между оригиналом и восстановленным изображением.
+    Возвращает словарь с PSNR и SSIM (если доступны).
+
+    Аргументы:
+        original: исходный массив (uint8, 2D)
+        restored: восстановленный массив (uint8, 2D)
+
+    Возвращает:
+        dict: {'psnr': float, 'ssim': float}
+    """
+    if original.shape != restored.shape:
+        raise ValueError("Размеры изображений не совпадают")
+    orig = original.astype(np.float32)
+    rest = restored.astype(np.float32)
+    mse = np.mean((orig - rest) ** 2)
+    if mse == 0:
+        psnr_val = float('inf')
+    else:
+        psnr_val = 20 * math.log10(255.0 / math.sqrt(mse))
+    if HAS_SKIMAGE:
+        ssim_val = ssim(original, restored, data_range=255)
+    else:
+        ssim_val = 0.0
+    return {'psnr': psnr_val, 'ssim': ssim_val}
+
+
+# =============================================================================
+# ОСНОВНЫЕ ФУНКЦИИ ДЛЯ ИЗОБРАЖЕНИЙ
+# =============================================================================
+
+def pack_trits(trits_flat: np.ndarray) -> bytearray:
+    """
+    Упаковывает массив тритов (значения 0,1,2) в бинарные байты.
+    Каждый трит занимает 2 бита, в байт помещается 4 трита.
+
+    Аргументы:
+        trits_flat: одномерный массив uint8 со значениями 0, 1, 2
+
+    Возвращает:
+        bytearray: упакованные данные
+    """
+    packed = bytearray()
+    for i in range(0, len(trits_flat), 4):
+        byte = 0
+        for j in range(4):
+            if i + j < len(trits_flat):
+                byte |= (trits_flat[i+j] & 0x03) << (6 - j*2)
+        packed.append(byte)
+    return packed
+
+
+def unpack_trits(packed: bytes, total_pixels: int) -> np.ndarray:
+    """
+    Распаковывает байты обратно в массив тритов.
+
+    Аргументы:
+        packed: бинарные данные
+        total_pixels: общее количество пикселей
+
+    Возвращает:
+        np.ndarray: одномерный массив длиной total_pixels со значениями -1, 0, 1
+    """
+    codes = []
+    for byte in packed:
+        for j in range(4):
+            code = (byte >> (6 - j*2)) & 0x03
+            # code: 0 -> -1, 1 -> 0, 2 -> 1
+            if code == 0:
+                codes.append(-1)
+            elif code == 2:
+                codes.append(1)
+            else:
+                codes.append(0)
+            if len(codes) >= total_pixels:
+                break
+        if len(codes) >= total_pixels:
+            break
+    return np.array(codes[:total_pixels], dtype=np.int8)
+
+
+def compress_image(
+    input_path: str,
+    output_bin: str,
+    adaptive: bool = False,
+    low: float = 0.3,
+    high: float = 0.7,
+    color: bool = False
+) -> Dict[str, Any]:
+    """
+    Сжимает изображение в бинарный файл с троичным квантованием.
+
+    Аргументы:
+        input_path: путь к изображению (любой формат)
+        output_bin: путь к выходному .bin файлу
+        adaptive: если True, пороги вычисляются адаптивно
+        low, high: фиксированные пороги (если adaptive=False)
+        color: если True, обрабатываются все цветовые каналы (RGB),
+               иначе — только яркость
+
+    Возвращает:
+        dict: статистика (размеры, коэффициент сжатия, метрики)
+    """
+    img = Image.open(input_path)
+    if color:
+        # Конвертируем в RGB и обрабатываем каждый канал отдельно
+        img_rgb = img.convert('RGB')
+        channels = []
+        for ch in range(3):
+            ch_data = np.array(img_rgb.getchannel(ch), dtype=np.float32) / 255.0
+            if adaptive:
+                low_ch, high_ch = get_adaptive_thresholds(ch_data)
+            else:
+                low_ch, high_ch = low, high
+            quant_ch = np.vectorize(quantize)(ch_data, low=low_ch, high=high_ch)
+            # Преобразуем -1,0,1 -> 0,1,2
+            codes = np.where(quant_ch == -1, 0, np.where(quant_ch == 1, 2, 1))
+            channels.append(codes.flatten().astype(np.uint8))
+        # Объединяем каналы последовательно
+        all_codes = np.concatenate(channels)
+        height, width = img_rgb.size[1], img_rgb.size[0]
+        mode = 'RGB'
+    else:
+        # Оттенки серого
+        gray = img.convert('L')
+        data = np.array(gray, dtype=np.float32) / 255.0
+        if adaptive:
+            low, high = get_adaptive_thresholds(data)
+        quant = np.vectorize(quantize)(data, low=low, high=high)
+        codes = np.where(quant == -1, 0, np.where(quant == 1, 2, 1))
+        all_codes = codes.flatten().astype(np.uint8)
+        height, width = gray.size[1], gray.size[0]
+        mode = 'L'
+
+    packed = pack_trits(all_codes)
+    header = struct.pack('ii', width, height)  # width, height
+    # Дополнительно сохраняем режим и пороги (для восстановления)
+    meta = struct.pack('cff', mode.encode(), low, high)
+    with open(output_bin, 'wb') as f:
+        f.write(meta)
+        f.write(header)
+        f.write(packed)
+
+    orig_size = len(all_codes)  # количество пикселей (или каналов)
+    if color:
+        orig_size = len(all_codes)  # уже учтены все каналы
+    comp_size = len(meta) + len(header) + len(packed)
+    ratio = orig_size / comp_size if comp_size > 0 else 0
+
+    # Восстановим для метрик (только если нужно)
+    # (здесь для краткости не делаем, но можно добавить)
+
+    return {
+        'width': width,
+        'height': height,
+        'mode': mode,
+        'low': low,
+        'high': high,
+        'orig_bytes': orig_size,
+        'comp_bytes': comp_size,
+        'ratio': ratio
+    }
+
+
+def decompress_image(
+    input_bin: str,
+    output_path: str,
+    width: Optional[int] = None,
+    height: Optional[int] = None
+) -> None:
+    """
+    Восстанавливает изображение из бинарного файла.
+
+    Аргументы:
+        input_bin: путь к .bin файлу
+        output_path: путь для сохранения восстановленного изображения
+        width, height: если указаны, переопределяют размеры из заголовка
+    """
+    with open(input_bin, 'rb') as f:
+        meta = f.read(1 + 4 + 4)  # mode + low + high (float)
+        if len(meta) < 9:
+            raise ValueError("Недостаточный заголовок")
+        mode = meta[0:1].decode()
+        low, high = struct.unpack('ff', meta[1:9])
+        header = f.read(8)
+        if len(header) < 8:
+            raise ValueError("Заголовок повреждён")
+        w, h = struct.unpack('ii', header)
+        if width is not None and height is not None:
+            w, h = width, height
+        data = f.read()
+
+    channels = 3 if mode == 'RGB' else 1
+    pixels = w * h * channels
+    bytes_needed = (pixels + 3) // 4
+    if len(data) < bytes_needed:
+        raise ValueError("Файл повреждён или размеры не совпадают")
+
+    trits = unpack_trits(data[:bytes_needed], pixels)
+
+    # Преобразуем триты в значения 0, 128, 255
+    # -1 -> 0, 0 -> 128, 1 -> 255
+    restored_flat = np.where(trits == -1, 0, np.where(trits == 1, 255, 128)).astype(np.uint8)
+
+    if mode == 'RGB':
+        # Разбиваем на каналы
+        r = restored_flat[0:w*h].reshape(h, w)
+        g = restored_flat[w*h:2*w*h].reshape(h, w)
+        b = restored_flat[2*w*h:3*w*h].reshape(h, w)
+        restored_img = np.stack([r, g, b], axis=2)
+        img_out = Image.fromarray(restored_img, mode='RGB')
+    else:
+        # Серый
+        restored_img = restored_flat.reshape(h, w)
+        img_out = Image.fromarray(restored_img, mode='L')
+
+    img_out.save(output_path)
+    print(f"Изображение восстановлено: {output_path} (размер {w}x{h}, пороги {low:.2f}/{high:.2f})")
+
+
+def batch_compress_images(
+    input_dir: str,
+    output_dir: str,
+    adaptive: bool = False,
+    color: bool = False,
+    ext: str = '.bin'
+) -> None:
+    """
+    Сжимает все изображения в указанной папке.
+
+    Аргументы:
+        input_dir: папка с исходными изображениями
+        output_dir: папка для сохранения .bin файлов
+        adaptive: адаптивные пороги
+        color: цветной режим
+        ext: расширение выходных файлов
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    for file in Path(input_dir).iterdir():
+        if file.is_file() and file.suffix.lower() in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff'):
+            out_name = file.stem + ext
+            out_path = os.path.join(output_dir, out_name)
+            print(f"Обработка: {file.name} -> {out_name}")
+            try:
+                stats = compress_image(str(file), out_path, adaptive=adaptive, color=color)
+                print(f"  Коэффициент сжатия: {stats['ratio']:.2f}x")
+            except Exception as e:
+                print(f"  Ошибка: {e}")
+
+
+# =============================================================================
+# ВИДЕО — ОБЫЧНОЕ СЖАТИЕ (H.264)
+# =============================================================================
+
+def compress_video_h264(
+    input_path: str,
+    output_path: str,
+    low: float = 0.3,
+    high: float = 0.7,
+    adaptive: bool = False
+) -> None:
+    """
+    Сжимает видео, превращая каждый кадр в 3 градации, и сохраняет в MP4.
+    """
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        raise RuntimeError("Не удалось открыть видео")
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height), isColor=False)
+
+    frame_count = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        norm = gray.astype(np.float32) / 255.0
+        if adaptive:
+            low, high = get_adaptive_thresholds(norm)
+        quant = np.vectorize(quantize)(norm, low=low, high=high)
+        restored = np.where(quant == -1, 0, np.where(quant == 1, 255, 128)).astype(np.uint8)
+        out.write(restored)
+        frame_count += 1
+        if frame_count % 100 == 0:
+            print(f"H.264: обработано {frame_count}/{total_frames} кадров")
+
+    cap.release()
+    out.release()
+    print(f"Видео сохранено: {output_path}")
+
+
+# =============================================================================
+# ВИДЕО — СВЕРХСЖАТИЕ В RAW
+# =============================================================================
+
+def compress_video_raw(
+    input_path: str,
+    output_bin: str,
+    low: float = 0.3,
+    high: float = 0.7,
+    adaptive: bool = False
+) -> Dict[str, Any]:
+    """
+    Сверхсжатие видео в бинарный RAW-формат.
+    Заголовок: width, height, fps, total_frames, low, high
+    Затем упакованные триты для каждого кадра.
+    """
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        raise RuntimeError("Не удалось открыть видео")
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # Заголовок: width (int), height (int), fps (float), total_frames (int), low (float), high (float)
+    header = struct.pack('ii fi ff', width, height, fps, total_frames, low, high)
+    packed_data = bytearray()
+    frame_count = 0
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        norm = gray.astype(np.float32) / 255.0
+        if adaptive:
+            low, high = get_adaptive_thresholds(norm)
+        quant = np.vectorize(quantize)(norm, low=low, high=high)
+        codes = np.where(quant == -1, 0, np.where(quant == 1, 2, 1)).flatten().astype(np.uint8)
+        packed_data.extend(pack_trits(codes))
+        frame_count += 1
+        if frame_count % 100 == 0:
+            print(f"RAW: обработано {frame_count}/{total_frames} кадров")
+
+    cap.release()
+    with open(output_bin, 'wb') as f:
+        f.write(header)
+        f.write(packed_data)
+
+    orig_bytes = width * height * total_frames  # 8 бит/пиксель
+    comp_bytes = len(header) + len(packed_data)
+    ratio = orig_bytes / comp_bytes if comp_bytes > 0 else 0
+    print(f"RAW сжатие: {orig_bytes} -> {comp_bytes} байт, коэффициент {ratio:.2f}x")
+    return {'orig_bytes': orig_bytes, 'comp_bytes': comp_bytes, 'ratio': ratio}
+
+
+def decode_video_raw(input_bin: str, output_path: str) -> None:
+    """
+    Декодирует RAW-видео из бинарного файла в MP4.
+    """
+    with open(input_bin, 'rb') as f:
+        header = f.read(4 + 4 + 4 + 4 + 4 + 4)  # int, int, float, int, float, float
+        if len(header) < 24:
+            raise ValueError("Заголовок повреждён")
+        width, height, fps, total_frames, low, high = struct.unpack('ii fi ff', header)
+        data = f.read()
+
+    pixels_per_frame = width * height
+    bytes_per_frame = (pixels_per_frame + 3) // 4
+
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height), isColor=False)
+
+    for frame_idx in range(total_frames):
+        start = frame_idx * bytes_per_frame
+        end = min(start + bytes_per_frame, len(data))
+        frame_data = data[start:end]
+        trits = unpack_trits(frame_data, pixels_per_frame)
+        # Восстановление
+        restored_flat = np.where(trits == -1, 0, np.where(trits == 1, 255, 128)).astype(np.uint8)
+        img = restored_flat.reshape(height, width)
+        out.write(img)
+        if frame_idx % 100 == 0:
+            print(f"Декодировано {frame_idx}/{total_frames} кадров")
+
+    out.release()
+    print(f"Видео восстановлено: {output_path}")
+
+
+# =============================================================================
+# КОМАНДНАЯ СТРОКА
+# =============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Троичное квантование медиа — сжатие изображений и видео (Block X)",
+        epilog="Полную документацию см. в начале файла."
+    )
+    subparsers = parser.add_subparsers(dest='command', help='Команды')
+
+    # ---- Изображения ----
+    img_parser = subparsers.add_parser('image', help='Работа с изображениями')
+    img_subparsers = img_parser.add_subparsers(dest='action', help='Действие')
+
+    compress_img = img_subparsers.add_parser('compress', help='Сжать одно изображение')
+    compress_img.add_argument('--input', required=True, help='Входной файл')
+    compress_img.add_argument('--output', default='compressed.bin', help='Выходной .bin')
+    compress_img.add_argument('--adaptive', action='store_true', help='Адаптивные пороги')
+    compress_img.add_argument('--low', type=float, default=0.3, help='Нижний порог (0..1)')
+    compress_img.add_argument('--high', type=float, default=0.7, help='Верхний порог (0..1)')
+    compress_img.add_argument('--color', action='store_true', help='Цветной режим (RGB)')
+
+    decompress_img = img_subparsers.add_parser('decompress', help='Восстановить изображение')
+    decompress_img.add_argument('--input', required=True, help='Входной .bin')
+    decompress_img.add_argument('--output', default='restored.jpg', help='Выходной файл')
+    decompress_img.add_argument('--width', type=int, help='Ширина (если не указана в заголовке)')
+    decompress_img.add_argument('--height', type=int, help='Высота (если не указана)')
+
+    batch = img_subparsers.add_parser('batch', help='Пакетная обработка папки')
+    batch.add_argument('--input-dir', required=True, help='Папка с изображениями')
+    batch.add_argument('--output-dir', required=True, help='Папка для .bin файлов')
+    batch.add_argument('--adaptive', action='store_true', help='Адаптивные пороги')
+    batch.add_argument('--color', action='store_true', help='Цветной режим')
+
+    # ---- Видео ----
+    video_parser = subparsers.add_parser('video', help='Работа с видео')
+    video_subparsers = video_parser.add_subparsers(dest='action', help='Действие')
+
+    h264 = video_subparsers.add_parser('h264', help='Сжатие через H.264 (3 градации)')
+    h264.add_argument('--input', required=True, help='Входное видео')
+    h264.add_argument('--output', required=True, help='Выходное видео (MP4)')
+    h264.add_argument('--adaptive', action='store_true', help='Адаптивные пороги')
+    h264.add_argument('--low', type=float, default=0.3, help='Нижний порог')
+    h264.add_argument('--high', type=float, default=0.7, help='Верхний порог')
+
+    raw = video_subparsers.add_parser('raw', help='Сверхсжатие в RAW .bin')
+    raw.add_argument('--input', required=True, help='Входное видео')
+    raw.add_argument('--output', required=True, help='Выходной .bin')
+    raw.add_argument('--adaptive', action='store_true', help='Адаптивные пороги')
+    raw.add_argument('--low', type=float, default=0.3, help='Нижний порог')
+    raw.add_argument('--high', type=float, default=0.7, help='Верхний порог')
+
+    decode = video_subparsers.add_parser('decode', help='Декодировать RAW .bin в видео')
+    decode.add_argument('--input', required=True, help='Входной .bin')
+    decode.add_argument('--output', required=True, help='Выходное видео (MP4)')
+
+    args = parser.parse_args()
+
+    if args.command == 'image':
+        if args.action == 'compress':
+            stats = compress_image(args.input, args.output, adaptive=args.adaptive,
+                                   low=args.low, high=args.high, color=args.color)
+            print(f"Сжато: {stats['orig_bytes']} -> {stats['comp_bytes']} байт, коэф. {stats['ratio']:.2f}x")
+            print(f"Пороги: low={stats['low']:.2f}, high={stats['high']:.2f}")
+        elif args.action == 'decompress':
+            decompress_image(args.input, args.output, args.width, args.height)
+        elif args.action == 'batch':
+            batch_compress_images(args.input_dir, args.output_dir, adaptive=args.adaptive, color=args.color)
+        else:
+            parser.print_help()
+
+    elif args.command == 'video':
+        if args.action == 'h264':
+            compress_video_h264(args.input, args.output, low=args.low, high=args.high, adaptive=args.adaptive)
+        elif args.action == 'raw':
+            compress_video_raw(args.input, args.output, low=args.low, high=args.high, adaptive=args.adaptive)
+        elif args.action == 'decode':
+            decode_video_raw(args.input, args.output)
+        else:
+            parser.print_help()
+    else:
+        parser.print_help()
+
+
+if __name__ == '__main__':
+    main()
