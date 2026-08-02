@@ -1,0 +1,25 @@
+class TernaryOS:
+    def __init__(self):
+        self.processes = []
+        self.memory_usage = 0.5
+        self.cpu_load = 0.3
+        self.security_level = 0.7
+
+    def boot(self):
+        # L3_in — проверка загрузчика
+        if quantize(self.memory_usage) == -1:
+            return "BOOT_FAIL"
+        return "BOOT_OK"
+
+    def schedule(self):
+        # как выше
+
+    def handle_interrupt(self, interrupt_type):
+        # контекстное переключение через Rashomon
+        pass
+
+    def shutdown(self):
+        if quantize(self.cpu_load) == 1:
+            return "SHUTDOWN_SAFE"
+        else:
+            return "SHUTDOWN_FORCED"
