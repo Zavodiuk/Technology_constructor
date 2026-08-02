@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""
+Минимальный пример использования quantize из Block X для сжатия изображений.
+Сохраняет изображение в бинарный файл (2 бита на пиксель) и создаёт предпросмотр.
+Запуск: python quantize_image.py input.jpg
+"""
+
+import sys
+import numpy as np
+from PIL import Image
+
+# Функция quantize из Block X (скопирована для автономности)
+def quantize(value, low=0.3, high=0.7):
+    return 1 if value >= high else (-1 if value <= low else 0)
+
+def compress_image(input_path, output_bin="compressed.bin", preview="preview.jpg"):
+    # Загрузка и нормализация
+    img = Image.open(input_path).convert('L')
+    data = np.array(img, dtype=np.float32) / 255.0
+
+    # Квантование
+    trits = np.vectorize(quantize)(data)
+    # -1->0, 0->1, 1->2 для упаковки по 2 бита
+    codes = np.where(trits == -1, 0, np.where(trits == 1, 2, 1)).flatten().astype(np.uint8)
+
+    # Упаковка: 4 трита в байт
+    packed = bytearray()
+    for i in range(0, len(codes), 4):
+        byte = 0
+        for j in range(4):
+            if i + j < len(codes):
+                byte |= (codes[i+j] & 0x03) << (6 - j*2)
+        packed.append(byte)
+
+    with open(output_bin, 'wb') as f:
+        f.write(packed)
+
+    # Восстановление для предпросмотра
+    restored = []
+    for byte in packed:
+        for j in range(4):
+            code = (byte >> (6 - j*2)) & 0x03
+            restored.append(-1 if code == 0 else (1 if code == 2 else 0))
+    restored = np.array(restored[:len(codes)], dtype=np.float32).reshape(data.shape)
+    preview_img = np.where(restored == -1, 0, np.where(restored == 1, 255, 128)).astype(np.uint8)
+    Image.fromarray(preview_img, mode='L').save(preview)
+
+    orig_size = data.size
+    comp_size = len(packed)
+    print(f"Исходный размер: {orig_size} пикселей")
+    print(f"Сжатый размер: {comp_size} байт")
+    print(f"Коэффициент: {orig_size/comp_size:.2f}x")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Использование: python quantize_image.py <путь_к_изображению>")
+        sys.exit(1)
+    compress_image(sys.argv[1])
