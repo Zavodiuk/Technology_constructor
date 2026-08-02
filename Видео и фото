@@ -1,0 +1,334 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+quantize_all.py — полный набор инструментов для сжатия и восстановления
+медиаданных (изображений и видео) с использованием троичного квантования
+из модуля Block X (v6.3).
+
+Возможности:
+1. Сжатие изображения в бинарный файл (2 бита/пиксель) с восстановлением.
+2. Сжатие видео через H.264 (визуально 3 градации).
+3. Сжатие видео в бинарный RAW формат (максимальное сжатие) с декодером.
+
+Зависимости:
+    pip install numpy opencv-python Pillow
+
+Запуск:
+    python quantize_all.py image compress <input> [--output-bin] [--output-preview]
+    python quantize_all.py image decompress <input.bin> <output.jpg> [--width W] [--height H]
+    python quantize_all.py video h264 <input.mp4> <output.mp4>
+    python quantize_all.py video raw <input.mp4> <output.bin>
+    python quantize_all.py video decode <input.bin> <output.mp4>
+
+Примеры:
+    python quantize_all.py image compress photo.jpg --output-bin compressed.bin --output-preview preview.jpg
+    python quantize_all.py image decompress compressed.bin restored.jpg --width 1920 --height 1080
+    python quantize_all.py video h264 input.mp4 output_h264.mp4
+    python quantize_all.py video raw input.mp4 output_raw.bin
+    python quantize_all.py video decode output_raw.bin restored_video.mp4
+"""
+
+import sys
+import argparse
+import struct
+import numpy as np
+from PIL import Image
+import cv2
+
+# =============================================================================
+# ЯДРО — функция quantize из Block X (скопирована для автономности)
+# =============================================================================
+
+def quantize(value, low=0.3, high=0.7):
+    """
+    Квантует непрерывное значение [0,1] в трит {-1, 0, +1}.
+    Пороги: low = 0.3, high = 0.7 (как в Block X).
+    """
+    if value >= high:
+        return 1
+    elif value <= low:
+        return -1
+    else:
+        return 0
+
+
+# =============================================================================
+# ИЗОБРАЖЕНИЯ
+# =============================================================================
+
+def compress_image(input_path, output_bin, output_preview=None):
+    """
+    Сжимает изображение в бинарный файл (2 бита/пиксель).
+    """
+    img = Image.open(input_path).convert('L')
+    data = np.array(img, dtype=np.float32) / 255.0
+
+    # Квантование
+    trits = np.vectorize(quantize)(data)
+    # -1->0, 0->1, 1->2 (для упаковки по 2 бита)
+    codes = np.where(trits == -1, 0, np.where(trits == 1, 2, 1)).flatten().astype(np.uint8)
+
+    # Упаковка: 4 трита в байт
+    packed = bytearray()
+    for i in range(0, len(codes), 4):
+        byte = 0
+        for j in range(4):
+            if i + j < len(codes):
+                byte |= (codes[i+j] & 0x03) << (6 - j*2)
+        packed.append(byte)
+
+    # Сохраняем заголовок (ширина, высота) + данные
+    header = struct.pack('ii', data.shape[1], data.shape[0])  # width, height
+    with open(output_bin, 'wb') as f:
+        f.write(header)
+        f.write(packed)
+
+    # Восстановление для предпросмотра (если нужно)
+    if output_preview:
+        restored_codes = []
+        for byte in packed:
+            for j in range(4):
+                code = (byte >> (6 - j*2)) & 0x03
+                restored_codes.append(-1 if code == 0 else (1 if code == 2 else 0))
+        restored_codes = restored_codes[:len(codes)]
+        restored = np.array(restored_codes, dtype=np.float32).reshape(data.shape)
+        preview_img = np.where(restored == -1, 0, np.where(restored == 1, 255, 128)).astype(np.uint8)
+        Image.fromarray(preview_img, mode='L').save(output_preview)
+
+    orig_size = data.size
+    comp_size = len(header) + len(packed)
+    ratio = orig_size / comp_size if comp_size > 0 else 0
+    return orig_size, comp_size, ratio
+
+
+def decompress_image(input_bin, output_path, width=None, height=None):
+    """
+    Восстанавливает изображение из бинарного файла.
+    Если размеры не указаны, читает их из заголовка.
+    """
+    with open(input_bin, 'rb') as f:
+        header = f.read(8)  # два int
+        if len(header) < 8:
+            raise ValueError("Недостаточный заголовок")
+        w, h = struct.unpack('ii', header)
+        if width is not None and height is not None:
+            w, h = width, height
+        data = f.read()
+
+    pixels = w * h
+    bytes_needed = (pixels + 3) // 4
+    if len(data) < bytes_needed:
+        raise ValueError("Файл повреждён или размеры не совпадают")
+
+    restored_codes = []
+    for byte in data[:bytes_needed]:
+        for j in range(4):
+            code = (byte >> (6 - j*2)) & 0x03
+            restored_codes.append(-1 if code == 0 else (1 if code == 2 else 0))
+    restored_codes = restored_codes[:pixels]
+    restored = np.array(restored_codes, dtype=np.float32).reshape(h, w)
+    img_out = np.where(restored == -1, 0, np.where(restored == 1, 255, 128)).astype(np.uint8)
+    Image.fromarray(img_out, mode='L').save(output_path)
+    print(f"Изображение восстановлено: {output_path}")
+
+
+# =============================================================================
+# ВИДЕО — через H.264 (простой вариант)
+# =============================================================================
+
+def compress_video_h264(input_path, output_path):
+    """
+    Сжимает видео, превращая каждый кадр в 3 градации, и сохраняет через H.264.
+    """
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        raise RuntimeError("Не удалось открыть видео")
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height), isColor=False)
+
+    frame_count = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        norm = gray.astype(np.float32) / 255.0
+        quant = np.vectorize(quantize)(norm)
+        restored = np.where(quant == -1, 0, np.where(quant == 1, 255, 128)).astype(np.uint8)
+        out.write(restored)
+        frame_count += 1
+        if frame_count % 100 == 0:
+            print(f"H.264: обработано {frame_count}/{total_frames} кадров")
+
+    cap.release()
+    out.release()
+    print(f"Видео сохранено: {output_path}")
+
+
+# =============================================================================
+# ВИДЕО — бинарный RAW (максимальное сжатие)
+# =============================================================================
+
+def compress_video_raw(input_path, output_bin):
+    """
+    Сохраняет видео в бинарный файл с заголовком (width, height, fps, total_frames)
+    и упакованными тритами. Коэффициент сжатия ~4x.
+    """
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        raise RuntimeError("Не удалось открыть видео")
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    header = struct.pack('ii fi', width, height, fps, total_frames)
+    packed_data = bytearray()
+    frame_count = 0
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        norm = gray.astype(np.float32) / 255.0
+        quant = np.vectorize(quantize)(norm)
+        codes = np.where(quant == -1, 0, np.where(quant == 1, 2, 1)).flatten().astype(np.uint8)
+
+        for i in range(0, len(codes), 4):
+            byte = 0
+            for j in range(4):
+                if i + j < len(codes):
+                    byte |= (codes[i+j] & 0x03) << (6 - j*2)
+            packed_data.append(byte)
+
+        frame_count += 1
+        if frame_count % 100 == 0:
+            print(f"RAW: обработано {frame_count}/{total_frames} кадров")
+
+    cap.release()
+    with open(output_bin, 'wb') as f:
+        f.write(header)
+        f.write(packed_data)
+
+    orig_bytes = width * height * total_frames  # 8 бит/пиксель
+    comp_bytes = len(header) + len(packed_data)
+    ratio = orig_bytes / comp_bytes if comp_bytes > 0 else 0
+    print(f"RAW сжатие: {orig_bytes} -> {comp_bytes} байт, коэффициент {ratio:.2f}x")
+
+
+def decode_video_raw(input_bin, output_path):
+    """
+    Декодирует бинарный RAW файл обратно в видео.
+    """
+    with open(input_bin, 'rb') as f:
+        header = f.read(4 + 4 + 4 + 4)  # int, int, float, int
+        if len(header) < 16:
+            raise ValueError("Заголовок повреждён")
+        width, height, fps, total_frames = struct.unpack('ii fi', header)
+        data = f.read()
+
+    pixels_per_frame = width * height
+    bytes_per_frame = (pixels_per_frame + 3) // 4
+
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height), isColor=False)
+
+    for frame_idx in range(total_frames):
+        start = frame_idx * bytes_per_frame
+        end = min(start + bytes_per_frame, len(data))
+        frame_data = data[start:end]
+
+        restored_codes = []
+        for byte in frame_data:
+            for j in range(4):
+                code = (byte >> (6 - j*2)) & 0x03
+                restored_codes.append(-1 if code == 0 else (1 if code == 2 else 0))
+        restored_codes = restored_codes[:pixels_per_frame]
+        restored = np.array(restored_codes, dtype=np.float32).reshape(height, width)
+        img_out = np.where(restored == -1, 0, np.where(restored == 1, 255, 128)).astype(np.uint8)
+        out.write(img_out)
+
+        if frame_idx % 100 == 0:
+            print(f"Декодировано {frame_idx}/{total_frames} кадров")
+
+    out.release()
+    print(f"Видео восстановлено: {output_path}")
+
+
+# =============================================================================
+# ГЛАВНАЯ ТОЧКА ВХОДА (аргументы командной строки)
+# =============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Троичное квантование изображений и видео (Block X quantize)",
+        epilog="Примеры: см. в начале файла."
+    )
+    subparsers = parser.add_subparsers(dest='command', help='Команды')
+
+    # ---- Изображения ----
+    img_parser = subparsers.add_parser('image', help='Работа с изображениями')
+    img_subparsers = img_parser.add_subparsers(dest='action', help='Действие')
+
+    compress_img = img_subparsers.add_parser('compress', help='Сжать изображение')
+    compress_img.add_argument('input', help='Входной файл (изображение)')
+    compress_img.add_argument('--output-bin', default='compressed.bin', help='Выходной бинарный файл')
+    compress_img.add_argument('--output-preview', help='Файл для предпросмотра (JPG)')
+
+    decompress_img = img_subparsers.add_parser('decompress', help='Восстановить изображение')
+    decompress_img.add_argument('input_bin', help='Бинарный файл')
+    decompress_img.add_argument('output', help='Выходное изображение (JPG/PNG)')
+    decompress_img.add_argument('--width', type=int, help='Ширина (если не указана в заголовке)')
+    decompress_img.add_argument('--height', type=int, help='Высота (если не указана в заголовке)')
+
+    # ---- Видео ----
+    video_parser = subparsers.add_parser('video', help='Работа с видео')
+    video_subparsers = video_parser.add_subparsers(dest='action', help='Действие')
+
+    h264 = video_subparsers.add_parser('h264', help='Сжатие через H.264 (3 градации)')
+    h264.add_argument('input', help='Входное видео')
+    h264.add_argument('output', help='Выходное видео (MP4)')
+
+    raw = video_subparsers.add_parser('raw', help='Сверхсжатие в бинарный RAW')
+    raw.add_argument('input', help='Входное видео')
+    raw.add_argument('output_bin', help='Выходной .bin файл')
+
+    decode = video_subparsers.add_parser('decode', help='Декодировать RAW .bin в видео')
+    decode.add_argument('input_bin', help='Входной .bin файл')
+    decode.add_argument('output_video', help='Выходное видео (MP4)')
+
+    args = parser.parse_args()
+
+    if args.command == 'image':
+        if args.action == 'compress':
+            orig, comp, ratio = compress_image(args.input, args.output_bin, args.output_preview)
+            print(f"Изображение сжато: {orig} -> {comp} байт (коэф. {ratio:.2f}x)")
+        elif args.action == 'decompress':
+            decompress_image(args.input_bin, args.output, args.width, args.height)
+        else:
+            parser.print_help()
+
+    elif args.command == 'video':
+        if args.action == 'h264':
+            compress_video_h264(args.input, args.output)
+        elif args.action == 'raw':
+            compress_video_raw(args.input, args.output_bin)
+        elif args.action == 'decode':
+            decode_video_raw(args.input_bin, args.output_video)
+        else:
+            parser.print_help()
+    else:
+        parser.print_help()
+
+
+if __name__ == '__main__':
+    main()
