@@ -1,0 +1,546 @@
+# ==================================================
+# ARCHITECTURE v6.2 — BLOCK X
+# Формирование ответа ИИ с помощью троичной логики
+#
+# Реализует BlockX_consolidated.md (Части 1-7) с исправлениями:
+# - S0/S1 локальны для Block X (не путать с S1/S2 архитектуры 0-11)
+# - "Aggregate" переименован в ternary_fold во избежание конфликта
+#   с aggregate.py/geometric_mean
+# - Квантование continuous->trit по единым порогам 0.7/0.3
+# - R_div НЕ реализован как троичная операция — используется
+#   Efficiency (efficiency.py) там, где нужно "ценность/затраты"
+# - √(-1) явно помечается CONFLICT_CORE, а не падает с ошибкой
+# - Decision учитывает Disagreement как ОБЯЗАТЕЛЬНЫЙ фильтр перед
+#   агрегацией остальных непрерывных показателей
+# - Decoder использует и L3_out, и Rc (Aggregate), не только Rc
+# ==================================================
+
+from rashomon import rashomon_evaluate, meta_rashomon_evaluate
+from zmatch import calculate_z_match
+from efficiency import calculate_efficiency
+from aggregate import geometric_mean
+from ternary_matrix import candidate_agreement_matrix, disagreement_from_agreement_matrix
+
+
+# ==================================================
+# Базовые троичные операции (Часть 6)
+# ==================================================
+
+def quantize(value, threshold_high=0.7, threshold_low=0.3):
+    """
+    Единое правило превращения непрерывного значения [0,1]
+    в трит {-1,0,+1}. Используется для всех пяти осей R_i
+    и для L3_in/L3_out там, где вход — continuous-величина.
+    """
+    if value >= threshold_high:
+        return +1
+    elif value >= threshold_low:
+        return 0
+    else:
+        return -1
+
+
+def _normalize_sign(x):
+    """N(x): x>0 -> +1, x=0 -> 0, x<0 -> -1"""
+    if x > 0:
+        return +1
+    elif x < 0:
+        return -1
+    return 0
+
+
+def ternary_sum(vec_a, vec_b):
+    """R_sum = R_A + R_B, поэлементно, с нормализацией N(x)."""
+    return tuple(_normalize_sign(a + b) for a, b in zip(vec_a, vec_b))
+
+
+def ternary_diff(vec_a, vec_b):
+    """R_diff = R_A - R_B, поэлементно, БЕЗ нормализации —
+    величина расхождения важна, не только знак."""
+    return tuple(a - b for a, b in zip(vec_a, vec_b))
+
+
+def ternary_mul(vec_a, vec_b):
+    """R_mul = R_A × R_B, поэлементно. Обычное умножение
+    чисел из {-1,0,1} уже даёт корректную троичную алгебру:
+    +1×+1=+1, +1×-1=-1, 0×x=0, -1×-1=+1."""
+    return tuple(a * b for a, b in zip(vec_a, vec_b))
+
+
+def ternary_sqrt(trit):
+    """
+    √R — поиск базового состояния.
+    √(+1)=+1, √(0)=0, √(-1)=-1 с пометкой CONFLICT_CORE
+    (нет вещественного корня — это сигнал, что сам конфликт
+    и есть базовая причина, не ошибка вычисления).
+    """
+    if trit == 1:
+        return {"value": +1, "flag": None}
+    elif trit == 0:
+        return {"value": 0, "flag": None}
+    elif trit == -1:
+        return {"value": -1, "flag": "CONFLICT_CORE"}
+    else:
+        raise ValueError(f"trit должен быть -1, 0 или +1, получено {trit}")
+
+
+def ternary_fold(vector):
+    """
+    Rc = ternary_fold(R_i) = N(sum(l1..l5))
+    (было "Aggregate" в исходном тексте — переименовано,
+    чтобы не путать с aggregate.py/geometric_mean)
+    """
+    return _normalize_sign(sum(vector))
+
+
+# ==================================================
+# Часть 2: L3_in — готовность входа
+# ==================================================
+
+def evaluate_l3_in(field_trits):
+    """
+    field_trits: dict {"Text":+1, "Intent":0, "Goal":+1, ...}
+    (триты по полям Q = {Text, Intent, Goal, Context, Criteria,
+    Constraints})
+
+    Возвращает L3_in через ternary_fold всех полей.
+    """
+    values = list(field_trits.values())
+    l3_in = ternary_fold(values)
+
+    if l3_in == 1:
+        action = "PROCEED_TO_RASHOMON_1"
+    elif l3_in == 0:
+        action = "INTERACTION_LAYER"
+    else:
+        action = "CORRECTION_OR_STOP_VETO"
+
+    return {"L3_in": l3_in, "Action": action, "Fields": field_trits}
+
+
+# ==================================================
+# Часть 3: Rashomon-1 — интерпретационный контур
+# ==================================================
+
+def rashomon_1(interpretations, margin_threshold=0.15):
+    """
+    interpretations: dict {"I1: макс. производительность": 0.8,
+                            "I2: лучшая камера": 0.6, ...}
+    значения — Z_match(I_i) для каждой интерпретации запроса.
+
+    ИСПРАВЛЕНО (найдено при тестировании): нельзя применять
+    rashomon_evaluate() напрямую к оценкам РАЗНЫХ интерпретаций —
+    это не "расхождение мнений", а ожидаемое и желаемое различие
+    (один явный победитель должен иметь балл выше остальных).
+    Rashomon должен ловить другое: есть ли УСТОЙЧИВОЕ смысловое
+    ядро — то есть достаточный ОТРЫВ лучшей интерпретации от
+    второй по счёту (margin), а не разброс между всеми сразу.
+
+    Малый отрыв (несколько интерпретаций близки по score) =
+    реальная неоднозначность → Intent_state=0.
+    Большой отрыв = устойчивое ядро → Intent_state=+1.
+    """
+    if not interpretations:
+        return {"Intent_resolved": None, "Intent_state": 0,
+                "Rashomon_detail": None}
+
+    sorted_items = sorted(interpretations.items(), key=lambda kv: kv[1], reverse=True)
+    best_label, best_score = sorted_items[0]
+
+    if len(sorted_items) == 1:
+        margin = best_score  # единственная интерпретация — сравниваем с нулём
+    else:
+        second_score = sorted_items[1][1]
+        margin = best_score - second_score
+
+    detail = {
+        "Top": best_label, "TopScore": best_score,
+        "Margin": margin, "AllScores": dict(sorted_items)
+    }
+
+    if best_score < 0.3:
+        # даже лучшая интерпретация плохо соответствует запросу
+        intent_state = -1
+    elif margin >= margin_threshold and best_score >= 0.7:
+        intent_state = +1
+    else:
+        intent_state = 0
+
+    return {
+        "Intent_resolved": best_label if intent_state == 1 else None,
+        "Intent_state": intent_state,
+        "Rashomon_detail": detail
+    }
+
+
+# ==================================================
+# Часть 4: Пространство решений R
+# ==================================================
+
+def build_solution_vector(z_match, efficiency_value, reliability, tempo_factor, strategic_alignment):
+    """
+    R_i = (l1..l5), квантованные из continuous [0,1] значений
+    по единому порогу 0.7/0.3 (см. Часть 4, исправление).
+    """
+    return (
+        quantize(z_match),
+        quantize(efficiency_value),
+        quantize(reliability),
+        quantize(tempo_factor),
+        quantize(strategic_alignment),
+    )
+
+
+# ==================================================
+# Часть 5: Rashomon-2 + Meta-Rashomon — выбор решения
+# ==================================================
+
+def rashomon_2(candidates, solution_vectors=None):
+    """
+    candidates: dict {"R1": {"z_match":0.9,"efficiency":0.8,
+                              "reliability":0.85,"consensus_opinions":[0.8,0.85,0.82]}, ...}
+
+    solution_vectors: НОВОЕ (интеграция Части 8/9) — опционально,
+        dict {"R1": (l1,l2,l3,l4,l5), ...} — 5-осевые троичные
+        векторы кандидатов (см. build_solution_vector). Если
+        передано 2+ кандидата, дополнительно вычисляется матрица
+        согласия (candidate_agreement_matrix) — более детальная
+        проверка расхождения, чем только StdDev по консенсус-
+        оценкам, ловит КОНКРЕТНЫЕ пары кандидатов, расходящиеся
+        по КОНКРЕТНЫМ осям. Используется только при N в диапазоне
+        2-4 (Часть 9, п.2 — при больших N матричный метод менее
+        эффективен и не применяется).
+
+    Возвращает Decision для каждого кандидата, используя
+    ОБЯЗАТЕЛЬНЫЙ фильтр Disagreement перед агрегацией
+    (см. Часть 5, исправление).
+    """
+    results = {}
+
+    # Матричный кросс-кандидатный анализ согласия (Часть 8/9),
+    # применяется только при разумном числе кандидатов (2-4)
+    matrix_disagreement = False
+    matrix_detail = None
+
+    if solution_vectors and 2 <= len(solution_vectors) <= 4:
+        names_ordered = list(solution_vectors.keys())
+        R_matrix = [list(solution_vectors[n]) for n in names_ordered]
+        agreement = candidate_agreement_matrix(R_matrix)
+        matrix_detail = disagreement_from_agreement_matrix(agreement, n_axes=len(R_matrix[0]))
+        matrix_disagreement = matrix_detail["disagreement"]
+
+    for name, data in candidates.items():
+        rashomon_result = rashomon_evaluate(data["consensus_opinions"])
+
+        # ИСПРАВЛЕНО (интеграция): расхождение фиксируется, если
+        # ЛИБО скалярный Rashomon (StdDev по мнениям), ЛИБО
+        # матричный анализ согласия (по осям решения) обнаружили
+        # проблему — оба сигнала обязательны к учёту, ни один не
+        # может быть проигнорирован в пользу другого.
+        disagreement_flag = rashomon_result["Disagreement"] or matrix_disagreement
+
+        if disagreement_flag:
+            decision_score = rashomon_result["Consensus"]  # для справки
+            l3_decision = 0
+        else:
+            decision_score = geometric_mean(
+                data["z_match"], data["efficiency"], data["reliability"],
+                rashomon_result["Consensus"]
+            )
+            l3_decision = quantize(decision_score)
+
+        results[name] = {
+            "Decision_score": decision_score,
+            "L3_decision": l3_decision,
+            "Disagreement": disagreement_flag,
+            "Rashomon_detail": rashomon_result,
+            "Matrix_detail": matrix_detail
+        }
+
+    return results
+
+
+def select_best_r(rashomon_2_results):
+    """Best_R — кандидат с максимальным Decision_score среди
+    тех, кто прошёл фильтр (L3_decision != -1)."""
+    eligible = {k: v for k, v in rashomon_2_results.items() if v["L3_decision"] != -1}
+    if not eligible:
+        return None
+    return max(eligible, key=lambda k: eligible[k]["Decision_score"])
+
+
+def meta_rashomon_check(result_a, result_b):
+    """Проверка самого процесса выбора (используем общий модуль)."""
+    return meta_rashomon_evaluate(
+        {"Consensus": result_a["Decision_score"], "StdDev": 0, "Disagreement": result_a["Disagreement"]},
+        {"Consensus": result_b["Decision_score"], "StdDev": 0, "Disagreement": result_b["Disagreement"]}
+    )
+
+
+# ==================================================
+# Часть 7: L3_out, ΔL3, Decoder, Rollback
+# ==================================================
+
+DECODER_MODES = {
+    1: "Direct Answer Mode",
+    0: "Clarification Mode",
+    -1: "Protection Mode",
+}
+
+
+def evaluate_l3_out(best_r_result, risk, risk_critical=0.8):
+    """
+    L3_out на основе итогового выбранного решения и риска.
+    Architect STOP Veto имеет приоритет над всем остальным.
+    """
+    if risk > risk_critical:
+        return {"L3_out": -1, "Reason": "ARCHITECT_STOP_VETO"}
+
+    if best_r_result is None:
+        return {"L3_out": -1, "Reason": "NO_VIABLE_SOLUTION"}
+
+    l3_decision = best_r_result["L3_decision"]
+
+    if l3_decision == 1:
+        return {"L3_out": +1, "Reason": "CONSENSUS_STABLE"}
+    elif l3_decision == 0:
+        return {"L3_out": 0, "Reason": "MULTIPLE_VIABLE_OPTIONS_OR_MISSING_DATA"}
+    else:
+        return {"L3_out": -1, "Reason": "LOW_RELIABILITY_OR_DISAGREEMENT"}
+
+
+def decoder(l3_out, rc):
+    """
+    Decoder(L3_out, Rc).
+
+    ИСПРАВЛЕНО (найдено при финальном интеграционном тесте,
+    Сценарий 4): раньше режим выбирался ТОЛЬКО по Rc, а L3_out
+    лишь модулировал глубину внутри режима — из-за этого при
+    L3_out=0 ("несколько равноправных вариантов", неуверенность
+    на выходе всего цикла) Decoder мог всё равно выдать "Direct
+    Answer Mode", если Rc оказывался положительным. Это
+    противоречит смыслу L3_out как ФИНАЛЬНОЙ проверки уверенности
+    — она не должна перекрываться внутренним сигналом Rc.
+
+    Теперь: L3_out имеет ПРИОРИТЕТ. Если L3_out != +1, режим
+    принудительно Clarification или Protection, независимо от Rc.
+    Rc используется только как источник ДОПОЛНИТЕЛЬНОГО контекста
+    (глубина деталей), а не может "перебить" явную неуверенность
+    L3_out.
+    """
+    if l3_out == -1:
+        return {"Mode": "Protection Mode", "Detail_depth": "STANDARD"}
+
+    if l3_out == 0:
+        # Неуверенность на выходе цикла ВСЕГДА даёт Clarification,
+        # даже если Rc положительный
+        depth = "HIGH_DETAIL" if rc <= 0 else "STANDARD"
+        return {"Mode": "Clarification Mode", "Detail_depth": depth}
+
+    # l3_out == +1: режим определяется по Rc, как и раньше
+    mode = DECODER_MODES.get(rc, "Clarification Mode")
+    return {"Mode": mode, "Detail_depth": "STANDARD"}
+
+
+def rollback_protocol(reason):
+    """Часть 7, п.6 — фиксация и возврат на Interaction Layer."""
+    return {
+        "Error_Vector": reason,
+        "R_reset": True,
+        "Return_to": "Interaction Layer",
+        "Next_action": "clarifying_question_or_alternative_meta_rashomon"
+    }
+
+
+# ==================================================
+# Единая точка входа — полный замкнутый цикл Block X
+# ==================================================
+
+def run_block_x_cycle(field_trits, interpretations, candidates, risk, solution_vectors=None):
+    """
+    Прогоняет один полный цикл: Q -> L3_in -> Rashomon-1 ->
+    (если I3_in=+1) Rashomon-2/Meta-Rashomon -> L3_out ->
+    Decoder / Rollback.
+
+    solution_vectors: НОВОЕ — опционально, см. rashomon_2().
+    """
+
+    log = {}
+
+    l3_in_result = evaluate_l3_in(field_trits)
+    log["L3_in"] = l3_in_result
+
+    if l3_in_result["L3_in"] != 1:
+        # не доходим до Rashomon-1 при 0 или -1
+        return {
+            "log": log,
+            "final_action": l3_in_result["Action"],
+            "L3_out": None
+        }
+
+    r1_result = rashomon_1(interpretations)
+    log["Rashomon_1"] = r1_result
+
+    if r1_result["Intent_state"] != 1:
+        log["Interaction_needed"] = True
+        return {
+            "log": log,
+            "final_action": "INTERACTION_LAYER" if r1_result["Intent_state"] == 0 else "STOP_VETO",
+            "L3_out": None
+        }
+
+    r2_results = rashomon_2(candidates, solution_vectors=solution_vectors)
+    log["Rashomon_2"] = r2_results
+
+    best = select_best_r(r2_results)
+    log["Best_R"] = best
+
+    best_result = r2_results.get(best) if best else None
+
+    l3_out_result = evaluate_l3_out(best_result, risk)
+    log["L3_out_eval"] = l3_out_result
+
+    delta_l3 = l3_out_result["L3_out"] - l3_in_result["L3_in"]
+    log["Delta_L3"] = delta_l3
+
+    rc = ternary_fold(list(build_solution_vector(
+        candidates[best]["z_match"], candidates[best]["efficiency"],
+        candidates[best]["reliability"], 0.8, 0.8
+    ))) if best else -1
+    log["Rc"] = rc
+
+    if l3_out_result["L3_out"] == -1:
+        rollback = rollback_protocol(l3_out_result["Reason"])
+        log["Rollback"] = rollback
+        return {"log": log, "final_action": "ROLLBACK", "L3_out": -1}
+
+    decode_result = decoder(l3_out_result["L3_out"], rc)
+    log["Decoder"] = decode_result
+
+    return {
+        "log": log,
+        "final_action": decode_result["Mode"],
+        "L3_out": l3_out_result["L3_out"],
+        "Best_R": best
+    }
+
+
+if __name__ == "__main__":
+
+    print("=" * 60)
+    print("СЦЕНАРИЙ 1: 'Мне нужен смартфон до 600 евро, главное —")
+    print("камера и автономность, игры не нужны' (L3_in должен = +1)")
+    print("=" * 60)
+
+    result_good = run_block_x_cycle(
+        field_trits={
+            "Text": 1, "Intent": 1, "Goal": 1,
+            "Context": 0, "Criteria": 1, "Constraints": 1
+        },
+        interpretations={
+            "I1: телефон с хорошей камерой и автономностью": 0.9,
+            "I2: телефон в целом среднего сегмента": 0.6,
+            "I3: телефон для игр": 0.2,
+        },
+        candidates={
+            "R_ModelA": {
+                "z_match": 0.85, "efficiency": 0.8, "reliability": 0.9,
+                "consensus_opinions": [0.85, 0.88, 0.82]
+            },
+            "R_ModelB": {
+                "z_match": 0.7, "efficiency": 0.6, "reliability": 0.65,
+                "consensus_opinions": [0.5, 0.9, 0.6]  # разброс -> Disagreement
+            },
+        },
+        risk=0.1
+    )
+
+    print(f"Итог: L3_out={result_good['L3_out']}, действие={result_good['final_action']}, лучший вариант={result_good.get('Best_R')}")
+    print()
+    for stage, data in result_good["log"].items():
+        print(f"  [{stage}] {data}")
+
+    print("\n" + "=" * 60)
+    print("СЦЕНАРИЙ 2: 'Хочу хороший телефон, помоги мне'")
+    print("(L3_in должен = 0 -> Interaction Layer)")
+    print("=" * 60)
+
+    result_ambiguous = run_block_x_cycle(
+        field_trits={
+            "Text": 1, "Intent": 0, "Goal": 0,
+            "Context": 0, "Criteria": -1, "Constraints": 0
+        },
+        interpretations={},
+        candidates={},
+        risk=0.1
+    )
+
+    print(f"Итог: действие={result_ambiguous['final_action']}")
+    for stage, data in result_ambiguous["log"].items():
+        print(f"  [{stage}] {data}")
+
+    print("\n" + "=" * 60)
+    print("СЦЕНАРИЙ 3: 'Хочу самый дешёвый телефон, но чтобы был")
+    print("лучше всех флагманов' (конфликт -> L3_in = -1)")
+    print("=" * 60)
+
+    result_conflict = run_block_x_cycle(
+        field_trits={
+            "Text": 1, "Intent": -1, "Goal": -1,
+            "Context": 0, "Criteria": -1, "Constraints": -1
+        },
+        interpretations={},
+        candidates={},
+        risk=0.1
+    )
+
+    print(f"Итог: действие={result_conflict['final_action']}")
+    for stage, data in result_conflict["log"].items():
+        print(f"  [{stage}] {data}")
+
+    print("\n" + "=" * 60)
+    print("СЦЕНАРИЙ 4 (НОВОЕ, интеграция Части 8/9): два кандидата,")
+    print("скалярные consensus_opinions ПОХОЖИ (StdDev низкий),")
+    print("но векторы решений АНТАГОНИСТИЧНЫ по осям")
+    print("(проверка: матричный анализ должен поймать то, что")
+    print("скалярный Rashomon пропускает)")
+    print("=" * 60)
+
+    result_matrix_catch = run_block_x_cycle(
+        field_trits={
+            "Text": 1, "Intent": 1, "Goal": 1,
+            "Context": 1, "Criteria": 1, "Constraints": 1
+        },
+        interpretations={
+            "I1: единственная трактовка": 0.9,
+        },
+        candidates={
+            "R_X": {
+                "z_match": 0.8, "efficiency": 0.8, "reliability": 0.8,
+                "consensus_opinions": [0.75, 0.78, 0.76]  # низкий StdDev
+            },
+            "R_Y": {
+                "z_match": 0.8, "efficiency": 0.8, "reliability": 0.8,
+                "consensus_opinions": [0.74, 0.77, 0.75]  # тоже низкий StdDev
+            },
+        },
+        # НО векторы решений полностью противоположны по всем 5 осям:
+        solution_vectors={
+            "R_X": (1, 1, 1, 1, 1),
+            "R_Y": (-1, -1, -1, -1, -1),
+        },
+        risk=0.1
+    )
+
+    print(f"Итог: L3_out={result_matrix_catch['L3_out']}, "
+          f"действие={result_matrix_catch['final_action']}")
+    for stage, data in result_matrix_catch["log"].items():
+        print(f"  [{stage}] {data}")
+
+    assert result_matrix_catch["log"]["Rashomon_2"]["R_X"]["Disagreement"] == True, (
+        "Матричный анализ должен был поймать антагонизм векторов "
+        "решений, даже когда скалярные consensus_opinions похожи"
+    )
+    print("\n>>> ПОДТВЕРЖДЕНО: матричный анализ (Часть 8/9) поймал "
+          "расхождение, которое скалярный Rashomon (только StdDev "
+          "по consensus_opinions) не заметил бы в одиночку.")
