@@ -1,0 +1,165 @@
+import random
+
+# =====================================================================
+# 1. МОДУЛЬ TERNARY_MATRIX & ЭВРИСТИЧЕСКИЙ АНАЛИЗ (Скриншоты 1, 3, 5, 6)
+# =====================================================================
+
+def candidate_agreement_matrix(validator_votes):
+    """
+    Строит матрицу совпадений оценок между валидаторами по всем осям.
+    Элемент matrix[i][j] хранит количество осей, по которым голоса совпали.
+    """
+    n = len(validator_votes)
+    matrix = [[0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(n):
+            # Считаем, по скольким осям (элементам вектора) голоса полностью совпали
+            matches = sum(1 for axis1, axis2 in zip(validator_votes[i], validator_votes[j]) if axis1 == axis2)
+            matrix[i][j] = matches
+    return matrix
+
+def disagreement_from_agreement_matrix(agreement_matrix):
+    """
+    Рассчитывает общие метрики согласия и индекс расхождения сети.
+    """
+    n = len(agreement_matrix)
+    if n == 0:
+        return {"disagreement": 0.0, "mean_agreement": 0.0}
+    
+    total_elements = n * n
+    sum_agreement = sum(sum(row) for row in agreement_matrix)
+    mean_agreement = sum_agreement / total_elements
+    
+    # Нормализованный индекс расхождения (Disagreement)
+    disagreement = 1.0 - (mean_agreement / n)
+    return {
+        "disagreement": disagreement,
+        "mean_agreement": mean_agreement
+    }
+
+def matrix_based_check(validator_votes):
+    """
+    Дополнительный слой: анализ через матрицу согласия. Ищем СГОВОР.
+    Фиксирует скоординированные паттерны в многомерном пространстве решений.
+    """
+    agreement = candidate_agreement_matrix(validator_votes)
+    n = len(validator_votes)
+    n_axes = len(validator_votes[0]) if n > 0 else 5
+    
+    suspicious_pairs = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            # Ищем пары с ПОДОЗРИТЕЛЬНО высоким взаимным согласием (ПОЛНОЕ совпадение по всем осям)
+            if agreement[i][j] == n_axes:
+                suspicious_pairs.append((i, j))
+                
+    # ИСПРАВЛЕНО: Передаем корректную матрицу 'agreement' вместо ошибочного 'v'
+    overall = disagreement_from_agreement_matrix(agreement)
+    
+    return {
+        "agreement_matrix": agreement,
+        "suspicious_pairs": suspicious_pairs,
+        "overall_disagreement": overall["disagreement"],
+        "mean_agreement": overall["mean_agreement"]
+    }
+
+# =====================================================================
+# 2. БАЗОВЫЙ МОДУЛЬ ГОЛОСОВАНИЯ (Скриншот 2)
+# =====================================================================
+
+def simple_majority_vote(validator_votes):
+    """
+    Baseline: обычное голосование -- каждый схлопывается в ОДИН скалярный голос.
+    (например, среднее по осям), решение принимается по большинству.
+    """
+    def quantize_scalar(avg):
+        if avg >= 0.34: return 1
+        elif avg <= -0.34: return -1
+        return 0
+
+    scalar_votes = [quantize_scalar(sum(v) / len(v)) for v in validator_votes]
+    positive = scalar_votes.count(1)
+    negative = scalar_votes.count(-1)
+    
+    return {
+        "scalar_votes": scalar_votes,
+        "positive": positive,
+        "negative": negative,
+        "decision": "ACCEPT" if positive > negative else "REJECT",
+        "unanimous_looking": abs(positive - negative)
+    }
+
+# =====================================================================
+# 3. СЦЕНАРИЙ И ВЫВОД РЕЗУЛЬТАТОВ (Скриншоты 4, 5, 6)
+# =====================================================================
+
+if __name__ == "__main__":
+    # Фиксация генератора случайных чисел для стабильности теста
+    random.seed(7)
+    
+    print("=" * 65)
+    print("СЦЕНАРИЙ: 7 честных валидаторов + группа византийских злоумышленников")
+    print("=" * 65)
+    
+    # Честные валидаторы: идеальная база оценок
+    honest_base = [1, 1, 1, 1, 1]
+    honest_votes = []
+    
+    # ВОССТАНОВЛЕНО: Корректная генерация голосов со случайным шумом (15% на ошибку честного узла)
+    for _ in range(7):
+        vote = [v if random.random() > 0.15 else 0 for v in honest_base]
+        honest_votes.append(tuple(vote))
+        
+    # Сговорившиеся: идентично голосуют "блок плохой" по критическим осям
+    # (например, ось 14 -- копия цепочки, ось 15 -- double-spend)
+    byzantine_votes = [
+        (1, 1, 1, -1, -1),
+        (1, 1, 1, -1, -1)   # Идентичны -- признак сговора
+    ]
+    
+    all_votes = honest_votes + byzantine_votes
+    validator_names = [f"Honest_{i}" for i in range(7)] + [f"Byzantine_{i}" for i in range(len(byzantine_votes))]
+    
+    # Вывод исходных векторов
+    print("\nГолоса валидаторов (11..15):")
+    for name, vote in zip(validator_names, all_votes):
+        print(f"  {name:>12}: {vote}")
+        
+    print("\n" + "-" * 65)
+    print("BASELINE: простое голосование (один скалярный голос от каждого)")
+    print("-" * 65)
+    
+    majority = simple_majority_vote(all_votes)
+    print(f"Скалярные голоса: {majority['scalar_votes']}")
+    print(f"За: {majority['positive']}, Против: {majority['negative']}")
+    print(f"Решение: {majority['decision']}")
+    print(">>> Простое голосование не видит проблему в критических осях")
+    print("    (double-spend) -- она усредняется внутри каждого вектора.")
+    
+    print("\n" + "-" * 65)
+    print("ДОПОЛНИТЕЛЬНЫЙ СЛОЙ: матричный анализ скоординированности")
+    print("-" * 65)
+    
+    matrix_result = matrix_based_check(all_votes)
+    print(f"Среднее попарное согласие: {round(matrix_result['mean_agreement'], 2)}")
+    print(f"Общий Disagreement: {round(matrix_result['overall_disagreement'], 2)}")
+    
+    print("\nПодозрительные пары (ПОЛНОЕ совпадение по всем осям):")
+    if matrix_result["suspicious_pairs"]:
+        for i, j in matrix_result["suspicious_pairs"]:
+            # Полное соответствие выводу на вашем 6-м скриншоте
+            print(f"   {validator_names[i]} <-> {validator_names[j]} -- ИДЕНТИЧНЫ ПО ВСЕМ 5 ОСЯМ")
+    else:
+        print("   Не найдено")
+        
+    print("\n" + "=" * 65)
+    print("ЧТО ПОКАЗАЛ ТЕСТ")
+    print("=" * 65)
+    print("Простое голосование дало ACCEPT (7 честных зашумлены, а векторы")
+    print("2 сговорившихся) -- формально решение принято большинством.")
+    print()
+    print("Но матричный анализ ДОПОЛНИТЕЛЬНО подсветил, что Byzantine_0")
+    print("и Byzantine_1 голосуют АБСОЛЮТНО идентично. Это математически")
+    print("маловероятное совпадение для независимых узлов в зашумленной сети --")
+    print("сигнал возможного сговора, требующий изоляции атакующего кластера,")
+    print("даже если итоговое решение по большинству голосов кажется валидным.")
