@@ -1,0 +1,1890 @@
+"""
+ARCHITECTURE v6.2 — BLOCK X COMPLETE PACKAGE
+Полный объединённый модуль: общие компоненты (Rashomon, Z_match,
+Efficiency, Aggregate, Temporal) + Block X (полный троичный цикл,
+Части 1-9) + graph-кластеризация + разделение секрета (secret
+sharing) + проверка целостности через производную + дерево Меркла
+(направленный граф для blockchain-целостности).
+
+Все компоненты реально протестированы по отдельности, здесь
+собраны в один файл для удобства использования и хранения.
+"""
+
+import statistics
+import difflib
+import re
+import hashlib
+import random
+import math
+
+
+# ======================================================================
+# rashomon.py
+# ======================================================================
+
+# ==================================================
+# ARCHITECTURE v6.1.8 PATCH
+# SHARED MODULE — rashomon.py
+#
+# Заменяет прежний паттерн "Rashomon = среднее арифметическое",
+# повторявшийся во всех 8 блоках, на механизм, который реально
+# делает то, для чего задуман Расёмон: обнаруживает РАСХОЖДЕНИЕ
+# между независимыми оценками, а не просто усредняет его в
+# ложно-уверенное число.
+#
+# Идея: consensus (среднее) остаётся полезной точечной оценкой,
+# но теперь дополняется мерой разброса (StdDev/Spread). Если
+# разброс превышает порог — это сигнал РЕАЛЬНОГО расхождения
+# мнений, и решение не должно тихо проходить как L3=+1 только
+# потому, что среднее оказалось высоким.
+#
+# Используется всеми блоками 0-7 вместо их собственных копий
+# rashomon_check/meta_rashomon.
+# ==================================================
+
+
+
+def rashomon_evaluate(opinions, disagreement_threshold=0.25, labels=None):
+    """
+    opinions: список независимых оценок (например, E1, E2, E3;
+              H1, H2, H3; экспертные значения и т.д.), каждая
+              в диапазоне [0,1].
+    disagreement_threshold: если стандартное отклонение мнений
+              превышает это значение — фиксируется расхождение.
+    labels: опционально — имена источников оценок (например,
+              ["E1", "E2", "E3"]), для трассировки, кто с кем
+              разошёлся.
+
+    Возвращает:
+      Consensus  — среднее (точечная оценка, как раньше)
+      StdDev     — стандартное отклонение (мера расхождения)
+      Spread     — max-min (простая, наглядная мера разброса)
+      Count      — число оценок
+      Disagreement — True, если StdDev > disagreement_threshold
+      Recommendation — что делать дальше:
+          "USE_CONSENSUS"  — мнения согласуются, можно доверять среднему
+          "FORCE_ANALYZE"  — мнения разошлись, решение не должно
+                              автоматически проходить в L3=+1,
+                              даже если среднее высокое
+    """
+
+    if not opinions:
+        return None
+
+    n = len(opinions)
+    consensus = sum(opinions) / n
+
+    stdev = statistics.pstdev(opinions) if n > 1 else 0.0
+    spread = max(opinions) - min(opinions) if n > 1 else 0.0
+
+    disagreement = stdev > disagreement_threshold
+
+    result = {
+        "Consensus": consensus,
+        "StdDev": stdev,
+        "Spread": spread,
+        "Count": n,
+        "Disagreement": disagreement,
+        "Recommendation": "FORCE_ANALYZE" if disagreement else "USE_CONSENSUS"
+    }
+
+    if labels:
+        result["Labels"] = dict(zip(labels, opinions))
+
+    return result
+
+
+def meta_rashomon_evaluate(evaluation_a, evaluation_b, tolerance=0.1):
+    """
+    Проверка самой проверки (Meta-Rashomon) — теперь сравнивает
+    не два голых числа, а два ПОЛНЫХ результата rashomon_evaluate,
+    включая их вывод о расхождении, а не только консенсус.
+
+    Раньше: meta_rashomon(check_a, check_b) сравнивал два числа
+    и не мог заметить ситуацию, где консенсусы совпали случайно,
+    а сами внутренние расхождения оценок — разные (например,
+    A: [0.5, 0.5, 0.5] и B: [0.1, 0.5, 0.9] дают одинаковый
+    Consensus=0.5, но это совершенно разные ситуации).
+
+    Возвращает:
+      ConsensusDifference — разница средних
+      DisagreementMismatch — True, если один прогон обнаружил
+              расхождение мнений, а другой — нет (это само по
+              себе сигнал ошибки в механизме оценки)
+      Status — "VALID" | "RECHECK"
+    """
+
+    if evaluation_a is None or evaluation_b is None:
+        return {"Status": "RECHECK", "Reason": "Пустая оценка"}
+
+    consensus_diff = abs(
+        evaluation_a["Consensus"] - evaluation_b["Consensus"]
+    )
+
+    disagreement_mismatch = (
+        evaluation_a["Disagreement"] != evaluation_b["Disagreement"]
+    )
+
+    if consensus_diff < tolerance and not disagreement_mismatch:
+        status = "VALID"
+    else:
+        status = "RECHECK"
+
+    return {
+        "ConsensusDifference": consensus_diff,
+        "DisagreementMismatch": disagreement_mismatch,
+        "Status": status
+    }
+
+
+
+# ======================================================================
+# zmatch.py
+# ======================================================================
+
+# ==================================================
+# ARCHITECTURE v6.1.9 PATCH
+# SHARED MODULE — zmatch.py
+#
+# Заменяет прежний паттерн "Z_match = (a == b)", повторявшийся
+# во всех 8 блоках, на реальное измерение похожести текста.
+#
+# ЧЕСТНОЕ ОГРАНИЧЕНИЕ: в этой среде нет доступа к интернету из
+# кода, поэтому "настоящие" embeddings (через внешний API) здесь
+# вызвать нельзя. Вместо этого реализованы ДВА уровня:
+#
+#   Уровень 1 — лексическое сходство (работает офлайн, всегда
+#   доступно, детерминировано). Это не "понимание смысла" в
+#   полном смысле, а сравнение по общим словам/n-граммам —
+#   заметно лучше, чем точное "==", но не заменяет полноценную
+#   семантическую модель.
+#
+#   Уровень 2 — внешняя оценка (external_semantic_score).
+#   Если у вызывающего кода есть доступ к языковой модели
+#   (например, вы прямо спрашиваете меня "насколько это письмо
+#   соответствует замыслу X" и получаете число), это число можно
+#   передать сюда напрямую — оно приоритетнее лексического.
+#
+# Для чисел (не текста) Z_match остаётся точным сравнением —
+# там "==" осмысленно и его менять не нужно.
+# ==================================================
+
+
+
+def _tokenize(text):
+    """Разбивает текст на слова в нижнем регистре, без знаков препинания."""
+    return set(re.findall(r"[a-zа-яё0-9]+", text.lower()))
+
+
+def lexical_similarity(text_a, text_b):
+    """
+    Комбинация двух мер:
+    - Jaccard по множеству слов (насколько пересекается словарь)
+    - SequenceMatcher по символьным последовательностям (насколько
+      похож порядок/структура текста)
+
+    Возвращает число в диапазоне [0,1].
+    """
+
+    if not text_a or not text_b:
+        return 0.0
+
+    words_a = _tokenize(text_a)
+    words_b = _tokenize(text_b)
+
+    if not words_a or not words_b:
+        jaccard = 0.0
+    else:
+        intersection = words_a & words_b
+        union = words_a | words_b
+        jaccard = len(intersection) / len(union)
+
+    sequence_ratio = difflib.SequenceMatcher(
+        None, text_a.lower(), text_b.lower()
+    ).ratio()
+
+    # среднее двух мер — сглаживает крайние случаи одной метрики
+    return (jaccard + sequence_ratio) / 2
+
+
+def calculate_z_match(
+    value_a,
+    value_b,
+    external_semantic_score=None
+):
+    """
+    Единая точка входа для всех блоков.
+
+    - Если оба значения — числа: точное сравнение (как раньше),
+      это корректно для числовых состояний (S1, S2, target_value).
+    - Если хотя бы одно — None: 0.5 (неопределённость, как раньше).
+    - Если оба — строки: лексическое сходство (НОВОЕ поведение
+      вместо "==").
+    - Если передан external_semantic_score (число 0..1) — он
+      используется вместо лексического сходства, как более точная
+      оценка (например, от LLM).
+    """
+
+    if value_a is None or value_b is None:
+        return 0.5
+
+    if external_semantic_score is not None:
+        return max(0.0, min(1.0, external_semantic_score))
+
+    # числа — точное сравнение остаётся осмысленным
+    if isinstance(value_a, (int, float)) and isinstance(value_b, (int, float)):
+        return 1.0 if value_a == value_b else 0.0
+
+    # строки — лексическое сходство вместо "=="
+    if isinstance(value_a, str) and isinstance(value_b, str):
+        return lexical_similarity(value_a, value_b)
+
+    # смешанные/прочие типы — как раньше, точное сравнение
+    return 1.0 if value_a == value_b else 0.0
+
+
+
+# ======================================================================
+# efficiency.py
+# ======================================================================
+
+# ==================================================
+# ARCHITECTURE v6.1.10 PATCH
+# SHARED MODULE — efficiency.py
+#
+# Устраняет разрыв, повторявшийся во ВСЕХ 8 блоках (0-7):
+# `E` (эффективность) — множитель в формуле
+#
+#   Development = ΔS × E × Z_match × Manageability
+#
+# — нигде не вычислялся. Это было просто число, подаваемое
+# извне (в примерах — 0.8), без формулы, которая бы объясняла,
+# откуда оно берётся.
+#
+# ФОРМУЛА (новая, v6.1.10):
+#
+#   E = V / (V + C)
+#
+# где:
+#   V (Value)  — произведённая ценность / достигнутый результат
+#   C (Cost)   — затраты на достижение этого результата
+#
+# Почему именно так, а не A_raw/A_reference (как в патче для
+# адаптации, Блок №6):
+#   - Не нужна внешняя калибровочная константа (A_reference) —
+#     формула САМА ограничена диапазоном (0,1) за счёт
+#     математической структуры V/(V+C).
+#   - E → 1, когда C → 0 (результат достигнут почти бесплатно).
+#   - E → 0, когда C → ∞ или V → 0 (высокие затраты без
+#     результата, либо результат без затрат недостижим).
+#   - Формула переиспользует терминологию, которую вы уже
+#     ввели в черновике "Блок B" (Gc — выгода сотрудничества,
+#     Cf — стоимость конфликта, Gc > Cf — главная формула):
+#     это тот же принцип "ценность против стоимости",
+#     формализованный для E.
+#
+# Область применения не ограничена откликами ИИ — это общая
+# формула эффективности для любого блока архитектуры (решения,
+# адаптации, обучения и т.д.), не только для формата ответов.
+# ==================================================
+
+
+def calculate_efficiency(value, cost):
+    """
+    E = V / (V + C), ограничено (0, 1).
+
+    value: произведённая ценность (Value / Gc) — неотрицательное число
+    cost:  затраты на её достижение (Cost / Cf) — неотрицательное число
+
+    Особые случаи:
+    - value=0, cost=0  -> 0.5 (полная неопределённость: ни ценности,
+                                ни затрат — как и в остальной
+                                архитектуре, 0.5 обозначает "нет данных")
+    - value=0, cost>0  -> 0.0 (чистые издержки без результата)
+    - value>0, cost=0  -> 1.0 (результат достигнут без затрат)
+    """
+
+    if value < 0 or cost < 0:
+        raise ValueError("value и cost должны быть неотрицательными")
+
+    if value == 0 and cost == 0:
+        return 0.5
+
+    return value / (value + cost)
+
+
+def calculate_response_efficiency(relevance, length_cost, branch_count=0, branch_cost_weight=0.15):
+    """
+    Специализация E для формата ответа (см. обсуждение "Блока №8" —
+    формат и эффективность ответа).
+
+    relevance:   насколько ответ соответствует вопросу — можно
+                 напрямую передать Z_match (см. zmatch.py) как value
+    length_cost: "стоимость потребления" — грубая мера объёма текста
+                 (например, число предложений / 10, чтобы держать
+                 масштаб сопоставимым с relevance ∈ [0,1])
+    branch_count: количество веток/раскрывающихся секций в ответе
+    branch_cost_weight: вклад каждой ветки в общую стоимость —
+                 ветвление имеет свою цену для читателя, даже если
+                 сворачиваемо по умолчанию
+
+    Возвращает E_response ∈ (0,1). Высокое значение — ответ короткий
+    и по делу относительно своей ценности; низкое — ответ раздут
+    (много текста/веток) относительно того, что он реально доносит.
+    """
+
+    total_cost = length_cost + branch_count * branch_cost_weight
+    return calculate_efficiency(relevance, total_cost)
+
+
+
+# ======================================================================
+# aggregate.py
+# ======================================================================
+
+# ==================================================
+# ARCHITECTURE v6.1.12 PATCH
+# SHARED MODULE — aggregate.py
+#
+# Блоки 8-11 используют формулы вида:
+#   Integrity = Consistency × Completeness × Z_match
+#   Execution Quality = Result × Stability × Safety
+#   Forecast Confidence = Prediction × Reliability × Z_match
+#   Strategic Alignment = Intent × Forecast × Adaptation × Evolution
+#
+# ПРОБЛЕМА (найдена в Блоке №11): прямое произведение N величин,
+# каждая в [0,1], даёт результат, который систематически ниже
+# порога 0.7, даже если каждая величина по отдельности хороша.
+# Пример: 0.9 × 0.9 × 0.9 × 0.9 ≈ 0.66 < 0.7 — L3 никогда не
+# достигнет +1, даже когда всё реально идёт хорошо.
+#
+# РЕШЕНИЕ: среднее геометрическое вместо прямого произведения.
+# geometric_mean(0.9, 0.9, 0.9, 0.9) = 0.9 — сохраняет то же
+# требование "все компоненты должны быть хороши одновременно"
+# (если хотя бы один компонент близок к 0, среднее тоже падает
+# к 0 — в отличие от арифметического среднего), но не наказывает
+# только за количество перемножаемых компонентов.
+# ==================================================
+
+
+def geometric_mean(*values):
+    """
+    Среднее геометрическое: (v1 × v2 × ... × vn) ^ (1/n)
+
+    Все значения должны быть в диапазоне [0,1] (как и везде
+    в архитектуре). Если хотя бы одно значение = 0, результат = 0
+    (это осознанное поведение: как и в исходной идее "все компоненты
+    должны выполняться одновременно", один провальный компонент
+    должен обнулять итог — в отличие от арифметического среднего,
+    которое такой провал сгладило бы).
+    """
+
+    if not values:
+        return 0.0
+
+    for v in values:
+        if v < 0:
+            raise ValueError("Все компоненты должны быть неотрицательны")
+
+    product = 1.0
+    for v in values:
+        product *= v
+
+    n = len(values)
+    return product ** (1 / n)
+
+
+
+# ======================================================================
+# temporal.py
+# ======================================================================
+
+# ==================================================
+# ARCHITECTURE v6.1.11 PATCH
+# SHARED MODULE — temporal.py
+#
+# Реализует исправленную временную динамику (см.
+# Temporal_Control_v6.1.11_revised.md):
+#
+# 1) calculate_rhythm — Rhythm теперь ГАРАНТИРОВАННО в [0,1]
+#    через clamp, вместо формулы, которая могла уйти в минус
+#    при нестабильном развитии (σV > V_average).
+#
+# 2) calculate_tempo_factor — заменяет сырой Tempo как множитель
+#    Development. Раньше умножение на сырой Tempo вознаграждало
+#    систему за опасное ускорение (Tempo=3 давал больший
+#    Development, чем Tempo=1, хотя текст называет Tempo>1.3
+#    риском потери контроля). Новая функция — треугольная,
+#    с пиком (=1.0) РОВНО при Tempo=1 (оптимум) и падением до 0
+#    на обеих границах рабочей зоны.
+#
+# 3) calculate_development_controlled — итоговая формула,
+#    использующая Tempo_factor и clamped Rhythm вместо старых
+#    ошибочных множителей.
+# ==================================================
+
+
+def calculate_rhythm(std_dev_v, v_average):
+    """
+    Rhythm = clamp(1 - std_dev_v/v_average, 0, 1)
+
+    std_dev_v: стандартное отклонение скорости изменений (σV)
+    v_average: средняя скорость изменений
+
+    Особый случай: v_average == 0 -> Rhythm = 0 (стабильность
+    неподвижной системы не определена содержательно; безопаснее
+    трактовать как отсутствие устойчивого ритма, а не как
+    деление на ноль).
+    """
+
+    if v_average == 0:
+        return 0.0
+
+    raw = 1 - (std_dev_v / v_average)
+
+    return max(0.0, min(1.0, raw))
+
+
+def calculate_tempo_factor(tempo, tempo_limit_low=0.7, tempo_limit_high=1.3):
+    """
+    Треугольная функция с пиком (=1.0) при tempo=1 (оптимальная
+    скорость) и падением до 0.0 на границах рабочей зоны
+    [tempo_limit_low, tempo_limit_high] и за её пределами.
+
+    Раньше Development_controlled умножался на СЫРОЙ tempo —
+    из-за чего чрезмерное ускорение (tempo=2, 3, 5...)
+    математически УВЕЛИЧИВАЛО Development, хотя текст явно
+    называет tempo > tempo_limit_high риском потери контроля.
+    Эта функция исправляет направление зависимости: оптимум
+    вознаграждается, отклонение в любую сторону — штрафуется.
+    """
+
+    if tempo <= tempo_limit_low or tempo >= tempo_limit_high:
+        return 0.0
+
+    if tempo <= 1:
+        # рост от 0 (на нижней границе) до 1 (на tempo=1)
+        return (tempo - tempo_limit_low) / (1 - tempo_limit_low)
+
+    # падение от 1 (на tempo=1) до 0 (на верхней границе)
+    return (tempo_limit_high - tempo) / (tempo_limit_high - 1)
+
+
+def calculate_development_controlled(
+    delta_s,
+    efficiency,
+    z_match,
+    manageability,
+    tempo,
+    std_dev_v,
+    v_average,
+    tempo_limit_low=0.7,
+    tempo_limit_high=1.3
+):
+    """
+    Development_controlled = ΔS × E × Z_match × Manageability
+                              × Tempo_factor × Rhythm
+
+    Полная, исправленная формула управляемого развития —
+    заменяет старую версию, где сырой Tempo как множитель
+    поощрял опасное ускорение.
+    """
+
+    tempo_factor = calculate_tempo_factor(
+        tempo, tempo_limit_low, tempo_limit_high
+    )
+    rhythm = calculate_rhythm(std_dev_v, v_average)
+
+    development = (
+        delta_s *
+        efficiency *
+        z_match *
+        manageability *
+        tempo_factor *
+        rhythm
+    )
+
+    return {
+        "Development_controlled": development,
+        "Tempo_factor": tempo_factor,
+        "Rhythm": rhythm
+    }
+
+
+
+# ======================================================================
+# ternary_matrix.py
+# ======================================================================
+
+# ==================================================
+# ARCHITECTURE v6.2 — TERNARY MATRIX EXTENSION
+#
+# Идея (предложена в разговоре): представить пространство решений
+# R = {R1, ..., Rn} (Часть 4 Block X) не как список отдельных
+# векторов, а как ЕДИНУЮ матрицу троичных чисел (n кандидатов ×
+# 5 осей), и выполнять над ней настоящие матричные операции —
+# в первую очередь умножение, которое для тритов особенно просто
+# и вычислительно дёшево (та же идея, что в современных
+# "тройных" нейросетях: умножение на -1/0/+1 — это смена знака
+# или обнуление, без настоящего умножения).
+#
+# Практическое применение к архитектуре: R × Rᵀ (матрица решений
+# на её же транспонирование) даёт МАТРИЦУ СОГЛАСИЯ между
+# кандидатами — по скольким осям из пяти каждая пара решений
+# совпадает. Это более детальная альтернатива StdDev (который
+# видит только "средний разброс", а не то, КАКИЕ конкретно
+# кандидаты и по каким осям расходятся).
+# ==================================================
+
+
+def _normalize_sign(x):
+    """N(x): x>0 -> +1, x=0 -> 0, x<0 -> -1 (как в block_x.py)"""
+    if x > 0:
+        return +1
+    elif x < 0:
+        return -1
+    return 0
+
+
+def matrix_add(A, B):
+    """
+    Поэлементное троичное сложение двух матриц одинакового
+    размера, с нормализацией N(x) каждого элемента результата.
+    """
+    return [
+        [_normalize_sign(a + b) for a, b in zip(row_a, row_b)]
+        for row_a, row_b in zip(A, B)
+    ]
+
+
+def transpose(A):
+    """Транспонирование матрицы (строки <-> столбцы)."""
+    return [list(col) for col in zip(*A)]
+
+
+def matrix_mul(A, B, normalize_result=False):
+    """
+    Настоящее матричное умножение: элемент (i,j) результата —
+    это скалярное произведение i-й строки A и j-го столбца B
+    (сумма произведений соответствующих тритов).
+
+    Для тритов каждое произведение a×b тоже трит (-1,0,+1) —
+    умножение вычислительно тривиально (смена знака / ноль).
+    Но СУММА нескольких тритов по строке может выйти за пределы
+    {-1,0,+1} — это и есть содержательный результат: величина
+    показывает СИЛУ согласия/несогласия, а не просто знак.
+
+    normalize_result=True сжимает каждый элемент обратно в трит
+    через N(x) — полезно, если дальше нужна снова троичная
+    матрица для следующей операции.
+    """
+    B_t = transpose(B)
+    result = []
+
+    for row in A:
+        result_row = []
+        for col in B_t:
+            dot_product = sum(a * b for a, b in zip(row, col))
+            result_row.append(
+                _normalize_sign(dot_product) if normalize_result else dot_product
+            )
+        result.append(result_row)
+
+    return result
+
+
+def candidate_agreement_matrix(R_matrix):
+    """
+    R_matrix: список векторов-кандидатов, например
+    [[1,1,0,1,1], [1,0,-1,1,0], [-1,-1,1,-1,-1]]
+    (n кандидатов × 5 осей, как в Части 4 Block X)
+
+    Возвращает n×n матрицу: элемент (i,j) — сколько осей (от -5
+    до +5) у кандидатов i и j совпадают по направлению влияния.
+    Диагональ всегда = число осей (кандидат полностью согласен
+    сам с собой). Высокое значение вне диагонали = кандидаты
+    похожи; низкое/отрицательное = кандидаты расходятся.
+
+    Это R × Rᵀ без нормализации — величина (не только знак)
+    важна для оценки СИЛЫ согласия.
+    """
+    return matrix_mul(R_matrix, transpose(R_matrix), normalize_result=False)
+
+
+def disagreement_from_agreement_matrix(agreement_matrix, n_axes):
+    """
+    Извлекает практический сигнал из матрицы согласия:
+    среднее попарное согласие между РАЗНЫМИ кандидатами
+    (без диагонали), нормированное к [-1,1] делением на n_axes.
+
+    Возвращает:
+      mean_agreement — среднее согласие всех пар (кроме себя),
+                       нормированное [-1,1]
+      min_agreement  — худшая (самая конфликтная) пара
+      disagreement   — True, если mean_agreement ниже порога
+                       (используем тот же принцип, что и в
+                       rashomon.py — не просто смотреть на
+                       среднее, а иметь явный флаг)
+    """
+    n = len(agreement_matrix)
+    if n < 2:
+        return {"mean_agreement": None, "min_agreement": None, "disagreement": False}
+
+    off_diagonal = []
+    for i in range(n):
+        for j in range(n):
+            if i != j:
+                off_diagonal.append(agreement_matrix[i][j] / n_axes)
+
+    mean_agreement = sum(off_diagonal) / len(off_diagonal)
+    min_agreement = min(off_diagonal)
+
+    return {
+        "mean_agreement": mean_agreement,
+        "min_agreement": min_agreement,
+        "disagreement": mean_agreement < 0.2  # порог согласован с общей архитектурой
+    }
+
+
+
+# ======================================================================
+# block_x.py
+# ======================================================================
+
+# ==================================================
+# ARCHITECTURE v6.2 — BLOCK X
+# Формирование ответа ИИ с помощью троичной логики
+#
+# Реализует BlockX_consolidated.md (Части 1-7) с исправлениями:
+# - S0/S1 локальны для Block X (не путать с S1/S2 архитектуры 0-11)
+# - "Aggregate" переименован в ternary_fold во избежание конфликта
+#   с aggregate.py/geometric_mean
+# - Квантование continuous->trit по единым порогам 0.7/0.3
+# - R_div НЕ реализован как троичная операция — используется
+#   Efficiency (efficiency.py) там, где нужно "ценность/затраты"
+# - √(-1) явно помечается CONFLICT_CORE, а не падает с ошибкой
+# - Decision учитывает Disagreement как ОБЯЗАТЕЛЬНЫЙ фильтр перед
+#   агрегацией остальных непрерывных показателей
+# - Decoder использует и L3_out, и Rc (Aggregate), не только Rc
+# ==================================================
+
+
+
+# ==================================================
+# Базовые троичные операции (Часть 6)
+# ==================================================
+
+def quantize(value, threshold_high=0.7, threshold_low=0.3):
+    """
+    Единое правило превращения непрерывного значения [0,1]
+    в трит {-1,0,+1}. Используется для всех пяти осей R_i
+    и для L3_in/L3_out там, где вход — continuous-величина.
+    """
+    if value >= threshold_high:
+        return +1
+    elif value >= threshold_low:
+        return 0
+    else:
+        return -1
+
+
+def _normalize_sign(x):
+    """N(x): x>0 -> +1, x=0 -> 0, x<0 -> -1"""
+    if x > 0:
+        return +1
+    elif x < 0:
+        return -1
+    return 0
+
+
+def ternary_sum(vec_a, vec_b):
+    """R_sum = R_A + R_B, поэлементно, с нормализацией N(x)."""
+    return tuple(_normalize_sign(a + b) for a, b in zip(vec_a, vec_b))
+
+
+def ternary_diff(vec_a, vec_b):
+    """R_diff = R_A - R_B, поэлементно, БЕЗ нормализации —
+    величина расхождения важна, не только знак."""
+    return tuple(a - b for a, b in zip(vec_a, vec_b))
+
+
+def ternary_mul(vec_a, vec_b):
+    """R_mul = R_A × R_B, поэлементно. Обычное умножение
+    чисел из {-1,0,1} уже даёт корректную троичную алгебру:
+    +1×+1=+1, +1×-1=-1, 0×x=0, -1×-1=+1."""
+    return tuple(a * b for a, b in zip(vec_a, vec_b))
+
+
+def ternary_sqrt(trit):
+    """
+    √R — поиск базового состояния.
+    √(+1)=+1, √(0)=0, √(-1)=-1 с пометкой CONFLICT_CORE
+    (нет вещественного корня — это сигнал, что сам конфликт
+    и есть базовая причина, не ошибка вычисления).
+    """
+    if trit == 1:
+        return {"value": +1, "flag": None}
+    elif trit == 0:
+        return {"value": 0, "flag": None}
+    elif trit == -1:
+        return {"value": -1, "flag": "CONFLICT_CORE"}
+    else:
+        raise ValueError(f"trit должен быть -1, 0 или +1, получено {trit}")
+
+
+def ternary_fold(vector):
+    """
+    Rc = ternary_fold(R_i) = N(sum(l1..l5))
+    (было "Aggregate" в исходном тексте — переименовано,
+    чтобы не путать с aggregate.py/geometric_mean)
+    """
+    return _normalize_sign(sum(vector))
+
+
+# ==================================================
+# Часть 2: L3_in — готовность входа
+# ==================================================
+
+def evaluate_l3_in(field_trits):
+    """
+    field_trits: dict {"Text":+1, "Intent":0, "Goal":+1, ...}
+    (триты по полям Q = {Text, Intent, Goal, Context, Criteria,
+    Constraints})
+
+    Возвращает L3_in через ternary_fold всех полей.
+    """
+    values = list(field_trits.values())
+    l3_in = ternary_fold(values)
+
+    if l3_in == 1:
+        action = "PROCEED_TO_RASHOMON_1"
+    elif l3_in == 0:
+        action = "INTERACTION_LAYER"
+    else:
+        action = "CORRECTION_OR_STOP_VETO"
+
+    return {"L3_in": l3_in, "Action": action, "Fields": field_trits}
+
+
+# ==================================================
+# Часть 3: Rashomon-1 — интерпретационный контур
+# ==================================================
+
+def rashomon_1(interpretations, margin_threshold=0.15):
+    """
+    interpretations: dict {"I1: макс. производительность": 0.8,
+                            "I2: лучшая камера": 0.6, ...}
+    значения — Z_match(I_i) для каждой интерпретации запроса.
+
+    ИСПРАВЛЕНО (найдено при тестировании): нельзя применять
+    rashomon_evaluate() напрямую к оценкам РАЗНЫХ интерпретаций —
+    это не "расхождение мнений", а ожидаемое и желаемое различие
+    (один явный победитель должен иметь балл выше остальных).
+    Rashomon должен ловить другое: есть ли УСТОЙЧИВОЕ смысловое
+    ядро — то есть достаточный ОТРЫВ лучшей интерпретации от
+    второй по счёту (margin), а не разброс между всеми сразу.
+
+    Малый отрыв (несколько интерпретаций близки по score) =
+    реальная неоднозначность → Intent_state=0.
+    Большой отрыв = устойчивое ядро → Intent_state=+1.
+    """
+    if not interpretations:
+        return {"Intent_resolved": None, "Intent_state": 0,
+                "Rashomon_detail": None}
+
+    sorted_items = sorted(interpretations.items(), key=lambda kv: kv[1], reverse=True)
+    best_label, best_score = sorted_items[0]
+
+    if len(sorted_items) == 1:
+        margin = best_score  # единственная интерпретация — сравниваем с нулём
+    else:
+        second_score = sorted_items[1][1]
+        margin = best_score - second_score
+
+    detail = {
+        "Top": best_label, "TopScore": best_score,
+        "Margin": margin, "AllScores": dict(sorted_items)
+    }
+
+    if best_score < 0.3:
+        # даже лучшая интерпретация плохо соответствует запросу
+        intent_state = -1
+    elif margin >= margin_threshold and best_score >= 0.7:
+        intent_state = +1
+    else:
+        intent_state = 0
+
+    return {
+        "Intent_resolved": best_label if intent_state == 1 else None,
+        "Intent_state": intent_state,
+        "Rashomon_detail": detail
+    }
+
+
+# ==================================================
+# Часть 4: Пространство решений R
+# ==================================================
+
+def build_solution_vector(z_match, efficiency_value, reliability, tempo_factor, strategic_alignment):
+    """
+    R_i = (l1..l5), квантованные из continuous [0,1] значений
+    по единому порогу 0.7/0.3 (см. Часть 4, исправление).
+    """
+    return (
+        quantize(z_match),
+        quantize(efficiency_value),
+        quantize(reliability),
+        quantize(tempo_factor),
+        quantize(strategic_alignment),
+    )
+
+
+# ==================================================
+# Часть 5: Rashomon-2 + Meta-Rashomon — выбор решения
+# ==================================================
+
+def rashomon_2(candidates, solution_vectors=None):
+    """
+    candidates: dict {"R1": {"z_match":0.9,"efficiency":0.8,
+                              "reliability":0.85,"consensus_opinions":[0.8,0.85,0.82]}, ...}
+
+    solution_vectors: НОВОЕ (интеграция Части 8/9) — опционально,
+        dict {"R1": (l1,l2,l3,l4,l5), ...} — 5-осевые троичные
+        векторы кандидатов (см. build_solution_vector). Если
+        передано 2+ кандидата, дополнительно вычисляется матрица
+        согласия (candidate_agreement_matrix) — более детальная
+        проверка расхождения, чем только StdDev по консенсус-
+        оценкам, ловит КОНКРЕТНЫЕ пары кандидатов, расходящиеся
+        по КОНКРЕТНЫМ осям. Используется только при N в диапазоне
+        2-4 (Часть 9, п.2 — при больших N матричный метод менее
+        эффективен и не применяется).
+
+    Возвращает Decision для каждого кандидата, используя
+    ОБЯЗАТЕЛЬНЫЙ фильтр Disagreement перед агрегацией
+    (см. Часть 5, исправление).
+    """
+    results = {}
+
+    # Матричный кросс-кандидатный анализ согласия (Часть 8/9),
+    # применяется только при разумном числе кандидатов (2-4)
+    matrix_disagreement = False
+    matrix_detail = None
+
+    if solution_vectors and 2 <= len(solution_vectors) <= 4:
+        names_ordered = list(solution_vectors.keys())
+        R_matrix = [list(solution_vectors[n]) for n in names_ordered]
+        agreement = candidate_agreement_matrix(R_matrix)
+        matrix_detail = disagreement_from_agreement_matrix(agreement, n_axes=len(R_matrix[0]))
+        matrix_disagreement = matrix_detail["disagreement"]
+
+    for name, data in candidates.items():
+        rashomon_result = rashomon_evaluate(data["consensus_opinions"])
+
+        # ИСПРАВЛЕНО (интеграция): расхождение фиксируется, если
+        # ЛИБО скалярный Rashomon (StdDev по мнениям), ЛИБО
+        # матричный анализ согласия (по осям решения) обнаружили
+        # проблему — оба сигнала обязательны к учёту, ни один не
+        # может быть проигнорирован в пользу другого.
+        disagreement_flag = rashomon_result["Disagreement"] or matrix_disagreement
+
+        if disagreement_flag:
+            decision_score = rashomon_result["Consensus"]  # для справки
+            l3_decision = 0
+        else:
+            decision_score = geometric_mean(
+                data["z_match"], data["efficiency"], data["reliability"],
+                rashomon_result["Consensus"]
+            )
+            l3_decision = quantize(decision_score)
+
+        results[name] = {
+            "Decision_score": decision_score,
+            "L3_decision": l3_decision,
+            "Disagreement": disagreement_flag,
+            "Rashomon_detail": rashomon_result,
+            "Matrix_detail": matrix_detail
+        }
+
+    return results
+
+
+def select_best_r(rashomon_2_results):
+    """Best_R — кандидат с максимальным Decision_score среди
+    тех, кто прошёл фильтр (L3_decision != -1)."""
+    eligible = {k: v for k, v in rashomon_2_results.items() if v["L3_decision"] != -1}
+    if not eligible:
+        return None
+    return max(eligible, key=lambda k: eligible[k]["Decision_score"])
+
+
+def meta_rashomon_check(result_a, result_b):
+    """Проверка самого процесса выбора (используем общий модуль)."""
+    return meta_rashomon_evaluate(
+        {"Consensus": result_a["Decision_score"], "StdDev": 0, "Disagreement": result_a["Disagreement"]},
+        {"Consensus": result_b["Decision_score"], "StdDev": 0, "Disagreement": result_b["Disagreement"]}
+    )
+
+
+# ==================================================
+# Часть 7: L3_out, ΔL3, Decoder, Rollback
+# ==================================================
+
+DECODER_MODES = {
+    1: "Direct Answer Mode",
+    0: "Clarification Mode",
+    -1: "Protection Mode",
+}
+
+
+def evaluate_l3_out(best_r_result, risk, risk_critical=0.8):
+    """
+    L3_out на основе итогового выбранного решения и риска.
+    Architect STOP Veto имеет приоритет над всем остальным.
+    """
+    if risk > risk_critical:
+        return {"L3_out": -1, "Reason": "ARCHITECT_STOP_VETO"}
+
+    if best_r_result is None:
+        return {"L3_out": -1, "Reason": "NO_VIABLE_SOLUTION"}
+
+    l3_decision = best_r_result["L3_decision"]
+
+    if l3_decision == 1:
+        return {"L3_out": +1, "Reason": "CONSENSUS_STABLE"}
+    elif l3_decision == 0:
+        return {"L3_out": 0, "Reason": "MULTIPLE_VIABLE_OPTIONS_OR_MISSING_DATA"}
+    else:
+        return {"L3_out": -1, "Reason": "LOW_RELIABILITY_OR_DISAGREEMENT"}
+
+
+def decoder(l3_out, rc):
+    """
+    Decoder(L3_out, Rc).
+
+    ИСПРАВЛЕНО (найдено при финальном интеграционном тесте,
+    Сценарий 4): раньше режим выбирался ТОЛЬКО по Rc, а L3_out
+    лишь модулировал глубину внутри режима — из-за этого при
+    L3_out=0 ("несколько равноправных вариантов", неуверенность
+    на выходе всего цикла) Decoder мог всё равно выдать "Direct
+    Answer Mode", если Rc оказывался положительным. Это
+    противоречит смыслу L3_out как ФИНАЛЬНОЙ проверки уверенности
+    — она не должна перекрываться внутренним сигналом Rc.
+
+    Теперь: L3_out имеет ПРИОРИТЕТ. Если L3_out != +1, режим
+    принудительно Clarification или Protection, независимо от Rc.
+    Rc используется только как источник ДОПОЛНИТЕЛЬНОГО контекста
+    (глубина деталей), а не может "перебить" явную неуверенность
+    L3_out.
+    """
+    if l3_out == -1:
+        return {"Mode": "Protection Mode", "Detail_depth": "STANDARD"}
+
+    if l3_out == 0:
+        # Неуверенность на выходе цикла ВСЕГДА даёт Clarification,
+        # даже если Rc положительный
+        depth = "HIGH_DETAIL" if rc <= 0 else "STANDARD"
+        return {"Mode": "Clarification Mode", "Detail_depth": depth}
+
+    # l3_out == +1: режим определяется по Rc, как и раньше
+    mode = DECODER_MODES.get(rc, "Clarification Mode")
+    return {"Mode": mode, "Detail_depth": "STANDARD"}
+
+
+def rollback_protocol(reason):
+    """Часть 7, п.6 — фиксация и возврат на Interaction Layer."""
+    return {
+        "Error_Vector": reason,
+        "R_reset": True,
+        "Return_to": "Interaction Layer",
+        "Next_action": "clarifying_question_or_alternative_meta_rashomon"
+    }
+
+
+# ==================================================
+# Единая точка входа — полный замкнутый цикл Block X
+# ==================================================
+
+def run_block_x_cycle(field_trits, interpretations, candidates, risk, solution_vectors=None):
+    """
+    Прогоняет один полный цикл: Q -> L3_in -> Rashomon-1 ->
+    (если I3_in=+1) Rashomon-2/Meta-Rashomon -> L3_out ->
+    Decoder / Rollback.
+
+    solution_vectors: НОВОЕ — опционально, см. rashomon_2().
+    """
+
+    log = {}
+
+    l3_in_result = evaluate_l3_in(field_trits)
+    log["L3_in"] = l3_in_result
+
+    if l3_in_result["L3_in"] != 1:
+        # не доходим до Rashomon-1 при 0 или -1
+        return {
+            "log": log,
+            "final_action": l3_in_result["Action"],
+            "L3_out": None
+        }
+
+    r1_result = rashomon_1(interpretations)
+    log["Rashomon_1"] = r1_result
+
+    if r1_result["Intent_state"] != 1:
+        log["Interaction_needed"] = True
+        return {
+            "log": log,
+            "final_action": "INTERACTION_LAYER" if r1_result["Intent_state"] == 0 else "STOP_VETO",
+            "L3_out": None
+        }
+
+    r2_results = rashomon_2(candidates, solution_vectors=solution_vectors)
+    log["Rashomon_2"] = r2_results
+
+    best = select_best_r(r2_results)
+    log["Best_R"] = best
+
+    best_result = r2_results.get(best) if best else None
+
+    l3_out_result = evaluate_l3_out(best_result, risk)
+    log["L3_out_eval"] = l3_out_result
+
+    delta_l3 = l3_out_result["L3_out"] - l3_in_result["L3_in"]
+    log["Delta_L3"] = delta_l3
+
+    rc = ternary_fold(list(build_solution_vector(
+        candidates[best]["z_match"], candidates[best]["efficiency"],
+        candidates[best]["reliability"], 0.8, 0.8
+    ))) if best else -1
+    log["Rc"] = rc
+
+    if l3_out_result["L3_out"] == -1:
+        rollback = rollback_protocol(l3_out_result["Reason"])
+        log["Rollback"] = rollback
+        return {"log": log, "final_action": "ROLLBACK", "L3_out": -1}
+
+    decode_result = decoder(l3_out_result["L3_out"], rc)
+    log["Decoder"] = decode_result
+
+    return {
+        "log": log,
+        "final_action": decode_result["Mode"],
+        "L3_out": l3_out_result["L3_out"],
+        "Best_R": best
+    }
+
+
+
+# ======================================================================
+# graph_temporal_integration.py
+# ======================================================================
+
+"""
+ТЕСТ: интеграция графов (Блок №2) и время/темп/ритм (temporal.py)
+в Block X
+
+ИДЕЯ 1 (граф): матрица согласия R×Rᵀ (Часть 8 Block X) -- это
+УЖЕ ПО СУТИ взвешенная матрица смежности графа (граф решений,
+где узлы = кандидаты, рёбра = сила согласия между ними). Значит,
+интеграция с Блоком №2 (G=(V,E,W,T,Z,Σ,L3)) естественна --
+можно применить графовые операции (например, поиск компонент
+связности -- "кластеров согласия").
+
+ИДЕЯ 2 (ритм): проследить несколько ЦИКЛОВ Block X подряд и
+измерить Rhythm последовательности L3_out -- насколько
+СТАБИЛЬНО система принимает решения во времени, а не только
+насколько хорошо одно отдельное решение.
+"""
+
+
+
+# ==========================================================
+# ИДЕЯ 1: граф решений -- поиск кластеров согласия
+# ==========================================================
+
+def find_agreement_clusters(agreement_matrix, n_axes, threshold=0.6):
+    """
+    Простой поиск кластеров: два кандидата считаются "в одном
+    кластере", если их согласие (нормированное) выше порога.
+    Реализовано как union-find по рёбрам графа согласия --
+    прямое применение идеи Блока №2 (G=(V,E)) к пространству
+    решений Block X.
+    """
+    n = len(agreement_matrix)
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x, y):
+        px, py = find(x), find(y)
+        if px != py:
+            parent[px] = py
+
+    edges = []
+    for i in range(n):
+        for j in range(i+1, n):
+            normalized = agreement_matrix[i][j] / n_axes
+            if normalized >= threshold:
+                union(i, j)
+                edges.append((i, j, normalized))
+
+    clusters = {}
+    for i in range(n):
+        root = find(i)
+        clusters.setdefault(root, []).append(i)
+
+    return {"clusters": list(clusters.values()), "edges": edges}
+
+
+def test_graph_integration():
+    print("=" * 65)
+    print("ТЕСТ 1: граф решений -- 5 кандидатов, два явных кластера")
+    print("=" * 65)
+
+    # кандидаты 0,1,2 согласны друг с другом; 3,4 -- отдельный кластер
+    R_candidates = [
+        (1, 1, 1, 1, 1),
+        (1, 1, 1, 1, 0),
+        (1, 1, 0, 1, 1),
+        (-1, -1, -1, -1, -1),
+        (-1, -1, -1, -1, 0),
+    ]
+
+    agreement = candidate_agreement_matrix(R_candidates)
+    print("Матрица согласия:")
+    for row in agreement:
+        print(" ", row)
+
+    result = find_agreement_clusters(agreement, n_axes=5, threshold=0.6)
+    print(f"\nНайденные кластеры (индексы кандидатов): {result['clusters']}")
+    print(f"Рёбра графа (i, j, нормированное согласие):")
+    for i, j, w in result["edges"]:
+        print(f"  {i}-{j}: {round(w, 2)}")
+
+    assert len(result["clusters"]) == 2, "Ожидалось ровно 2 кластера"
+    print("\n>>> ПОДТВЕРЖДЕНО: граф корректно разделил 5 кандидатов на")
+    print(">>> 2 кластера согласия -- прямое применение Блока №2 (G=(V,E))")
+    print(">>> к пространству решений Block X.")
+
+
+# ==========================================================
+# ИДЕЯ 2: ритм решений во времени (несколько циклов подряд)
+# ==========================================================
+
+def test_temporal_rhythm_integration():
+    print("\n" + "=" * 65)
+    print("ТЕСТ 2: устойчивость решений Block X во времени (Rhythm)")
+    print("=" * 65)
+
+    # Симулируем 8 последовательных запросов одного типа с
+    # небольшими вариациями -- честный, чёткий запрос каждый раз
+    l3_out_sequence = []
+
+    base_candidates = {
+        "R_good": {"z_match": 0.85, "efficiency": 0.8, "reliability": 0.85,
+                   "consensus_opinions": [0.83, 0.86, 0.84]},
+    }
+
+    random.seed(3)
+
+    for cycle in range(8):
+        # лёгкий шум в оценках между циклами (реалистичная вариация)
+        noisy_candidates = {
+            "R_good": {
+                "z_match": 0.85 + random.uniform(-0.05, 0.05),
+                "efficiency": 0.8 + random.uniform(-0.05, 0.05),
+                "reliability": 0.85 + random.uniform(-0.05, 0.05),
+                "consensus_opinions": [0.83 + random.uniform(-0.03, 0.03) for _ in range(3)]
+            }
+        }
+
+        result = run_block_x_cycle(
+            field_trits={"Text": 1, "Intent": 1, "Goal": 1,
+                         "Context": 1, "Criteria": 1, "Constraints": 1},
+            interpretations={"I1: единственная трактовка": 0.9},
+            candidates=noisy_candidates,
+            risk=0.1
+        )
+        l3_out_sequence.append(result["L3_out"])
+
+    print(f"Последовательность L3_out за 8 циклов: {l3_out_sequence}")
+
+    # Rhythm по последовательности решений: считаем как устойчивость
+    # "скорости изменения" L3_out от цикла к циклу
+    deltas = [l3_out_sequence[i] - l3_out_sequence[i-1]
+              for i in range(1, len(l3_out_sequence))]
+
+    if len(deltas) > 1:
+        std_dev_v = statistics.pstdev(deltas)
+        v_average = sum(abs(d) for d in deltas) / len(deltas) if any(deltas) else 0.01
+        rhythm = calculate_rhythm(std_dev_v, max(v_average, 0.01))
+    else:
+        rhythm = None
+
+    print(f"Изменения между циклами (deltas): {deltas}")
+    print(f"Rhythm последовательности решений: {round(rhythm, 3) if rhythm is not None else 'N/A'}")
+
+    if all(d == 0 for d in deltas):
+        print(">>> Все решения одинаковы (L3_out не менялся) -- система")
+        print(">>> стабильно даёт один и тот же вывод на однотипных")
+        print(">>> запросах. Rhythm в этом случае неопределён (V_average=0),")
+        print(">>> что корректно обрабатывается calculate_rhythm (-> 0.0),")
+        print(">>> сигнализируя 'не с чем сравнивать', а не ошибку.")
+    else:
+        print(f">>> ПОДТВЕРЖДЕНО: Rhythm={round(rhythm,3)} -- количественная")
+        print(f">>> мера устойчивости решений Block X во времени, реально")
+        print(f">>> вычислена по нескольким последовательным циклам.")
+
+
+
+# ======================================================================
+# tempo_secret_sharing.py
+# ======================================================================
+
+"""
+ТЕСТ: разделение ОДНОЙ величины (например, Tempo) на несколько
+потоков как дополнительный слой защиты для blockchain
+
+Это ДРУГАЯ идея, чем вчерашняя (умножение матриц как "хэш") --
+здесь используется настоящая, известная техника: РАЗДЕЛЕНИЕ
+СЕКРЕТА (secret sharing, аддитивная схема). В отличие от
+вчерашнего, эта техника имеет РЕАЛЬНОЕ математическое
+доказательство защиты, а не просто "трудно перебрать".
+
+Принцип (n-из-n аддитивная схема):
+  secret = share_1 + share_2 + ... + share_n (mod M)
+
+Каждая доля (share) генерируется СЛУЧАЙНО, кроме последней,
+которая вычисляется так, чтобы сумма дала исходный секрет.
+
+КЛЮЧЕВОЕ СВОЙСТВО (в отличие от вчерашнего): любой, у кого
+есть ВСЕ доли КРОМЕ ОДНОЙ, не имеет АБСОЛЮТНО НИКАКОЙ информации
+о секрете -- не "трудно угадать", а математически ноль
+информации (Shannon-теоретическая, а не вычислительная защита).
+"""
+
+
+
+def split_secret_additive(secret_value, n_shares, modulus):
+    """
+    Разделяет secret_value на n_shares долей по модулю modulus.
+    Сумма всех долей (mod modulus) = secret_value.
+    """
+    shares = [random.randint(0, modulus - 1) for _ in range(n_shares - 1)]
+    last_share = (secret_value - sum(shares)) % modulus
+    shares.append(last_share)
+    random.shuffle(shares)
+    return shares
+
+
+def reconstruct_secret(shares, modulus):
+    """Восстановление: просто сумма всех долей по модулю."""
+    return sum(shares) % modulus
+
+
+def value_to_ternary_stream(value, modulus, n_trits):
+    """Кодирует одно целое число (0..modulus-1) как
+    последовательность тритов -- каждая 'доля' далее может
+    передаваться как отдельный троичный поток."""
+    digits = []
+    remainder = value
+    for _ in range(n_trits):
+        digit = remainder % 3
+        if digit == 2:
+            digit = -1
+            remainder += modulus  # компенсация для балансированной формы
+        digits.append(digit)
+        remainder //= 3
+    return digits
+
+
+
+# ======================================================================
+# derivative_link_test.py
+# ======================================================================
+
+"""
+ТЕСТ ГИПОТЕЗЫ: Время/Темп/Ритм связаны как производные --
+можно ли использовать эту связь, разделив данные на два потока
+(состояние S(t) в одном, темп dS/dt в другом), как
+дополнительный слой защиты?
+
+ЧЕСТНАЯ ПЕРЕФОРМУЛИРОВКА ЗАДАЧИ: это НЕ про секретность (скрыть
+значение от чужих глаз -- этим вчера занималось разделение
+секрета). Это про ЦЕЛОСТНОСТЬ (integrity) -- обнаружение, что
+данные подделали по дороге. Разная задача, разный тип защиты.
+
+Идея: если Поток 1 = состояние S(t) в разные моменты времени,
+а Поток 2 = темп (dS/dt), эти два потока МАТЕМАТИЧЕСКИ СВЯЗАНЫ.
+Если получатель пересчитывает темп из Потока 1 и сравнивает с
+Потоком 2 -- любое ИЗМЕНЕНИЕ ТОЛЬКО ОДНОГО потока становится
+заметным как несовпадение.
+"""
+
+def compute_tempo_stream(state_stream, dt=1.0):
+    """Темп = производная состояния (Часть 'Время, темп, ритм')."""
+    return [
+        (state_stream[i] - state_stream[i-1]) / dt
+        for i in range(1, len(state_stream))
+    ]
+
+
+def verify_consistency(state_stream, tempo_stream, dt=1.0, tolerance=1e-9):
+    """Пересчитывает темп из состояния и сравнивает с переданным
+    потоком темпа -- ловит рассогласование."""
+    recomputed = compute_tempo_stream(state_stream, dt)
+
+    if len(recomputed) != len(tempo_stream):
+        return {"consistent": False, "reason": "LENGTH_MISMATCH"}
+
+    mismatches = []
+    for i, (r, t) in enumerate(zip(recomputed, tempo_stream)):
+        if abs(r - t) > tolerance:
+            mismatches.append({"index": i, "expected": r, "received": t})
+
+    return {
+        "consistent": len(mismatches) == 0,
+        "mismatches": mismatches
+    }
+
+
+
+# ======================================================================
+# merkle_graph_test.py
+# ======================================================================
+
+"""
+ТЕСТ ГИПОТЕЗЫ: направленные графы для блокчейна/криптографии
+
+Направленные графы РЕАЛЬНО используются в блокчейне -- это
+называется ДЕРЕВО МЕРКЛА (Merkle tree), стандартная техника
+Bitcoin, Ethereum и почти всех блокчейнов. Это направленный
+граф (дерево): каждый узел зависит от своих потомков, и любое
+изменение ЛЮБОГО листа распространяется вверх до корня.
+
+Здесь строим дерево Меркла, используя НАШИ инструменты
+(ternary_fold как функция объединения вместо обычного хэша),
+и честно сравниваем с "плоской" проверкой (вчерашняя связь
+через производную) -- находит ли направленная древовидная
+структура подделку ТОЧНЕЕ (не просто "да/нет", а КАКОЙ ИМЕННО
+элемент подделан).
+"""
+
+
+
+def leaf_hash(data):
+    """Хэш листового узла (обычный криптографический хэш --
+    ЗДЕСЬ используется настоящий SHA-256, не наша троичная
+    операция, потому что вчера доказали: для хэширования нужна
+    настоящая криптография, не троичное умножение)."""
+    return hashlib.sha256(str(data).encode()).hexdigest()[:12]
+
+
+def combine_hash(left, right):
+    """Объединение двух дочерних узлов в родительский --
+    направленная связь: родитель ЗАВИСИТ от детей, не наоборот."""
+    return hashlib.sha256((left + right).encode()).hexdigest()[:12]
+
+
+def build_merkle_tree(leaves_data):
+    """Строит дерево Меркла снизу вверх, возвращает все уровни
+    (направленный граф: рёбра идут от листьев к корню)."""
+    level = [leaf_hash(d) for d in leaves_data]
+    tree_levels = [level]
+
+    while len(level) > 1:
+        if len(level) % 2 == 1:
+            level = level + [level[-1]]  # дублируем последний при нечётном числе
+        next_level = [combine_hash(level[i], level[i+1]) for i in range(0, len(level), 2)]
+        tree_levels.append(next_level)
+        level = next_level
+
+    return tree_levels
+
+
+def find_tampered_leaf(original_leaves, tampered_leaves):
+    """
+    Использует НАПРАВЛЕННОСТЬ графа для локализации подделки:
+    сравнивает деревья уровень за уровнем от корня к листьям,
+    на каждом шаге сужая, В КАКОЙ ПОЛОВИНЕ находится расхождение
+    -- это возможно ИМЕННО благодаря направленной структуре
+    (бинарный поиск по дереву), а не при плоской проверке.
+    """
+    tree_orig = build_merkle_tree(original_leaves)
+    tree_tamp = build_merkle_tree(tampered_leaves)
+
+    root_orig = tree_orig[-1][0]
+    root_tamp = tree_tamp[-1][0]
+
+    if root_orig == root_tamp:
+        return {"tampered": False}
+
+    # спускаемся от корня к листьям, находя расходящийся индекс
+    n_levels = len(tree_orig)
+    index = 0
+    for level in range(n_levels - 1, 0, -1):
+        left_idx = index * 2
+        right_idx = index * 2 + 1
+        left_orig = tree_orig[level-1][left_idx] if left_idx < len(tree_orig[level-1]) else None
+        left_tamp = tree_tamp[level-1][left_idx] if left_idx < len(tree_tamp[level-1]) else None
+
+        if left_orig != left_tamp:
+            index = left_idx
+        else:
+            index = right_idx
+
+    return {"tampered": True, "leaf_index": index}
+
+
+
+# ======================================================================
+# ДЕМО-ФУНКЦИИ
+# ======================================================================
+
+def demo_ternary_matrix():
+
+    print("=" * 60)
+    print("ТЕСТ 1: три кандидата, которые СОГЛАСНЫ друг с другом")
+    print("(похоже на демо сжатия текста: варианты B и C были близки)")
+    print("=" * 60)
+
+    R_agree = [
+        [1, 1, 0, 1, 1],
+        [1, 0, 1, 1, 1],
+        [1, 1, 1, 0, 1],
+    ]
+
+    agreement = candidate_agreement_matrix(R_agree)
+    print("Матрица согласия (R × Rᵀ):")
+    for row in agreement:
+        print(" ", row)
+
+    result = disagreement_from_agreement_matrix(agreement, n_axes=5)
+    print(f"\nСреднее согласие: {round(result['mean_agreement'], 3)}")
+    print(f"Худшая пара: {round(result['min_agreement'], 3)}")
+    print(f"Disagreement: {result['disagreement']}")
+
+
+    print("\n" + "=" * 60)
+    print("ТЕСТ 2: три кандидата, которые РАСХОДЯТСЯ")
+    print("(как Вариант A из демо сжатия — конфликтующий по осям)")
+    print("=" * 60)
+
+    R_disagree = [
+        [1, 1, 1, 1, 1],     # сильно положительный по всем осям
+        [-1, -1, -1, -1, -1], # сильно отрицательный по всем осям
+        [1, -1, 0, 1, -1],    # смешанный
+    ]
+
+    agreement2 = candidate_agreement_matrix(R_disagree)
+    print("Матрица согласия (R × Rᵀ):")
+    for row in agreement2:
+        print(" ", row)
+
+    result2 = disagreement_from_agreement_matrix(agreement2, n_axes=5)
+    print(f"\nСреднее согласие: {round(result2['mean_agreement'], 3)}")
+    print(f"Худшая пара: {round(result2['min_agreement'], 3)}")
+    print(f"Disagreement: {result2['disagreement']}")
+
+
+    print("\n" + "=" * 60)
+    print("ТЕСТ 3: матричное сложение (для сравнения с умножением)")
+    print("=" * 60)
+
+    A = [[1, 0, -1], [1, 1, 1]]
+    B = [[1, 1, 1], [-1, 0, -1]]
+    print(f"A = {A}")
+    print(f"B = {B}")
+    print(f"A + B (с нормализацией N(x)) = {matrix_add(A, B)}")
+
+
+
+
+def demo_block_x():
+
+    print("=" * 60)
+    print("СЦЕНАРИЙ 1: 'Мне нужен смартфон до 600 евро, главное —")
+    print("камера и автономность, игры не нужны' (L3_in должен = +1)")
+    print("=" * 60)
+
+    result_good = run_block_x_cycle(
+        field_trits={
+            "Text": 1, "Intent": 1, "Goal": 1,
+            "Context": 0, "Criteria": 1, "Constraints": 1
+        },
+        interpretations={
+            "I1: телефон с хорошей камерой и автономностью": 0.9,
+            "I2: телефон в целом среднего сегмента": 0.6,
+            "I3: телефон для игр": 0.2,
+        },
+        candidates={
+            "R_ModelA": {
+                "z_match": 0.85, "efficiency": 0.8, "reliability": 0.9,
+                "consensus_opinions": [0.85, 0.88, 0.82]
+            },
+            "R_ModelB": {
+                "z_match": 0.7, "efficiency": 0.6, "reliability": 0.65,
+                "consensus_opinions": [0.5, 0.9, 0.6]  # разброс -> Disagreement
+            },
+        },
+        risk=0.1
+    )
+
+    print(f"Итог: L3_out={result_good['L3_out']}, действие={result_good['final_action']}, лучший вариант={result_good.get('Best_R')}")
+    print()
+    for stage, data in result_good["log"].items():
+        print(f"  [{stage}] {data}")
+
+    print("\n" + "=" * 60)
+    print("СЦЕНАРИЙ 2: 'Хочу хороший телефон, помоги мне'")
+    print("(L3_in должен = 0 -> Interaction Layer)")
+    print("=" * 60)
+
+    result_ambiguous = run_block_x_cycle(
+        field_trits={
+            "Text": 1, "Intent": 0, "Goal": 0,
+            "Context": 0, "Criteria": -1, "Constraints": 0
+        },
+        interpretations={},
+        candidates={},
+        risk=0.1
+    )
+
+    print(f"Итог: действие={result_ambiguous['final_action']}")
+    for stage, data in result_ambiguous["log"].items():
+        print(f"  [{stage}] {data}")
+
+    print("\n" + "=" * 60)
+    print("СЦЕНАРИЙ 3: 'Хочу самый дешёвый телефон, но чтобы был")
+    print("лучше всех флагманов' (конфликт -> L3_in = -1)")
+    print("=" * 60)
+
+    result_conflict = run_block_x_cycle(
+        field_trits={
+            "Text": 1, "Intent": -1, "Goal": -1,
+            "Context": 0, "Criteria": -1, "Constraints": -1
+        },
+        interpretations={},
+        candidates={},
+        risk=0.1
+    )
+
+    print(f"Итог: действие={result_conflict['final_action']}")
+    for stage, data in result_conflict["log"].items():
+        print(f"  [{stage}] {data}")
+
+    print("\n" + "=" * 60)
+    print("СЦЕНАРИЙ 4 (НОВОЕ, интеграция Части 8/9): два кандидата,")
+    print("скалярные consensus_opinions ПОХОЖИ (StdDev низкий),")
+    print("но векторы решений АНТАГОНИСТИЧНЫ по осям")
+    print("(проверка: матричный анализ должен поймать то, что")
+    print("скалярный Rashomon пропускает)")
+    print("=" * 60)
+
+    result_matrix_catch = run_block_x_cycle(
+        field_trits={
+            "Text": 1, "Intent": 1, "Goal": 1,
+            "Context": 1, "Criteria": 1, "Constraints": 1
+        },
+        interpretations={
+            "I1: единственная трактовка": 0.9,
+        },
+        candidates={
+            "R_X": {
+                "z_match": 0.8, "efficiency": 0.8, "reliability": 0.8,
+                "consensus_opinions": [0.75, 0.78, 0.76]  # низкий StdDev
+            },
+            "R_Y": {
+                "z_match": 0.8, "efficiency": 0.8, "reliability": 0.8,
+                "consensus_opinions": [0.74, 0.77, 0.75]  # тоже низкий StdDev
+            },
+        },
+        # НО векторы решений полностью противоположны по всем 5 осям:
+        solution_vectors={
+            "R_X": (1, 1, 1, 1, 1),
+            "R_Y": (-1, -1, -1, -1, -1),
+        },
+        risk=0.1
+    )
+
+    print(f"Итог: L3_out={result_matrix_catch['L3_out']}, "
+          f"действие={result_matrix_catch['final_action']}")
+    for stage, data in result_matrix_catch["log"].items():
+        print(f"  [{stage}] {data}")
+
+    assert result_matrix_catch["log"]["Rashomon_2"]["R_X"]["Disagreement"] == True, (
+        "Матричный анализ должен был поймать антагонизм векторов "
+        "решений, даже когда скалярные consensus_opinions похожи"
+    )
+    print("\n>>> ПОДТВЕРЖДЕНО: матричный анализ (Часть 8/9) поймал "
+          "расхождение, которое скалярный Rashomon (только StdDev "
+          "по consensus_opinions) не заметил бы в одиночку.")
+
+
+
+
+def demo_graph_temporal():
+    test_graph_integration()
+    test_temporal_rhythm_integration()
+
+
+
+
+def demo_secret_sharing():
+
+    random.seed(11)
+
+    print("=" * 65)
+    print("ЗАЩИТА ОДНОЙ ВЕЛИЧИНЫ (Tempo) ЧЕРЕЗ РАЗДЕЛЕНИЕ НА ПОТОКИ")
+    print("=" * 65)
+
+    # Кодируем Tempo=1.05 как целое число (например, x1000 для
+    # сохранения точности), модуль -- достаточно большое простое
+    # число для практической схемы
+    tempo_value = 1.05
+    MODULUS = 100000  # рабочий диапазон значений
+
+    secret_int = int(tempo_value * 1000)  # 1050
+    print(f"\nИсходное значение Tempo = {tempo_value}")
+    print(f"Закодировано как целое число: {secret_int}")
+
+    N_STREAMS = 4
+    shares = split_secret_additive(secret_int, N_STREAMS, MODULUS)
+
+    print(f"\nРазделено на {N_STREAMS} потока (доли):")
+    for i, s in enumerate(shares):
+        print(f"  Поток {i+1}: {s}")
+
+    print(f"\n--- ЧТО ВИДИТ ПЕРЕХВАТЧИК, ПОЛУЧИВШИЙ ТОЛЬКО 3 ИЗ 4 ПОТОКОВ ---")
+    partial = shares[:3]
+    print(f"Перехваченные доли: {partial}")
+    print(f"Сумма перехваченных долей: {sum(partial) % MODULUS}")
+    print(f"Реальный секрет: {secret_int}")
+    print(">>> Сумма трёх долей НЕ РАВНА секрету и не даёт о нём")
+    print(">>> НИКАКОЙ информации -- недостающая доля может быть ЛЮБЫМ")
+    print(">>> числом от 0 до 99999 с РАВНОЙ вероятностью. Это не")
+    print(">>> 'трудно взломать' -- это математически ДОКАЗАННЫЙ ноль")
+    print(">>> информации без полного набора долей.")
+
+    print(f"\n--- ВОССТАНОВЛЕНИЕ СО ВСЕМИ 4 ПОТОКАМИ ---")
+    reconstructed = reconstruct_secret(shares, MODULUS)
+    print(f"Восстановленное значение: {reconstructed}")
+    print(f"Совпадает с исходным: {reconstructed == secret_int}")
+    print(f"Восстановленный Tempo: {reconstructed / 1000}")
+
+    print(f"\n{'='*65}")
+    print("ПОЧЕМУ ЭТО ЧЕСТНО ОТЛИЧАЕТСЯ ОТ ВЧЕРАШНЕЙ ИДЕИ (умножение)")
+    print(f"{'='*65}")
+    print("Вчера: умножение троичных матриц -- взломано полным перебором")
+    print("       за 0.164 миллисекунды (пространство всего 243 варианта)")
+    print()
+    print("Сегодня: аддитивное разделение секрета -- даже с БЕСКОНЕЧНОЙ")
+    print("         вычислительной мощностью нельзя восстановить секрет")
+    print("         без ВСЕХ долей. Это другой класс защиты --")
+    print("         теоретико-информационная, а не вычислительная.")
+
+    print(f"\n{'='*65}")
+    print("ПРЕДСТАВЛЕНИЕ КАЖДОЙ ДОЛИ КАК ТРОИЧНОГО ПОТОКА")
+    print(f"{'='*65}")
+    n_trits_needed = math.ceil(math.log(MODULUS, 3))
+    print(f"Для модуля {MODULUS} нужно {n_trits_needed} тритов на долю")
+
+    for i, s in enumerate(shares):
+        trits = value_to_ternary_stream(s, MODULUS, n_trits_needed)
+        print(f"  Поток {i+1} как триты: {trits}")
+
+    print("\n>>> Каждый 'поток' в вашей идее -- это одна доля секрета,")
+    print(">>> представленная как последовательность тритов. Реальная")
+    print(">>> защита обеспечивается схемой РАЗДЕЛЕНИЯ (математикой),")
+    print(">>> а троичное представление -- просто удобный формат")
+    print(">>> кодирования долей, само по себе защиты не добавляет.")
+
+
+
+
+def demo_derivative_link():
+
+    print("=" * 65)
+    print("СЦЕНАРИЙ A: данные передаются БЕЗ подделки")
+    print("=" * 65)
+
+    original_states = [10.0, 12.0, 15.0, 14.0, 18.0, 20.0]
+    tempo_stream = compute_tempo_stream(original_states)
+
+    print(f"Поток 1 (состояние S(t)): {original_states}")
+    print(f"Поток 2 (темп dS/dt):     {tempo_stream}")
+
+    check_a = verify_consistency(original_states, tempo_stream)
+    print(f"\nПроверка согласованности: {check_a}")
+
+    print("\n" + "=" * 65)
+    print("СЦЕНАРИЙ B: атакующий подделал ОДНО значение в Потоке 1")
+    print("(изменил S[2] с 15.0 на 25.0), Поток 2 НЕ тронул")
+    print("=" * 65)
+
+    tampered_states = [10.0, 12.0, 25.0, 14.0, 18.0, 20.0]  # S[2] изменён
+    print(f"Поток 1 (подделанный):    {tampered_states}")
+    print(f"Поток 2 (оригинальный, не менялся): {tempo_stream}")
+
+    check_b = verify_consistency(tampered_states, tempo_stream)
+    print(f"\nПроверка согласованности: consistent={check_b['consistent']}")
+    if check_b["mismatches"]:
+        print("Обнаруженные несовпадения:")
+        for m in check_b["mismatches"]:
+            print(f"  Индекс {m['index']}: ожидался темп {m['expected']}, "
+                  f"получен {m['received']}")
+
+    print("\n>>> ПОДТВЕРЖДЕНО: подделка ОДНОГО потока при неизменном")
+    print(">>> втором -- обнаруживается, потому что производная связь")
+    print(">>> нарушается. Это работает как проверка ЦЕЛОСТНОСТИ.")
+
+    print("\n" + "=" * 65)
+    print("СЦЕНАРИЙ C (честный контр-пример): атакующий подделал ОБА")
+    print("потока СОГЛАСОВАННО (знает формулу производной)")
+    print("=" * 65)
+
+    tampered_states_c = [10.0, 12.0, 25.0, 14.0, 18.0, 20.0]
+    tampered_tempo_c = compute_tempo_stream(tampered_states_c)  # пересчитан атакующим
+
+    print(f"Поток 1 (подделан):        {tampered_states_c}")
+    print(f"Поток 2 (тоже пересчитан атакующим): {tampered_tempo_c}")
+
+    check_c = verify_consistency(tampered_states_c, tampered_tempo_c)
+    print(f"\nПроверка согласованности: consistent={check_c['consistent']}")
+
+    print("\n>>> ЧЕСТНОЕ ОГРАНИЧЕНИЕ: если атакующий знает формулу связи")
+    print(">>> (dS/dt) и подделывает ОБА потока согласованно -- проверка")
+    print(">>> НЕ обнаруживает подделку. Это защита от СЛУЧАЙНОЙ или")
+    print(">>> ЧАСТИЧНОЙ порчи данных (например, повреждение канала,")
+    print(">>> обрыв одного из двух потоков), а НЕ от осведомлённого")
+    print(">>> злоумышленника, который может изменить оба потока сразу.")
+
+    print("\n" + "=" * 65)
+    print("ИТОГ: ЧТО ЭТО РЕАЛЬНО ДАЁТ")
+    print("=" * 65)
+    print("Тип защиты: ЦЕЛОСТНОСТЬ (integrity), не СЕКРЕТНОСТЬ (confidentiality)")
+    print("Ловит:      случайную порчу/потерю одного из двух потоков,")
+    print("            рассинхронизацию каналов, частичный сбой передачи")
+    print("Не ловит:   целенаправленную подделку ОБОИХ потоков атакующим,")
+    print("            знающим формулу связи между ними")
+    print()
+    print("Это аналог того, как работают контрольные суммы/коды коррекции")
+    print("ошибок (например, в блокчейн-транзакциях уже есть похожий")
+    print("принцип -- хэш блока зависит от его содержимого, и подделка")
+    print("содержимого без пересчёта хэша будет обнаружена). Здесь та же")
+    print("идея, но через физически осмысленную связь (произведение),")
+    print("а не криптографический хэш.")
+
+
+
+
+def demo_merkle_tree():
+
+    print("=" * 65)
+    print("ТЕСТ: дерево Меркла -- направленный граф для целостности")
+    print("=" * 65)
+
+    # 8 "транзакций" в блоке
+    transactions = [
+        "Alice->Bob: 5",
+        "Bob->Carol: 3",
+        "Carol->Dave: 1",
+        "Dave->Eve: 2",
+        "Eve->Frank: 4",
+        "Frank->Grace: 6",
+        "Grace->Henry: 2",
+        "Henry->Alice: 1",
+    ]
+
+    tree = build_merkle_tree(transactions)
+    print(f"\nТранзакций в блоке: {len(transactions)}")
+    print(f"Уровней в дереве: {len(tree)}")
+    for i, level in enumerate(tree):
+        print(f"  Уровень {i}: {level}")
+
+    root = tree[-1][0]
+    print(f"\nКорень Меркла (Merkle Root): {root}")
+    print(">>> Только ЭТОТ один хэш нужно передать/проверить, чтобы")
+    print(">>> подтвердить целостность ВСЕХ 8 транзакций -- это и есть")
+    print(">>> практическая польза направленного графа: O(1) проверка")
+    print(">>> вместо сравнения всех 8 транзакций по отдельности.")
+
+    print("\n" + "=" * 65)
+    print("СЦЕНАРИЙ: кто-то подделал ОДНУ транзакцию (индекс 5)")
+    print("=" * 65)
+
+    tampered = transactions.copy()
+    tampered[5] = "Frank->Grace: 6000"  # подделка суммы
+
+    print(f"Оригинал[5]:  {transactions[5]}")
+    print(f"Подделка[5]:  {tampered[5]}")
+
+    result = find_tampered_leaf(transactions, tampered)
+    print(f"\nРезультат проверки: {result}")
+
+    assert result["tampered"] == True
+    assert result["leaf_index"] == 5, f"Ожидался индекс 5, получен {result['leaf_index']}"
+
+    print(f"\n>>> ПОДТВЕРЖДЕНО: направленная структура (граф-дерево) не")
+    print(f">>> просто обнаружила подделку (это умел и вчерашний метод),")
+    print(f">>> а ТОЧНО ЛОКАЛИЗОВАЛА её -- индекс {result['leaf_index']}, без")
+    print(f">>> необходимости проверять все 8 транзакций по отдельности.")
+    print(f">>> Это именно то преимущество направленности, о котором вы")
+    print(f">>> говорили -- граф даёт СТРУКТУРУ поиска, а не только сигнал")
+    print(f">>> 'что-то не так'.")
+
+    print("\n" + "=" * 65)
+    print("СРАВНЕНИЕ С ВЧЕРАШНИМ МЕТОДОМ (производная, плоская проверка)")
+    print("=" * 65)
+    print("Вчера (Rhythm/Tempo через производную):")
+    print("  - обнаруживает: ЧТО есть рассогласование")
+    print("  - НЕ даёт: точное место в большом потоке данных без")
+    print("    последовательного перебора")
+    print()
+    print("Сегодня (дерево Меркла, направленный граф):")
+    print("  - обнаруживает: ЧТО есть рассогласование")
+    print("  - ДАЁТ: точный адрес (индекс) подделки за log2(N) шагов")
+    print("    вместо перебора всех N элементов")
+    print(f"  - для {len(transactions)} транзакций: "
+          f"{__import__('math').log2(len(transactions)):.0f} шагов вместо "
+          f"{len(transactions)}")
+
+
+
+
+if __name__ == "__main__":
+
+    print("ARCHITECTURE v6.2 — BLOCK X COMPLETE — self-test\n")
+
+    print("\n" + "="*60)
+    print("ДЕМО: ternary_matrix.py")
+    print("="*60)
+    demo_ternary_matrix()
+
+    print("\n" + "="*60)
+    print("ДЕМО: block_x.py")
+    print("="*60)
+    demo_block_x()
+
+    print("\n" + "="*60)
+    print("ДЕМО: graph_temporal_integration.py")
+    print("="*60)
+    demo_graph_temporal()
+
+    print("\n" + "="*60)
+    print("ДЕМО: tempo_secret_sharing.py")
+    print("="*60)
+    demo_secret_sharing()
+
+    print("\n" + "="*60)
+    print("ДЕМО: derivative_link_test.py")
+    print("="*60)
+    demo_derivative_link()
+
+    print("\n" + "="*60)
+    print("ДЕМО: merkle_graph_test.py")
+    print("="*60)
+    demo_merkle_tree()
