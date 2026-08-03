@@ -1,0 +1,95 @@
+# -*- coding: utf-8 -*-
+"""
+Ternary Rebel Miner (tr-miner) - Prototype v1.0
+Geometry over Brute-Force.
+"""
+
+import random
+import time
+
+# 1. Задаем базовую Пентарную матрицу (5x5) для гиперболического сдвига.
+# Используем сбалансированные троичные коэффициенты (-1, 0, 1)
+PENTARY_MATRIX = [
+    [ 1,  0, -1,  1,  0],
+    [ 0,  1,  1, -1,  1],
+    [-1,  1,  0,  1, -1],
+    [ 1, -1,  1,  0,  1],
+    [ 0,  1, -1,  1,  0]
+]
+
+def string_to_ternary_vector(data_string, length=5):
+    """Преобразует входные данные (строку) в троичный вектор фиксированной длины"""
+    # Простейший детерминированный перевод хэша строки в триты (-1, 0, 1)
+    hashed_val = hash(data_string)
+    vector = []
+    for i in range(length):
+        trit = (hashed_val // (3**i)) % 3 - 1  # Приводим к диапазону [-1, 0, 1]
+        vector.append(trit)
+    return vector
+
+def multiply_matrix_vector(matrix, vector):
+    """Умножение матрицы на вектор в троичной сбалансированной логике с триммингом"""
+    result = []
+    for row in matrix:
+        val = sum(r * v for r, v in zip(row, vector))
+        # Троичный квантователь (активация пути)
+        if val > 0:   result.append(1)
+        elif val < 0: result.append(-1)
+        else:         result.append(0)
+    return result
+
+def check_target_condition(vector, difficulty):
+    """
+    Критерий успешного майнинга (The Heresy):
+    Вместо поиска нулей в конце хэша, мы ищем вектор, который 
+    схлопывается в центральную симметрию (количество нулей >= сложности).
+    """
+    zero_count = vector.count(0)
+    return zero_count >= difficulty
+
+def mine_block(block_data, difficulty=2):
+    """Основной цикл неевклидова троичного майнинга"""
+    print(f"[START] Начало майнинга блока: '{block_data}'")
+    print(f"[INFO] Целевая сложность (кол-во нулевых фаз): {difficulty}")
+    
+    # Исходное состояние данных, упакованное в геометрию Лобачевского
+    base_vector = string_to_ternary_vector(block_data)
+    print(f"[BASE] Вектор данных: {base_vector}")
+    
+    nonce = 0
+    start_time = time.time()
+    
+    while True:
+        nonce += 1
+        
+        # Эффект Расёмона: генерируем случайную "точку зрения" (модификатор пути)
+        # В троичном коде это просто вектор трансформации фазы
+        rashemon_perspective = [random.choice([-1, 0, 1]) for _ in range(5)]
+        
+        # Модифицируем базовый вектор нашей "точкой зрения"
+        current_state = [b + p for b, p in zip(base_vector, rashemon_perspective)]
+        # Нормализуем обратно в триты
+        current_state = [1 if x > 0 else (-1 if x < 0 else 0) for x in current_state]
+        
+        # Пропускаем состояние через Пентарную матрицу пространства
+        transformed_vector = multiply_matrix_vector(PENTARY_MATRIX, current_state)
+        
+        # Проверяем, нашли ли мы нужную геометрическую проекцию
+        if check_target_condition(transformed_vector, difficulty):
+            elapsed_time = time.time() - start_time
+            print("\n[SUCCESS] Блок успешно смайнен!")
+            print(f"[RESULT] Итоговый геометрический вектор: {transformed_vector}")
+            print(f"[NONCE] Найдено за {nonce} итераций (Расёмон-проекций)")
+            print(f"[KEY] Троичный ключ блока: {rashemon_perspective}")
+            print(f"[TIME] Затрачено времени: {elapsed_time:.4f} сек.")
+            return nonce, rashemon_perspective
+            
+        if nonce % 100000 == 0:
+            print(f"[PROCESSING] Проверено {nonce} геометрических проекций...")
+
+# --- Тестовый запуск ---
+if __name__ == "__main__":
+    # Тестируем на блоке данных
+    data = "Transaction: Zavodiuk -> Big_Contour_2026"
+    # Сложность 3 означает, что в векторе из 5 элементов минимум 3 должны стать нулями
+    mine_block(data, difficulty=3)
