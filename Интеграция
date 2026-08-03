@@ -1,0 +1,109 @@
+"""
+Интегрированная система троичного кодирования и защиты данных 
+для блокчейн-потоков с аддитивным разделением секрета (Secret Sharing).
+
+Автор: Владимир Заводюк
+"""
+
+import random
+import math
+
+
+class TernarySecretProtector:
+    """Класс для защиты параметров блокчейн-потоков (например, Tempo)
+
+    с использованием аддитивного разделения секрета и троичного кодирования.
+    """
+
+    def __init__(self, modulus: int = 100000):
+        self.modulus = modulus
+
+    def split_secret(self, secret_value: int, n_shares: int):
+        """Разделяет secret_value на n_shares долей по модулю modulus.
+
+        Сумма всех долей (mod modulus) = secret_value.
+        Математически гарантирует 0 информации при перехвате n-1 долей.
+        """
+        shares = [random.randint(0, self.modulus - 1) for _ in range(n_shares - 1)]
+        last_share = (secret_value - sum(shares)) % self.modulus
+        shares.append(last_share)
+        random.shuffle(shares)
+        return shares
+
+    def reconstruct_secret(self, shares: list) -> int:
+        """Восстановление секрета из полного набора долей."""
+        return sum(shares) % self.modulus
+
+    def value_to_ternary_stream(self, value: int, n_trits: int) -> list:
+        """Кодирует целое число в сбалансированную троичную последовательность (триты: -1, 0, 1)."""
+        digits = []
+        remainder = value
+        for _ in range(n_trits):
+            digit = remainder % 3
+            if digit == 2:
+                digit = -1
+                remainder += self.modulus  # компенсация для балансированной формы
+            digits.append(digit)
+            remainder //= 3
+        return digits
+
+
+def run_blockchain_protection_demo():
+    print("=" * 65)
+    print("ИНТЕГРИРОВАННЫЙ ДЕМО-БЛОК: ЗАЩИТА ПАРАМЕТРОВ БЛОКЧЕЙНА")
+    print("=" * 65)
+
+    # Инициализация параметров
+    MODULUS = 100000
+    protector = TernarySecretProtector(modulus=MODULUS)
+
+    # Исходный параметр (например, Tempo = 1.05)
+    tempo_value = 1.05
+    secret_int = int(tempo_value * 1000)  # 1050
+
+    print(f"\n1. Исходный параметр блокчейна (Tempo) = {tempo_value}")
+    print(f"   Закодировано в целое число: {secret_int}")
+
+    # Разделение на 4 независимых потока
+    N_STREAMS = 4
+    shares = protector.split_secret(secret_int, N_STREAMS)
+
+    print(f"\n2. Разделение на {N_STREAMS} защищенных потока (доли):")
+    for i, s in enumerate(shares):
+        print(f"   Поток {i+1}: {s}")
+
+    # Демонстрация уровня безопасности (Шеннон-безопасность)
+    print(f"\n3. Проверка стойкости при перехвате (3 из 4 потоков):")
+    partial_shares = shares[:3]
+    intercepted_sum = sum(partial_shares) % MODULUS
+    print(f"   Перехваченные доли: {partial_shares}")
+    print(f"   Сумма перехваченных долей: {intercepted_sum}")
+    print(f"   Реальный секрет: {secret_int}")
+    print(
+        "   >>> ЗАЩИТА: Сумма не дает никакой информации. Недостающая доля"
+    )
+    print("   >>> может быть абсолютно любым числом с равной вероятностью.")
+
+    # Полное восстановление
+    print(f"\n4. Штатное восстановление со всеми {N_STREAMS} потоками:")
+    reconstructed_int = protector.reconstruct_secret(shares)
+    reconstructed_tempo = reconstructed_int / 1000
+    print(f"   Восстановленное целое: {reconstructed_int}")
+    print(f"   Восстановленный Tempo: {reconstructed_tempo}")
+    print(f"   Успешно восстановлено: {reconstructed_int == secret_int}")
+
+    # Троичное представление долей для передачи по каналам связи
+    print(f"\n5. Трансляция долей в троичный поток (триты):")
+    n_trits_needed = math.ceil(math.log(MODULUS, 3))
+    for i, s in enumerate(shares):
+        trits = protector.value_to_ternary_stream(s, n_trits_needed)
+        print(f"   Поток {i+1} (триты): {trits[:10]}... (всего {len(trits)} тритов)")
+
+    print(f"\n" + "=" * 65)
+    print("Интеграция завершена успешно.")
+    print("=" * 65)
+
+
+if __name__ == "__main__":
+    random.seed(42)
+    run_blockchain_protection_demo()
