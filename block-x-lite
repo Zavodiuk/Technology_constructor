@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+import random, math, sys
+
+TRITS = [-1, 0, 1]
+SIZE = 3
+
+def make_ternary_matrix(n):
+    return [[random.choice(TRITS) for _ in range(n)] for _ in range(n)]
+
+def log_evaluate(matrix):
+    # Логарифмическая псевдо-сумма вместо тяжелого перемножения
+    total = sum(sum(row) for row in matrix)
+    return abs(total)
+
+def run_rebel_miner():
+    print("--- TERNARY REBEL MINER (LITE) ---")
+    nonce = 0
+    try:
+        while True:
+            nonce += 1
+            mat = make_ternary_matrix(SIZE)
+            score = log_evaluate(mat)
+            
+            if score == 0:  # Идеальный баланс структуры
+                print(f"[FOUND] Nonce: {nonce} | Balanced Matrix:")
+                for r in mat: print(r)
+                break
+                
+            if nonce % 200000 == 0:
+                print(f"[*] Scanned: {nonce}, deviation: {score}")
+    except KeyboardInterrupt:
+        sys.exit(0)
+
+if __name__ == "__main__":
+    run_rebel_miner()
