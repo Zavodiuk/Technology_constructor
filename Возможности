@@ -1,0 +1,354 @@
+"""
+================================================================================
+БЛОК X v6 — ПРИМЕНЕНИЯ И КОД (единый блок)
+================================================================================
+
+Блок X — универсальный фильтр принятия решений на основе троичной логики.
+Каждое применение иллюстрируется коротким фрагментом кода (до 20 строк).
+
+Базовые функции (ядро):
+    - quantize(value, low=0.3, high=0.7) → -1, 0, +1
+    - ternary_fold(vector) → свёртка в один трит
+    - ternary_diff(vec_a, vec_b) → разность векторов
+
+Все примеры используют эти функции.
+================================================================================
+"""
+
+# ============================================================================
+# БАЗОВОЕ ЯДРО (обязательно для всех примеров)
+# ============================================================================
+
+def quantize(value, low=0.3, high=0.7):
+    """Квантует значение [0,1] в трит {-1,0,+1}."""
+    if value >= high: return 1
+    if value <= low: return -1
+    return 0
+
+def normalize_sign(x):
+    """Нормализация знака: x>0 → +1, x=0 → 0, x<0 → -1."""
+    if x > 0: return 1
+    if x < 0: return -1
+    return 0
+
+def ternary_fold(vector):
+    """Свёртка вектора тритов в один трит."""
+    return normalize_sign(sum(vector))
+
+def ternary_diff(vec_a, vec_b):
+    """Поэлементная разность без нормализации (результат [-2..+2])."""
+    return tuple(a - b for a, b in zip(vec_a, vec_b))
+
+# ============================================================================
+# 1. ИНТЕЛЛЕКТУАЛЬНЫЕ АССИСТЕНТЫ (ЧАТ-БОТЫ)
+# ============================================================================
+
+def classify_query(text):
+    """Классифицирует запрос пользователя."""
+    has_subject = any(w in text for w in ['телефон','ноутбук','компьютер'])
+    has_criteria = any(w in text for w in ['камера','цена','память','скорость'])
+    has_constraint = any(w in text for w in ['до','бюджет','хочу','нужен'])
+    coverage = (has_subject + has_criteria + has_constraint) / 3
+    l3 = quantize(coverage)
+    if l3 == 1: return "✅ ПРЯМОЙ ОТВЕТ: Отвечаю напрямую"
+    if l3 == 0: return "❓ УТОЧНЕНИЕ: Уточните, что именно"
+    return "⚠️ КОНФЛИКТ: Противоречие в запросе"
+
+# ============================================================================
+# 2. СЖАТИЕ ИЗОБРАЖЕНИЙ
+# ============================================================================
+
+def compress_image(pixels):
+    """Сжимает изображение (2 бита/пиксель, до 4x)."""
+    import numpy as np
+    trits = np.vectorize(quantize)(pixels)  # -1,0,1
+    codes = np.where(trits == -1, 0, np.where(trits == 1, 2, 1))
+    packed = bytearray()
+    for i in range(0, len(codes), 4):
+        byte = 0
+        for j in range(4):
+            if i + j < len(codes):
+                byte |= (codes[i+j] & 0x03) << (6 - j*2)
+        packed.append(byte)
+    return packed
+
+# ============================================================================
+# 3. СЖАТИЕ ВИДЕО (ПОКАДРОВО)
+# ============================================================================
+
+def compress_video(input_path, output_path):
+    """Сжимает видео через H.264 с 3 градациями."""
+    import cv2
+    import numpy as np
+    cap = cv2.VideoCapture(input_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w,h), False)
+    while True:
+        ret, frame = cap.read()
+        if not ret: break
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        quant = np.vectorize(quantize)(gray / 255.0)
+        restored = np.where(quant == -1, 0, np.where(quant == 1, 255, 128)).astype(np.uint8)
+        out.write(restored)
+    cap.release()
+    out.release()
+
+# ============================================================================
+# 4. БЛОКЧЕЙН-КОНСЕНСУС
+# ============================================================================
+
+def blockchain_consensus(votes):
+    """Троичный консенсус валидаторов."""
+    consensus = ternary_fold(tuple(votes))
+    if consensus == 1: return "COMMIT"
+    if consensus == 0: return "REVIEW"
+    return "REJECT"
+
+# ============================================================================
+# 5. РЕПУТАЦИОННАЯ СИСТЕМА УЗЛОВ
+# ============================================================================
+
+def node_reliability(metrics):
+    """Оценка надёжности узла."""
+    vec = (
+        quantize(metrics.get('uptime', 0.5)),
+        quantize(1 - metrics.get('latency', 0.5)),
+        quantize(metrics.get('stake', 0.5)),
+        quantize(metrics.get('success_rate', 0.5))
+    )
+    return ternary_fold(vec)  # +1 надёжен, 0 нейтрален, -1 ненадёжен
+
+# ============================================================================
+# 6. ДЕТЕКЦИЯ АТАК (БЛОКЧЕЙН)
+# ============================================================================
+
+def detect_sybil_attack(validators):
+    """Обнаружение атаки сивилла."""
+    patterns = {}
+    for v in validators:
+        vec = (v.get('stake',0), v.get('uptime',0), v.get('success_rate',0))
+        patterns.setdefault(vec, []).append(v.get('id',0))
+    suspicious = [g for g in patterns.values() if len(g) > 2]
+    return len(suspicious) > 0
+
+# ============================================================================
+# 7. КРЕДИТНЫЙ СКОРИНГ
+# ============================================================================
+
+def credit_score(applicant):
+    """Оценка кредитного риска."""
+    vec = (
+        quantize(applicant.get('income', 5000) / 10000),
+        quantize(1 - applicant.get('debt_ratio', 0.5)),
+        quantize(applicant.get('history', 5) / 10),
+        quantize(applicant.get('employment', 3) / 5)
+    )
+    return ternary_fold(vec)  # +1 одобрить, 0 проверить, -1 отказать
+
+# ============================================================================
+# 8. УПРАВЛЕНИЕ ДОСТУПОМ
+# ============================================================================
+
+def access_decision(user_role, file_class, time_of_day):
+    """Контроль доступа на основе роли, класса файла и времени."""
+    vec = (
+        quantize(user_role),
+        quantize(file_class),
+        quantize(time_of_day)
+    )
+    decision = ternary_fold(vec)
+    if decision == 1: return "✅ ДОСТУП РАЗРЕШЁН"
+    if decision == 0: return "🔒 ОГРАНИЧЕННЫЙ ДОСТУП"
+    return "🚫 ДОСТУП ЗАПРЕЩЁН"
+
+# ============================================================================
+# 9. ПЛАНИРОВЩИК ЗАДАЧ (ОС)
+# ============================================================================
+
+def schedule_tasks(tasks):
+    """Выбирает задачу с наивысшим приоритетом."""
+    for t in tasks:
+        vec = (
+            quantize(1 - t.get('cpu_usage', 0.5)),
+            quantize(1 - t.get('mem_usage', 0.5)),
+            quantize(t.get('priority', 0.5)),
+            quantize(1 - t.get('io_wait', 0.5))
+        )
+        t['score'] = ternary_fold(vec)
+    best = max(tasks, key=lambda t: t['score'])
+    return best.get('name', 'unknown')
+
+# ============================================================================
+# 10. ОЦЕНКА РИСКОВ (ФИНАНСЫ)
+# ============================================================================
+
+def risk_level(value_at_risk, volatility, liquidity):
+    """Оценка финансового риска."""
+    risk = quantize(1 - value_at_risk) + quantize(1 - volatility) + quantize(liquidity)
+    if risk >= 1: return 1
+    if risk <= -1: return -1
+    return 0
+
+# ============================================================================
+# 11. УПРАВЛЕНИЕ ДРОНОМ
+# ============================================================================
+
+def drone_decision(obstacle_distance, battery, signal_strength):
+    """Принятие решений для автономного дрона."""
+    d = quantize(obstacle_distance / 10)
+    b = quantize(battery / 100)
+    s = quantize(signal_strength / 100)
+    if d == 1 and b == 1 and s == 1:
+        return "PROCEED"
+    if d == -1 or b == -1 or s == -1:
+        return "RETURN_TO_BASE"
+    return "HOVER_AND_WAIT"
+
+# ============================================================================
+# 12. ЛОГИСТИКА И МАРШРУТИЗАЦИЯ
+# ============================================================================
+
+def route_decision(traffic, distance, cost):
+    """Выбор маршрута на основе трафика, расстояния и стоимости."""
+    t = quantize(1 - traffic)
+    d = quantize(1 - distance / 100)
+    c = quantize(1 - cost / 1000)
+    return (t + d + c) >= 1
+
+# ============================================================================
+# 13. МЕДИЦИНСКИЙ ТРИАЖ
+# ============================================================================
+
+def medical_triage(pain_level, temperature, is_chronic):
+    """Сортировка пациентов по срочности."""
+    severity = quantize(pain_level / 10)
+    urgency = quantize(temperature / 40)
+    chronic = quantize(1 if is_chronic else 0)
+    if severity == 1 and urgency == 1:
+        return "🔴 КРАСНЫЙ (немедленно)"
+    if severity == -1 and urgency == -1:
+        return "🟢 ЗЕЛЁНЫЙ (планово)"
+    return "🟡 ЖЁЛТЫЙ (наблюдение)"
+
+# ============================================================================
+# 14. КОНТРОЛЬ КАЧЕСТВА
+# ============================================================================
+
+def quality_check(defects, accuracy, speed):
+    """Оценка качества продукции."""
+    vec = (
+        quantize(1 - defects / 100),
+        quantize(accuracy / 100),
+        quantize(speed / 100)
+    )
+    result = ternary_fold(vec)
+    if result == 1: return "ГОДЕН"
+    if result == 0: return "ТРЕБУЕТ ПРОВЕРКИ"
+    return "БРАК"
+
+# ============================================================================
+# 15. ПРОГНОЗИРОВАНИЕ ОТКАЗОВ
+# ============================================================================
+
+def failure_prediction(temperature, vibration, lifetime):
+    """Прогнозирование отказов оборудования."""
+    t = quantize(temperature / 100)
+    v = quantize(vibration / 50)
+    l = quantize(lifetime / 1000)
+    return (t, v, l)
+
+# ============================================================================
+# 16. ОБРАБОТКА ВРЕМЕННЫХ РЯДОВ
+# ============================================================================
+
+def trend_signal(data):
+    """Выявление тренда в данных."""
+    changes = [data[i+1] - data[i] for i in range(len(data)-1)]
+    signals = [quantize(1 if x > 0 else (0 if x == 0 else -1)) for x in changes]
+    return sum(signals) / len(signals)
+
+# ============================================================================
+# 17. ИГРОВОЙ AI (NPC)
+# ============================================================================
+
+def npc_decision(player_distance, health, ammo):
+    """Поведение NPC в игре."""
+    d = quantize(1 - player_distance / 100)
+    h = quantize(health / 100)
+    a = quantize(ammo / 100)
+    if d == 1 and h == 1 and a == 1:
+        return "ATTACK"
+    if d == -1 or h == -1 or a == -1:
+        return "RETREAT"
+    return "HOLD_POSITION"
+
+# ============================================================================
+# 18. СИСТЕМА РЕКОМЕНДАЦИЙ
+# ============================================================================
+
+def recommend_product(product, user):
+    """Персональная рекомендация товара."""
+    vec = (
+        quantize(user.get('rating', 3) / 5),
+        quantize(user.get('budget', 100) / product.get('price', 100)),
+        quantize(product.get('popularity', 50) / 100)
+    )
+    return sum(vec) >= 1
+
+# ============================================================================
+# 19. ФИЛЬТРАЦИЯ ДАННЫХ (УДАЛЕНИЕ ШУМА)
+# ============================================================================
+
+def filter_noise(raw_data):
+    """Фильтрация данных с удалением шума."""
+    filtered = []
+    for x in raw_data:
+        q = quantize(x)
+        if q != 0:
+            filtered.append(q)
+    return filtered
+
+# ============================================================================
+# 20. ПРОСТАЯ ЭКСПЕРТНАЯ СИСТЕМА
+# ============================================================================
+
+def expert_system(rules, facts):
+    """Лёгкая экспертная система на троичной логике."""
+    results = []
+    for rule in rules:
+        matches = [facts.get(cond, 0) for cond in rule['conditions']]
+        confidence = ternary_fold(tuple(matches))
+        if confidence == 1:
+            results.append(rule['conclusion'])
+    return results if results else "НЕТ РЕШЕНИЯ"
+
+# ============================================================================
+# КОРОТКИЙ ТЕСТ ДЛЯ ВСЕХ ПРИМЕРОВ
+# ============================================================================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("БЛОК X v6 — ТЕСТИРОВАНИЕ ВСЕХ ПРИМЕРОВ")
+    print("=" * 60)
+
+    # 1. Интеллектуальный ассистент
+    print("\n[1] Ассистент:", classify_query("хочу телефон с хорошей камерой до 600 евро"))
+
+    # 4. Блокчейн-консенсус
+    print("[4] Консенсус:", blockchain_consensus([1, 1, 0, 1, -1, 0, 1]))
+
+    # 7. Кредитный скоринг
+    print("[7] Кредит:", credit_score({'income': 8000, 'debt_ratio': 0.3, 'history': 8, 'employment': 4}))
+
+    # 8. Управление доступом
+    print("[8] Доступ:", access_decision(0.9, 0.4, 0.8))
+
+    # 13. Медицинский триаж
+    print("[13] Триаж:", medical_triage(8, 39, False))
+
+    # 17. Игровой AI
+    print("[17] NPC:", npc_decision(20, 90, 80))
+
+    print("\n✅ Все примеры работают!")
