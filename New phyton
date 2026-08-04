@@ -1,0 +1,486 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+BXOS — полный модуль для Python (v1.2)
+================================================================================
+Расширяет Python троичной логикой, гиперболической геометрией,
+графами Лобачевского, двойным Рашимоном и ядром BXOS.
+
+Автор: Владимир Заводюк (Root-Architect)
+Лицензия: MIT
+GitHub: https://github.com/ваш_ник/bxos
+================================================================================
+"""
+
+import math
+import os
+import struct
+import time
+from typing import List, Tuple, Dict, Optional, Any
+from dataclasses import dataclass, field
+
+# ============================================================
+# 1. ТРОИЧНАЯ ЛОГИКА
+# ============================================================
+
+def quantize(value: float, low: float = 0.3, high: float = 0.7) -> int:
+    """Квантует число в трит {-1, 0, +1}"""
+    if value >= high: return 1
+    if value <= low: return -1
+    return 0
+
+def normalize_sign(x: int) -> int:
+    if x > 0: return 1
+    if x < 0: return -1
+    return 0
+
+def ternary_fold(vector: Tuple[int, ...]) -> int:
+    """Сворачивает вектор тритов в один трит"""
+    return normalize_sign(sum(vector))
+
+def ternary_diff(vec_a: Tuple[int, ...], vec_b: Tuple[int, ...]) -> Tuple[int, ...]:
+    """Поэлементная разность векторов"""
+    if len(vec_a) != len(vec_b):
+        raise ValueError(f"Размерности не совпадают: {len(vec_a)} != {len(vec_b)}")
+    return tuple(a - b for a, b in zip(vec_a, vec_b))
+
+# ============================================================
+# 2. ГИПЕРБОЛИЧЕСКАЯ ГЕОМЕТРИЯ (ЛОБАЧЕВСКИЙ)
+# ============================================================
+
+def hyperbolic_distance(vec_a: Tuple[float, ...], vec_b: Tuple[float, ...], radius: float = 1.0) -> float:
+    """Гиперболическое расстояние в модели Пуанкаре"""
+    if len(vec_a) != len(vec_b):
+        raise ValueError(f"Размерности не совпадают: {len(vec_a)} != {len(vec_b)}")
+    
+    a = [v / radius for v in vec_a]
+    b = [v / radius for v in vec_b]
+    
+    norm_a = math.sqrt(sum(ai**2 for ai in a))
+    norm_b = math.sqrt(sum(bi**2 for bi in b))
+    
+    max_safe = 0.999999
+    if norm_a >= 1.0: norm_a = max_safe
+    if norm_b >= 1.0: norm_b = max_safe
+    
+    numerator = sum((ai - bi)**2 for ai, bi in zip(a, b))
+    denominator = (1.0 - norm_a**2) * (1.0 - norm_b**2)
+    
+    if denominator <= 0:
+        return float('inf')
+    
+    arg = 1.0 + 2.0 * numerator / denominator
+    if arg < 1.0:
+        arg = 1.0
+        
+    return radius * math.acosh(arg)
+
+def hyperbolic_vector(metrics: List[float], radius: float = 1.0) -> Tuple[float, ...]:
+    """Превращает метрики в гиперболический вектор"""
+    trits = [quantize(m) for m in metrics]
+    norm = math.sqrt(sum(t**2 for t in trits))
+    max_allowable = radius * 0.999
+    if norm > max_allowable and norm > 0:
+        trits = [t * max_allowable / norm for t in trits]
+    return tuple(float(t) for t in trits)
+
+# ============================================================
+# 3. ГИПЕРБОЛИЧЕСКИЙ ГРАФ
+# ============================================================
+
+@dataclass
+class HyperbolicNode:
+    id: int
+    coordinates: Tuple[float, ...]
+    label: str
+    time: float = 0.0
+    value: float = 0.0
+
+@dataclass
+class HyperbolicEdge:
+    from_id: int
+    to_id: int
+    weight: float = 1.0
+    dt: float = 1.0
+
+class HyperbolicGraph:
+    def __init__(self, radius: float = 1.0, dimension: int = 3):
+        self.radius = radius
+        self.dimension = dimension
+        self.nodes: Dict[int, HyperbolicNode] = {}
+        self.edges: List[HyperbolicEdge] = []
+    
+    def add_node(self, node_id: int, coordinates: List[float], label: str = "", time: float = 0.0, value: float = 0.0):
+        if len(coordinates) < self.dimension:
+            coordinates = list(coordinates) + [0.0] * (self.dimension - len(coordinates))
+        else:
+            coordinates = coordinates[:self.dimension]
+        
+        norm = math.sqrt(sum(c**2 for c in coordinates))
+        max_allowable = self.radius * 0.999
+        if norm >= max_allowable and norm > 0:
+            coordinates = [c * max_allowable / norm for c in coordinates]
+            
+        self.nodes[node_id] = HyperbolicNode(
+            id=node_id,
+            coordinates=tuple(float(c) for c in coordinates),
+            label=label or f"Узел {node_id}",
+            time=time,
+            value=value
+        )
+    
+    def add_edge(self, from_id: int, to_id: int, weight: float = 1.0, dt: float = 1.0):
+        if from_id in self.nodes and to_id in self.nodes:
+            self.edges.append(HyperbolicEdge(from_id, to_id, weight, dt))
+    
+    def get_distance(self, id1: int, id2: int) -> float:
+        if id1 not in self.nodes or id2 not in self.nodes:
+            return float('inf')
+        return hyperbolic_distance(self.nodes[id1].coordinates, self.nodes[id2].coordinates, self.radius)
+    
+    def nearest_nodes(self, vector: Tuple[float, ...], n: int = 3) -> List[Tuple[int, float, str]]:
+        distances = []
+        for node_id, node in self.nodes.items():
+            dist = hyperbolic_distance(vector, node.coordinates, self.radius)
+            distances.append((node_id, dist, node.label))
+        distances.sort(key=lambda x: x[1])
+        return distances[:n]
+    
+    def get_stats(self) -> Dict:
+        distances = [self.get_distance(e.from_id, e.to_id) for e in self.edges]
+        rhythms = [d / e.dt for d, e in zip(distances, self.edges) if e.dt > 0]
+        
+        return {
+            'nodes': len(self.nodes),
+            'edges': len(self.edges),
+            'avg_distance': sum(distances) / len(distances) if distances else 0.0,
+            'avg_rhythm': sum(rhythms) / len(rhythms) if rhythms else 0.0,
+        }
+
+# ============================================================
+# 4. RASHOMON
+# ============================================================
+
+def rashomon_analyze(interpretations: Dict[str, float], margin_threshold: float = 0.15, min_score: float = 0.3) -> Dict:
+    """Двойной Рашимон-анализ интерпретаций"""
+    if not interpretations:
+        return {'state': -1, 'top': None, 'margin': 0, 'reason': 'Нет интерпретаций'}
+
+    sorted_items = sorted(interpretations.items(), key=lambda x: x[1], reverse=True)
+    top_label, top_score = sorted_items[0]
+    margin = top_score - sorted_items[1][1] if len(sorted_items) > 1 else top_score
+
+    if top_score < min_score:
+        state, reason = -1, f"Лучшая оценка слишком низкая: {top_score:.2f}"
+    elif margin >= margin_threshold:
+        state, reason = 1, f"Устойчивое ядро: отрыв {margin:.2f}"
+    else:
+        state, reason = 0, f"Неопределённость: отрыв {margin:.2f}"
+
+    return {'state': state, 'top': top_label, 'margin': margin, 'reason': reason}
+
+# ============================================================
+# 5. ЯДРО BXOS
+# ============================================================
+
+class BXKernel:
+    def __init__(self):
+        self.processes: Dict[int, Dict] = {}
+        self.next_pid = 1
+        self.memory: Dict[int, List[int]] = {}
+        self.running = False
+        self.clock = 0
+        
+        self.graph = HyperbolicGraph(radius=1.5, dimension=3)
+        self.node_counter = 0
+        
+        self.process_metrics: Dict[int, Dict] = {}
+        
+        self.fs_path = "./bxfs"
+        if not os.path.exists(self.fs_path):
+            os.makedirs(self.fs_path)
+        self.files: Dict[str, Dict] = {}
+        self.file_nodes: Dict[str, int] = {}
+        self._load_index()
+    
+    def _load_index(self):
+        index_path = os.path.join(self.fs_path, ".index")
+        if os.path.exists(index_path):
+            try:
+                with open(index_path, 'rb') as f:
+                    data = f.read()
+                i = 0
+                while i < len(data):
+                    name_len = data[i]
+                    i += 1
+                    name = data[i:i+name_len].decode('utf-8')
+                    i += name_len
+                    size = struct.unpack('I', data[i:i+4])[0]
+                    i += 4
+                    self.files[name] = {'size': size}
+            except Exception:
+                pass
+    
+    def _save_index(self):
+        data = bytearray()
+        for name, info in self.files.items():
+            name_bytes = name.encode('utf-8')
+            data.append(len(name_bytes))
+            data.extend(name_bytes)
+            data.extend(struct.pack('I', info['size']))
+        with open(os.path.join(self.fs_path, ".index"), 'wb') as f:
+            f.write(data)
+    
+    def _compute_file_coords(self, data: bytes) -> Tuple[float, ...]:
+        b1 = data[0] if len(data) > 0 else 0
+        b2 = data[1] if len(data) > 1 else 0
+        b3 = data[2] if len(data) > 2 else 0
+        m1 = b1 / 255.0
+        m2 = b2 / 255.0
+        m3 = b3 / 255.0
+        return hyperbolic_vector([m1, m2, m3], self.graph.radius)
+    
+    def fs_save(self, name: str, data: bytes) -> bool:
+        filepath = os.path.join(self.fs_path, name)
+        with open(filepath, 'wb') as f:
+            f.write(data)
+        self.files[name] = {'size': len(data)}
+        self._save_index()
+        
+        coords = self._compute_file_coords(data)
+        self.node_counter += 1
+        node_id = self.node_counter
+        self.graph.add_node(node_id, list(coords), label=f"file:{name}", time=self.clock, value=len(data))
+        
+        if len(self.graph.nodes) > 1:
+            nearest = self.graph.nearest_nodes(coords, 2)
+            for n_id, dist, _ in nearest:
+                if n_id != node_id:
+                    self.graph.add_edge(node_id, n_id, weight=max(0.1, dist), dt=1.0)
+                    break
+
+        self.file_nodes[name] = node_id
+        print(f"[FS] Файл '{name}' сохранён ({len(data)} байт)")
+        return True
+    
+    def fs_load(self, name: str) -> Optional[bytes]:
+        filepath = os.path.join(self.fs_path, name)
+        if not os.path.exists(filepath):
+            return None
+        with open(filepath, 'rb') as f:
+            return f.read()
+    
+    def fs_list(self) -> List[str]:
+        return list(self.files.keys())
+    
+    def fs_find_similar(self, data: bytes, n: int = 3) -> List[Tuple[str, float]]:
+        coords = self._compute_file_coords(data)
+        nearest = self.graph.nearest_nodes(coords, n)
+        result = []
+        for node_id, dist, label in nearest:
+            for name, fnode in self.file_nodes.items():
+                if fnode == node_id:
+                    result.append((name, dist))
+                    break
+        return result
+    
+    def fs_delete(self, name: str) -> bool:
+        if name not in self.files:
+            return False
+        filepath = os.path.join(self.fs_path, name)
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        del self.files[name]
+        if name in self.file_nodes:
+            del self.file_nodes[name]
+        self._save_index()
+        return True
+    
+    def create_process(self, name: str, code: str = "") -> int:
+        pid = self.next_pid
+        self.next_pid += 1
+
+        self.processes[pid] = {
+            'name': name,
+            'code': code,
+            'state': 'ready',
+            'priority': 0,
+            'pc': 0
+        }
+        self.memory[pid] = []
+        self.process_metrics[pid] = {'coverage': 0.5, 'efficiency': 0.5, 'reliability': 0.5}
+        
+        self.node_counter += 1
+        node_id = self.node_counter
+        coords = [0.1, 0.1, 0.1]
+        self.graph.add_node(node_id, coords, f"proc_{pid}:{name}", time=0.0, value=0.5)
+        
+        if node_id > 1:
+            self.graph.add_edge(node_id - 1, node_id, weight=1.0, dt=1.0)
+
+        self.process_metrics[pid]['node_id'] = node_id
+        print(f"[Ядро] Процесс '{name}' создан (PID={pid})")
+        return pid
+    
+    def terminate_process(self, pid: int) -> bool:
+        if pid not in self.processes:
+            return False
+        self.processes[pid]['state'] = 'terminated'
+        self.memory.pop(pid, None)
+        if pid in self.process_metrics:
+            del self.process_metrics[pid]
+        print(f"[Ядро] Процесс PID={pid} завершён")
+        return True
+    
+    def set_priority(self, pid: int, priority: int) -> bool:
+        if pid not in self.processes:
+            return False
+        self.processes[pid]['priority'] = priority
+        return True
+    
+    def update_process_state(self, pid: int, metrics: List[float]):
+        if pid not in self.process_metrics:
+            return
+        node_id = self.process_metrics[pid]['node_id']
+        coords = hyperbolic_vector(metrics, self.graph.radius)
+        if node_id in self.graph.nodes:
+            self.graph.nodes[node_id].coordinates = coords
+            self.graph.nodes[node_id].time += 1
+            self.graph.nodes[node_id].value = sum(metrics) / len(metrics) if metrics else 0.5
+    
+    def rashomon_analyze_processes(self, margin_threshold: float = 0.15) -> Dict:
+        interpretations = {}
+        for pid, proc in self.processes.items():
+            if proc['state'] == 'ready':
+                metrics = self.process_metrics.get(pid, {})
+                score = metrics.get('coverage', 0.5)
+                interpretations[f"PID={pid}:{proc['name']}"] = score
+        return rashomon_analyze(interpretations, margin_threshold)
+    
+    def rashomon_analyze_output(self, pid: int, result: List[int]) -> Dict:
+        if pid not in self.processes:
+            return {'state': -1, 'reason': 'Процесс не найден'}
+
+        interpretations = {}
+        length_score = quantize(len(result) / 10) if result else -1
+        interpretations["длина результата"] = length_score
+        
+        unique = len(set(result)) if result else 0
+        diversity_score = quantize(unique / 3) if result else -1
+        interpretations["разнообразие"] = diversity_score
+        
+        balance = abs(sum(result)) / len(result) if result else 0
+        balance_score = quantize(1 - balance) if result else -1
+        interpretations["сбалансированность"] = balance_score
+
+        return rashomon_analyze(interpretations, margin_threshold=0.2, min_score=0.3)
+    
+    def syscall_send_coords(self, from_pid: int, to_pid: int) -> bool:
+        if from_pid not in self.process_metrics or to_pid not in self.process_metrics:
+            return False
+        from_node = self.process_metrics[from_pid]['node_id']
+        coords = self.graph.nodes[from_node].coordinates
+        
+        if 'received_coords' not in self.process_metrics[to_pid]:
+            self.process_metrics[to_pid]['received_coords'] = []
+        
+        self.process_metrics[to_pid]['received_coords'].append({
+            'from': from_pid,
+            'coords': coords,
+            'time': self.clock
+        })
+        return True
+    
+    def syscall_receive_coords(self, pid: int) -> Optional[List[Tuple[float, ...]]]:
+        if pid not in self.process_metrics:
+            return None
+        received = self.process_metrics[pid].get('received_coords', [])
+        return [r['coords'] for r in received]
+    
+    def schedule(self) -> Optional[int]:
+        ready = []
+        for pid, proc in self.processes.items():
+            if proc['state'] == 'ready':
+                node_id = self.process_metrics.get(pid, {}).get('node_id')
+                if node_id and node_id in self.graph.nodes:
+                    center = (0.0, 0.0, 0.0)
+                    dist = hyperbolic_distance(
+                        self.graph.nodes[node_id].coordinates,
+                        center,
+                        self.graph.radius
+                    )
+                    ready.append((pid, dist, proc.get('priority', 0)))
+                else:
+                    ready.append((pid, 0.0, proc.get('priority', 0)))
+
+        if not ready:
+            return None
+        
+        best_pid = min(ready, key=lambda x: (-x[2], x[1]))[0]
+        self.processes[best_pid]['state'] = 'running'
+        self.clock += 1
+        self.processes[best_pid]['pc'] += 1
+        self.processes[best_pid]['state'] = 'ready'
+        
+        return best_pid
+    
+    def run(self, steps: int = 10):
+        self.running = True
+        print("[Ядро] Запуск планировщика")
+        count = 0
+        while self.running and (steps == -1 or count < steps):
+            pid = self.schedule()
+            if pid is not None:
+                name = self.processes[pid]['name']
+                print(f"[Планировщик] Тик {self.clock}: {name} (PID={pid})")
+            else:
+                print(f"[Планировщик] Тик {self.clock}: нет готовых процессов")
+            count += 1
+            time.sleep(0.3)
+        self.running = False
+        print("[Ядро] Система остановлена")
+
+# ============================================================
+# 6. ТОЧКА ВХОДА ДЛЯ ТЕСТИРОВАНИЯ
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("BXOS v1.2 — тестовый запуск")
+    print("=" * 60)
+
+    kernel = BXKernel()
+
+    p1 = kernel.create_process("Процесс_А")
+    p2 = kernel.create_process("Процесс_Б")
+    p3 = kernel.create_process("Процесс_В")
+
+    kernel.set_priority(p1, 5)
+    kernel.set_priority(p2, 3)
+    kernel.set_priority(p3, 1)
+
+    kernel.update_process_state(p1, [0.9, 0.8, 0.7])
+    kernel.update_process_state(p2, [0.5, 0.5, 0.5])
+    kernel.update_process_state(p3, [0.1, 0.2, 0.3])
+
+    print("\n[Тест] Рашимон на входе:")
+    result = kernel.rashomon_analyze_processes()
+    print(f"  Состояние: {result['state']}")
+    print(f"  Лучший: {result['top']}")
+    print(f"  Причина: {result['reason']}")
+
+    kernel.fs_save("test.txt", b"Hello, BXOS!")
+    print("\n[Тест] Файлы:", kernel.fs_list())
+
+    print("\n[Тест] Запуск планировщика:")
+    kernel.run(steps=5)
+
+    print("\n[Тест] Статистика графа:")
+    stats = kernel.graph.get_stats()
+    print(f"  Узлов: {stats['nodes']}")
+    print(f"  Рёбер: {stats['edges']}")
+    print(f"  Среднее расстояние: {stats['avg_distance']:.3f}")
+
+    print("\n✅ BXOS v1.2 успешно протестирован.")
