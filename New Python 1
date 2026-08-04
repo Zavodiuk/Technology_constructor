@@ -1,0 +1,361 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+NEW PHYTON — НОВАЯ ВЕРСИЯ ЯЗЫКА
+================================================================================
+Основан на:
+1. Троичной логике (SGN, CMP, NEG, TMIN, TMAX)
+2. Гиперболической геометрии (Point, Geodesic, HyperbolicVector)
+3. Геометрической алгебре (Clifford: мультивекторы, роторы, отражения)
+
+Автор: Владимир Заводюк (Root-Architect)
+Лицензия: MIT
+Версия: 1.0
+GitHub: https://github.com/ваш_ник/new-phyton
+================================================================================
+"""
+
+import math
+from dataclasses import dataclass
+from typing import Tuple, List, Optional
+
+# ============================================================
+# ЧАСТЬ 1: ТРОИЧНАЯ ЛОГИКА
+# ============================================================
+
+def sgn(x):
+    """Знак числа: +1, 0, -1"""
+    if x > 0: return 1
+    elif x < 0: return -1
+    return 0
+
+def cmp(a, b):
+    """Сравнение: +1 (a>b), 0 (a==b), -1 (a<b)"""
+    if a > b: return 1
+    elif a < b: return -1
+    return 0
+
+def neg(x):
+    """Троичная инверсия: -1 ↔ +1, 0 → 0"""
+    if x == 1: return -1
+    elif x == -1: return 1
+    return 0
+
+def tmin(a, b):
+    """Троичный минимум (И)"""
+    if a == -1 or b == -1: return -1
+    elif a == 0 or b == 0: return 0
+    return 1
+
+def tmax(a, b):
+    """Троичный максимум (ИЛИ)"""
+    if a == 1 or b == 1: return 1
+    elif a == 0 or b == 0: return 0
+    return -1
+
+def quantize(value, low=0.3, high=0.7):
+    """Квантует число в трит (-1, 0, +1)"""
+    if value >= high: return 1
+    elif value <= low: return -1
+    return 0
+
+# ============================================================
+# ЧАСТЬ 2: ГИПЕРБОЛИЧЕСКАЯ ГЕОМЕТРИЯ
+# ============================================================
+
+def hyperbolic_distance(vec_a: Tuple[float, ...], vec_b: Tuple[float, ...], radius: float = 1.0) -> float:
+    """Гиперболическое расстояние в модели Пуанкаре"""
+    if len(vec_a) != len(vec_b):
+        raise ValueError(f"Размерности не совпадают: {len(vec_a)} != {len(vec_b)}")
+    
+    a = [v / radius for v in vec_a]
+    b = [v / radius for v in vec_b]
+    
+    norm_a = math.sqrt(sum(ai**2 for ai in a))
+    norm_b = math.sqrt(sum(bi**2 for bi in b))
+    
+    max_safe = 0.999999
+    if norm_a >= 1.0: norm_a = max_safe
+    if norm_b >= 1.0: norm_b = max_safe
+    
+    numerator = sum((ai - bi)**2 for ai, bi in zip(a, b))
+    denominator = (1.0 - norm_a**2) * (1.0 - norm_b**2)
+    
+    if denominator <= 0:
+        return float('inf')
+    
+    arg = 1.0 + 2.0 * numerator / denominator
+    if arg < 1.0:
+        arg = 1.0
+        
+    return radius * math.acosh(arg)
+
+def hyperbolic_vector(metrics: List[float], radius: float = 1.0) -> Tuple[float, ...]:
+    """Превращает метрики в гиперболический вектор"""
+    trits = [quantize(m) for m in metrics]
+    norm = math.sqrt(sum(t**2 for t in trits))
+    max_allowable = radius * 0.999
+    if norm > max_allowable and norm > 0:
+        trits = [t * max_allowable / norm for t in trits]
+    return tuple(float(t) for t in trits)
+
+@dataclass
+class Point:
+    """Точка в гиперболическом пространстве"""
+    x: float
+    y: float
+    z: float = 0.0
+
+    def to_tuple(self) -> Tuple[float, ...]:
+        return (self.x, self.y, self.z)
+
+    def distance_to(self, other: 'Point', radius: float = 1.0) -> float:
+        return hyperbolic_distance(self.to_tuple(), other.to_tuple(), radius)
+
+    def __repr__(self):
+        return f"Point(x={self.x:.3f}, y={self.y:.3f}, z={self.z:.3f})"
+
+@dataclass
+class Geodesic:
+    """Геодезическая линия"""
+    start: Point
+    end: Point
+    radius: float = 1.0
+
+    def length(self) -> float:
+        return self.start.distance_to(self.end, self.radius)
+
+    def midpoint(self) -> Point:
+        return Point(
+            (self.start.x + self.end.x) / 2,
+            (self.start.y + self.end.y) / 2,
+            (self.start.z + self.end.z) / 2
+        )
+
+    def __repr__(self):
+        return f"Geodesic({self.start} → {self.end})"
+
+@dataclass
+class HyperbolicVector:
+    coordinates: Tuple[float, ...]
+    radius: float = 1.0
+
+    def norm(self) -> float:
+        return math.sqrt(sum(c**2 for c in self.coordinates))
+
+    def to_point(self) -> Point:
+        if len(self.coordinates) >= 3:
+            return Point(self.coordinates[0], self.coordinates[1], self.coordinates[2])
+        elif len(self.coordinates) == 2:
+            return Point(self.coordinates[0], self.coordinates[1], 0.0)
+        else:
+            return Point(self.coordinates[0], 0.0, 0.0)
+
+    def __repr__(self):
+        return f"HyperbolicVector{self.coordinates}"
+
+# ============================================================
+# ЧАСТЬ 3: ГЕОМЕТРИЧЕСКАЯ АЛГЕБРА (CLIFFORD)
+# ============================================================
+
+class MultiVector:
+    """Мультивектор в 3D геометрической алгебре Cl(3,0)"""
+
+    def __init__(self, scalar=0.0, v1=0.0, v2=0.0, v3=0.0,
+                 b12=0.0, b13=0.0, b23=0.0, trivector=0.0):
+        self.s = scalar
+        self.v1 = v1; self.v2 = v2; self.v3 = v3
+        self.b12 = b12; self.b13 = b13; self.b23 = b23
+        self.t = trivector
+
+    def is_zero(self, eps=1e-12):
+        return (abs(self.s) < eps and abs(self.v1) < eps and abs(self.v2) < eps and
+                abs(self.v3) < eps and abs(self.b12) < eps and abs(self.b13) < eps and
+                abs(self.b23) < eps and abs(self.t) < eps)
+
+    def norm(self) -> float:
+        return math.sqrt(self.s**2 + self.v1**2 + self.v2**2 + self.v3**2 +
+                         self.b12**2 + self.b13**2 + self.b23**2 + self.t**2)
+
+    def reverse(self):
+        return MultiVector(
+            scalar=self.s,
+            v1=self.v1, v2=self.v2, v3=self.v3,
+            b12=-self.b12, b13=-self.b13, b23=-self.b23,
+            trivector=-self.t
+        )
+
+    def __add__(self, other):
+        if not isinstance(other, MultiVector):
+            raise TypeError("Можно складывать только мультивекторы")
+        return MultiVector(
+            scalar=self.s + other.s,
+            v1=self.v1 + other.v1, v2=self.v2 + other.v2, v3=self.v3 + other.v3,
+            b12=self.b12 + other.b12, b13=self.b13 + other.b13, b23=self.b23 + other.b23,
+            trivector=self.t + other.t
+        )
+
+    def __sub__(self, other):
+        if not isinstance(other, MultiVector):
+            raise TypeError("Можно вычитать только мультивекторы")
+        return MultiVector(
+            scalar=self.s - other.s,
+            v1=self.v1 - other.v1, v2=self.v2 - other.v2, v3=self.v3 - other.v3,
+            b12=self.b12 - other.b12, b13=self.b13 - other.b13, b23=self.b23 - other.b23,
+            trivector=self.t - other.t
+        )
+
+    def __mul__(self, other):
+        if isinstance(other, (int, float)):
+            return MultiVector(
+                scalar=self.s * other,
+                v1=self.v1 * other, v2=self.v2 * other, v3=self.v3 * other,
+                b12=self.b12 * other, b13=self.b13 * other, b23=self.b23 * other,
+                trivector=self.t * other
+            )
+        if not isinstance(other, MultiVector):
+            raise TypeError("Можно умножать только на мультивектор или скаляр")
+
+        a, b = self, other
+
+        s = (a.s*b.s + a.v1*b.v1 + a.v2*b.v2 + a.v3*b.v3
+             - a.b12*b.b12 - a.b13*b.b13 - a.b23*b.b23 - a.t*b.t)
+        v1 = (a.s*b.v1 + a.v1*b.s + a.v2*b.b12 + a.v3*b.b13
+              - a.b12*b.v2 - a.b13*b.v3 - a.b23*b.b23 + a.t*b.b23)
+        v2 = (a.s*b.v2 + a.v2*b.s + a.v3*b.b23 + a.v1*b.b12
+              - a.b12*b.v1 - a.b23*b.v3 - a.b13*b.b13 + a.t*b.b13)
+        v3 = (a.s*b.v3 + a.v3*b.s + a.v1*b.b13 + a.v2*b.b23
+              - a.b13*b.v1 - a.b23*b.v2 - a.b12*b.b12 + a.t*b.b12)
+        b12 = (a.s*b.b12 + a.b12*b.s + a.v1*b.v2 - a.v2*b.v1
+               + a.b13*b.b23 - a.b23*b.b13 + a.t*b.b23 + a.b12*b.t)
+        b13 = (a.s*b.b13 + a.b13*b.s + a.v1*b.v3 - a.v3*b.v1
+               + a.b23*b.b12 - a.b12*b.b23 + a.t*b.b23 + a.b13*b.t)
+        b23 = (a.s*b.b23 + a.b23*b.s + a.v2*b.v3 - a.v3*b.v2
+               + a.b12*b.b13 - a.b13*b.b12 + a.t*b.b12 + a.b23*b.t)
+        t = (a.s*b.t + a.t*b.s + a.v1*b.b23 + a.v2*b.b13 + a.v3*b.b12
+             + a.b12*b.v3 + a.b13*b.v2 + a.b23*b.v1 + a.t*b.t)
+
+        return MultiVector(s, v1, v2, v3, b12, b13, b23, t)
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
+
+    def __neg__(self):
+        return self.__mul__(-1)
+
+    def exp(self):
+        if self.s == 0 and self.v1 == 0 and self.v2 == 0 and self.v3 == 0 and self.t == 0:
+            b_vec = [self.b12, self.b13, self.b23]
+            norm_b = math.sqrt(sum(x**2 for x in b_vec))
+            if norm_b < 1e-12:
+                return MultiVector(scalar=1.0)
+            cos_val = math.cos(norm_b)
+            sin_val = math.sin(norm_b)
+            b_norm = [x / norm_b for x in b_vec]
+            return MultiVector(
+                scalar=cos_val,
+                b12=sin_val * b_norm[0],
+                b13=sin_val * b_norm[1],
+                b23=sin_val * b_norm[2]
+            )
+        raise NotImplementedError("Экспонента только для бивекторов")
+
+    def log(self):
+        if self.s != 0 and self.b12 != 0 and self.b13 != 0 and self.b23 != 0:
+            b_vec = [self.b12, self.b13, self.b23]
+            norm_b = math.sqrt(sum(x**2 for x in b_vec))
+            if norm_b < 1e-12:
+                return MultiVector()
+            angle = math.atan2(norm_b, self.s)
+            return MultiVector(
+                b12=(angle / norm_b) * self.b12,
+                b13=(angle / norm_b) * self.b13,
+                b23=(angle / norm_b) * self.b23
+            )
+        raise NotImplementedError("Логарифм только для роторов")
+
+    def __repr__(self):
+        parts = []
+        if abs(self.s) > 1e-12: parts.append(f"{self.s:.3f}")
+        if abs(self.v1) > 1e-12: parts.append(f"{self.v1:.3f} e1")
+        if abs(self.v2) > 1e-12: parts.append(f"{self.v2:.3f} e2")
+        if abs(self.v3) > 1e-12: parts.append(f"{self.v3:.3f} e3")
+        if abs(self.b12) > 1e-12: parts.append(f"{self.b12:.3f} e12")
+        if abs(self.b13) > 1e-12: parts.append(f"{self.b13:.3f} e13")
+        if abs(self.b23) > 1e-12: parts.append(f"{self.b23:.3f} e23")
+        if abs(self.t) > 1e-12: parts.append(f"{self.t:.3f} e123")
+        return " + ".join(parts) if parts else "0"
+
+def vector(v1, v2, v3):
+    """Создаёт вектор (мультивектор с нулевым скаляром)"""
+    return MultiVector(v1=v1, v2=v2, v3=v3)
+
+def rotor(angle, axis_v1, axis_v2, axis_v3):
+    """Создаёт ротор (вращение) вокруг оси"""
+    norm = math.sqrt(axis_v1**2 + axis_v2**2 + axis_v3**2)
+    if norm < 1e-12:
+        return MultiVector(scalar=1.0)
+    n1, n2, n3 = axis_v1/norm, axis_v2/norm, axis_v3/norm
+    half_angle = angle / 2.0
+    cos_val = math.cos(half_angle)
+    sin_val = math.sin(half_angle)
+    return MultiVector(
+        scalar=cos_val,
+        b12=-sin_val * n3,
+        b13=-sin_val * n2,
+        b23=-sin_val * n1
+    )
+
+def rotate_vector(vec: MultiVector, rotor_obj: MultiVector) -> MultiVector:
+    """Поворачивает вектор с помощью ротора: R * v * R_reverse"""
+    return rotor_obj * vec * rotor_obj.reverse()
+
+def reflect_vector(vec: MultiVector, normal: MultiVector) -> MultiVector:
+    """Отражает вектор относительно плоскости с нормалью n: -n * v * n"""
+    return -normal * vec * normal
+
+# ============================================================
+# ДЕМОНСТРАЦИЯ
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("NEW PHYTON v1.0 — ПОЛНАЯ ДЕМОНСТРАЦИЯ")
+    print("=" * 60)
+
+    # 1. Троичная логика
+    print("\n[1] Троичная логика:")
+    print(f"  sgn(10) = {sgn(10)}")
+    print(f"  cmp(10, 5) = {cmp(10, 5)}")
+    print(f"  neg(1) = {neg(1)}")
+    print(f"  tmin(1, -1) = {tmin(1, -1)}")
+    print(f"  tmax(1, -1) = {tmax(1, -1)}")
+    print(f"  quantize(0.85) = {quantize(0.85)}")
+
+    # 2. Гиперболическая геометрия
+    print("\n[2] Гиперболическая геометрия:")
+    p1 = Point(0.8, 0.2, 0.1)
+    p2 = Point(0.1, 0.9, 0.3)
+    print(f"  p1 = {p1}")
+    print(f"  p2 = {p2}")
+    print(f"  distance(p1, p2) = {p1.distance_to(p2):.4f}")
+
+    # 3. Геометрическая алгебра
+    print("\n[3] Геометрическая алгебра:")
+    e1 = vector(1, 0, 0)
+    e2 = vector(0, 1, 0)
+    print(f"  e1 = {e1}")
+    print(f"  e2 = {e2}")
+    print(f"  e1 * e2 = {e1 * e2}")
+
+    # 4. Вращение
+    print("\n[4] Вращение вектора:")
+    v = vector(0, 1, 0)
+    R = rotor(math.pi / 2, 0, 0, 1)
+    print(f"  v = {v}")
+    print(f"  R = {R}")
+    print(f"  rotated = {rotate_vector(v, R)}")
+
+    print("\n✅ NEW PHYTON v1.0 успешно загружен.")
