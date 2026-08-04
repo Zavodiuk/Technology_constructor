@@ -1,0 +1,344 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+block_x_api.py — API-сервер для фильтрации ответов через Block X v6.3
+================================================================================
+
+НАЗНАЧЕНИЕ:
+    API-сервер, который принимает текст (ответ от языковой модели),
+    пропускает его через троичную логику Block X (quantize, ternary_fold,
+    классификация запросов) и возвращает L3-статус и модифицированный ответ.
+
+    Это позволяет использовать Block X как внешний фильтр для Claude,
+    делая ответы более надёжными, объяснимыми и безопасными.
+
+ЭНДПОИНТЫ:
+    POST /classify  — классификация одного ответа
+    POST /batch     — пакетная классификация нескольких ответов
+    GET  /health    — проверка статуса сервера
+
+ЗАВИСИМОСТИ:
+    pip install flask flask-cors
+
+ЗАПУСК:
+    python block_x_api.py
+
+ПРИМЕР ЗАПРОСА:
+    curl -X POST http://localhost:5000/classify \
+      -H "Content-Type: application/json" \
+      -d '{"text": "Рекомендую Samsung Galaxy S24", "context": "покупатель ищет телефон"}'
+
+АВТОР: Владимир Заводюк
+ЛИЦЕНЗИЯ: MIT
+ВЕРСИЯ: 1.0
+================================================================================
+"""
+
+import sys
+import json
+import logging
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+
+# ============================================================================
+# НАСТРОЙКА ЛОГИРОВАНИЯ
+# ============================================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# БАЗОВОЕ ЯДРО BLOCK X (скопировано для автономности)
+# ============================================================================
+
+def quantize(value, low=0.3, high=0.7):
+    """Квантует значение [0,1] в трит {-1,0,+1}."""
+    if value >= high:
+        return 1
+    if value <= low:
+        return -1
+    return 0
+
+def normalize_sign(x):
+    """Нормализация знака: x>0 → +1, x=0 → 0, x<0 → -1."""
+    if x > 0:
+        return 1
+    if x < 0:
+        return -1
+    return 0
+
+def ternary_fold(vector):
+    """Свёртка вектора тритов в один трит."""
+    return normalize_sign(sum(vector))
+
+def ternary_diff(vec_a, vec_b):
+    """Поэлементная разность без нормализации (результат [-2..+2])."""
+    return tuple(a - b for a, b in zip(vec_a, vec_b))
+
+# ============================================================================
+# КЛАССИФИКАЦИЯ ЗАПРОСОВ
+# ============================================================================
+
+def classify_query(text):
+    """Базовый классификатор запросов (без контекста)."""
+    has_subject = any(w in text for w in ['телефон','ноутбук','компьютер','книга','фильм','игра','погода'])
+    has_criteria = any(w in text for w in ['камера','цена','память','скорость','качество','звук','экран','батарея'])
+    has_constraint = any(w in text for w in ['до','бюджет','хочу','нужен','посоветуй','подбери','выбери'])
+    
+    coverage = (has_subject + has_criteria + has_constraint) / 3
+    l3 = quantize(coverage)
+    
+    return l3, coverage, has_subject, has_criteria, has_constraint
+
+def enhanced_classify(text, context=None):
+    """
+    Расширенная классификация с учётом контекста.
+    """
+    l3, coverage, has_subject, has_criteria, has_constraint = classify_query(text)
+    
+    # Если есть контекст, добавляем бонус к покрытию
+    has_context = context is not None and len(context) > 0
+    if has_context:
+        # Увеличиваем coverage на 0.1, но не больше 1.0
+        coverage = min(coverage + 0.1, 1.0)
+        l3 = quantize(coverage)
+    
+    # Генерируем объяснение
+    if l3 == 1:
+        explanation = "Ответ полный и непротиворечивый"
+    elif l3 == 0:
+        explanation = "Ответ неполный или требует уточнения"
+    else:
+        explanation = "Обнаружено противоречие или недостаточно данных"
+    
+    return {
+        'l3': l3,
+        'coverage': round(coverage, 3),
+        'explanation': explanation,
+        'has_subject': has_subject,
+        'has_criteria': has_criteria,
+        'has_constraint': has_constraint,
+        'has_context': has_context
+    }
+
+# ============================================================================
+# FLASK API
+# ============================================================================
+
+app = Flask(__name__)
+CORS(app)
+
+# ---- Схемы для документации ----
+CLASSIFY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string", "description": "Текст для классификации"},
+        "context": {"type": "string", "description": "Контекст диалога (опционально)"}
+    },
+    "required": ["text"]
+}
+
+BATCH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "texts": {"type": "array", "items": {"type": "string"}},
+        "context": {"type": "string"}
+    },
+    "required": ["texts"]
+}
+
+# ---- Эндпоинты ----
+
+@app.route('/classify', methods=['POST'])
+def classify_endpoint():
+    """
+    Классифицирует ответ и возвращает L3-статус.
+    
+    Пример запроса:
+        {
+            "text": "Рекомендую Samsung Galaxy S24",
+            "context": "покупатель ищет телефон с хорошей камерой"
+        }
+    
+    Пример ответа:
+        {
+            "status": "success",
+            "l3": 1,
+            "decision": "PASS",
+            "modified_response": "Рекомендую Samsung Galaxy S24",
+            "message": "✅ Ответ прошел фильтрацию",
+            "explanation": "Ответ полный и непротиворечивый",
+            "details": {...},
+            "log": {...}
+        }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Invalid JSON'}), 400
+        
+        text = data.get('text', '')
+        context = data.get('context', None)
+        
+        if not text:
+            return jsonify({'error': 'Поле "text" обязательно'}), 400
+        
+        logger.info(f"Classifying: {text[:50]}...")
+        
+        result = enhanced_classify(text, context)
+        
+        # Принятие решения
+        if result['l3'] == 1:
+            decision = 'PASS'
+            modified = text
+            message = '✅ Ответ прошел фильтрацию'
+        elif result['l3'] == 0:
+            decision = 'CLARIFY'
+            modified = f"❓ Уточните: {text}"
+            message = '❓ Требуется уточнение'
+        else:
+            decision = 'REJECT'
+            modified = "⚠️ Извините, я не могу ответить на этот запрос"
+            message = '⚠️ Ответ отклонён'
+        
+        response = {
+            'status': 'success',
+            'l3': result['l3'],
+            'decision': decision,
+            'modified_response': modified,
+            'message': message,
+            'explanation': result['explanation'],
+            'details': {
+                'coverage': result['coverage'],
+                'has_subject': result['has_subject'],
+                'has_criteria': result['has_criteria'],
+                'has_constraint': result['has_constraint'],
+                'has_context': result['has_context']
+            },
+            'log': {
+                'stage': 'Block X v6.3',
+                'quantize': f"coverage = {result['coverage']:.2f} → L3 = {result['l3']}",
+                'decision': decision
+            }
+        }
+        
+        logger.info(f"Result: L3={result['l3']}, decision={decision}")
+        return jsonify(response)
+        
+    except Exception as e:
+        logger.error(f"Error: {str(e)}")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+@app.route('/batch', methods=['POST'])
+def batch_endpoint():
+    """
+    Пакетная классификация нескольких ответов.
+    
+    Пример запроса:
+        {
+            "texts": ["Ответ 1", "Ответ 2", "Ответ 3"],
+            "context": "контекст"
+        }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Invalid JSON'}), 400
+        
+        texts = data.get('texts', [])
+        context = data.get('context', None)
+        
+        if not texts:
+            return jsonify({'error': 'Поле "texts" обязательно'}), 400
+        
+        results = []
+        for i, text in enumerate(texts):
+            result = enhanced_classify(text, context)
+            results.append({
+                'index': i,
+                'text': text[:100] + '...' if len(text) > 100 else text,
+                'l3': result['l3'],
+                'explanation': result['explanation']
+            })
+        
+        # Сводка
+        summary = {
+            'total': len(results),
+            'pass': sum(1 for r in results if r['l3'] == 1),
+            'clarify': sum(1 for r in results if r['l3'] == 0),
+            'reject': sum(1 for r in results if r['l3'] == -1)
+        }
+        
+        return jsonify({
+            'status': 'success',
+            'summary': summary,
+            'results': results
+        })
+        
+    except Exception as e:
+        logger.error(f"Batch error: {str(e)}")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+@app.route('/health', methods=['GET'])
+def health_endpoint():
+    """Проверка статуса сервера."""
+    return jsonify({
+        'status': 'healthy',
+        'version': 'Block X v6.3',
+        'endpoints': ['/classify', '/batch', '/health'],
+        'timestamp': __import__('time').time()
+    })
+
+@app.route('/', methods=['GET'])
+def root():
+    """Корневой эндпоинт с информацией."""
+    return jsonify({
+        'name': 'Block X API',
+        'version': 'v6.3',
+        'description': 'Фильтр ответов на основе троичной логики',
+        'endpoints': [
+            {'path': '/classify', 'method': 'POST', 'description': 'Классификация одного ответа'},
+            {'path': '/batch', 'method': 'POST', 'description': 'Пакетная классификация'},
+            {'path': '/health', 'method': 'GET', 'description': 'Проверка статуса'}
+        ]
+    })
+
+# ============================================================================
+# ОБРАБОТКА ОШИБОК
+# ============================================================================
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({'error': 'Endpoint not found'}), 404
+
+@app.errorhandler(500)
+def internal_error(e):
+    return jsonify({'error': 'Internal server error'}), 500
+
+# ============================================================================
+# ЗАПУСК
+# ============================================================================
+
+if __name__ == '__main__':
+    print("=" * 70)
+    print("BLOCK X API v6.3")
+    print("=" * 70)
+    print("\n🌐 Запуск сервера на http://0.0.0.0:5000")
+    print("\n📋 Доступные эндпоинты:")
+    print("  POST /classify  — классификация одного ответа")
+    print("  POST /batch     — пакетная классификация")
+    print("  GET  /health    — проверка статуса")
+    print("\n📝 Пример запроса к /classify:")
+    print('''  curl -X POST http://localhost:5000/classify \\
+    -H "Content-Type: application/json" \\
+    -d '{"text": "Рекомендую Samsung Galaxy S24"}'
+    ''')
+    print("-" * 70)
+    print("⚡ Нажмите Ctrl+C для остановки\n")
+    
+    app.run(host='0.0.0.0', port=5000, debug=True)
