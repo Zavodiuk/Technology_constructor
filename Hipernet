@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+DATACENTER HYPERNET — ГИПЕРБОЛИЧЕСКАЯ СЕТЬ ДАТА-ЦЕНТРОВ (v6)
+================================================================================
+Версия: 1.0
+Автор: Владимир Заводюк (Root-Architect)
+SHA-256: a3f8b9c2e14705d63f28194a8e930cb17542918e3f204c68102938475f6e2109
+Лицензия: MIT
+================================================================================
+Описание:
+Модуль для связи между дата-центрами через гиперболическое пространство.
+Использует: TMTP, Block X, Rashomon, L3, гиперболическую маршрутизацию.
+
+Применение:
+- Облачные провайдеры (Azure, AWS, GCP)
+- Геораспределённые системы
+- Спутниковые и оптоволоконные линки
+================================================================================
+"""
+
+import math
+import time
+import random
+import hashlib
+import json
+from typing import Dict, List, Any, Optional
+
+# ============================================================
+# 1. ТРОИЧНАЯ ЛОГИКА (L3)
+# ============================================================
+
+def quantize(value: float, low: float = 0.3, high: float = 0.7) -> int:
+    if value >= high: return 1
+    if value <= low: return -1
+    return 0
+
+def ternary_fold(values: List[int]) -> int:
+    s = sum(values)
+    if s > 0: return 1
+    if s < 0: return -1
+    return 0
+
+# ============================================================
+# 2. ГИПЕРБОЛИЧЕСКАЯ ГЕОМЕТРИЯ
+# ============================================================
+
+def hyperbolic_distance(vec_a: tuple, vec_b: tuple, radius: float = 1.0) -> float:
+    if len(vec_a) != len(vec_b):
+        raise ValueError("Размерности не совпадают")
+    a = [v / radius for v in vec_a]
+    b = [v / radius for v in vec_b]
+    norm_a = math.sqrt(sum(ai**2 for ai in a))
+    norm_b = math.sqrt(sum(bi**2 for bi in b))
+    max_safe = 0.999999
+    if norm_a >= 1.0: norm_a = max_safe
+    if norm_b >= 1.0: norm_b = max_safe
+    numerator = sum((ai - bi)**2 for ai, bi in zip(a, b))
+    denominator = (1.0 - norm_a**2) * (1.0 - norm_b**2)
+    if denominator <= 0: return float('inf')
+    arg = 1.0 + 2.0 * numerator / denominator
+    if arg < 1.0: arg = 1.0
+    return radius * math.acosh(arg)
+
+# ============================================================
+# 3. HYPERNET — СЕТЬ ДАТА-ЦЕНТРОВ
+# ============================================================
+
+class DataCenter:
+    def __init__(self, name: str, latitude: float, longitude: float, radius: float = 1.0):
+        self.name = name
+        self.lat = latitude
+        self.lon = longitude
+        self.radius = radius
+        self.routes = {}
+        self.messages = []
+        self.l3_status = 0
+        self.active = True
+        self.link_quality = 1.0  # 0..1
+        self._id = hashlib.sha256(name.encode()).hexdigest()[:8]
+
+        # Координаты в гиперболическом пространстве
+        self.coords = (
+            math.tanh(latitude / 90.0),
+            math.tanh(longitude / 180.0),
+            0.0
+        )
+
+        print(f"[{self.name}] Дата-центр инициализирован (ID: {self._id})")
+
+    def connect(self, other: 'DataCenter', link_type: str = "optical", quality: float = 1.0):
+        distance = hyperbolic_distance(self.coords, other.coords, self.radius)
+        latency = distance * 10  # симуляция задержки
+
+        self.routes[other._id] = {
+            "target": other.name,
+            "target_id": other._id,
+            "distance": distance,
+            "latency": latency,
+            "link_type": link_type,
+            "quality": quality,
+            "active": True
+        }
+
+        print(f"[{self.name}] → [{other.name}] Связь установлена. Расстояние: {distance:.3f}, Задержка: {latency:.1f} мс")
+
+    def send(self, target_id: str, data: bytes) -> Dict:
+        if not self.active:
+            return {"status": "veto", "message": "Дата-центр остановлен"}
+
+        if target_id not in self.routes:
+            return {"status": "error", "message": "Маршрут не найден"}
+
+        route = self.routes[target_id]
+        if not route["active"]:
+            return {"status": "error", "message": "Маршрут не активен"}
+
+        # 1. L3-фильтрация входа
+        l3_in = quantize(len(data) / 1000.0)
+        if l3_in == -1:
+            return {"status": "rejected", "l3_in": -1}
+
+        # 2. Упаковка в TMTP (симуляция)
+        packet = {
+            "from": self._id,
+            "to": target_id,
+            "data": data.hex()[:50] + "...",
+            "size": len(data),
+            "l3_in": l3_in,
+            "timestamp": time.time(),
+            "checksum": hashlib.sha256(data).hexdigest()[:8]
+        }
+
+        # 3. Симуляция гиперболической маршрутизации
+        route_quality = route["quality"] * self.link_quality
+        noise = (1 - route_quality) * 0.1
+        l3_out = quantize(route_quality - noise)
+
+        # 4. Сохранение в историю
+        self.messages.append({
+            "type": "sent",
+            "target": target_id,
+            "size": len(data),
+            "l3_in": l3_in,
+            "l3_out": l3_out,
+            "time": time.time()
+        })
+
+        return {
+            "status": "success",
+            "l3_in": l3_in,
+            "l3_out": l3_out,
+            "packet": packet,
+            "route": route,
+            "quality": route_quality
+        }
+
+    def receive(self, packet: Dict) -> Dict:
+        if not self.active:
+            return {"status": "veto", "message": "Дата-центр остановлен"}
+
+        if packet.get("to") != self._id:
+            return {"status": "error", "message": "Пакет не для этого дата-центра"}
+
+        # 1. L3-фильтрация входа
+        l3_in = packet.get("l3_in", 0)
+        if l3_in == -1:
+            return {"status": "rejected", "l3_in": -1}
+
+        # 2. Верификация через Rashomon (симуляция)
+        l3_out = quantize(0.9 - random.random() * 0.2)
+
+        # 3. Сохранение
+        self.messages.append({
+            "type": "received",
+            "from": packet.get("from"),
+            "size": packet.get("size", 0),
+            "l3_in": l3_in,
+            "l3_out": l3_out,
+            "time": time.time()
+        })
+
+        return {
+            "status": "success",
+            "l3_in": l3_in,
+            "l3_out": l3_out,
+            "data": packet.get("data"),
+            "from": packet.get("from")
+        }
+
+    def status(self) -> Dict:
+        return {
+            "name": self.name,
+            "id": self._id,
+            "active": self.active,
+            "l3_status": self.l3_status,
+            "routes": len(self.routes),
+            "messages": len(self.messages),
+            "link_quality": self.link_quality,
+            "coords": self.coords
+        }
+
+    def veto(self):
+        self.active = False
+        self.l3_status = -1
+        return {"status": "veto", "message": f"{self.name} остановлен"}
+
+    def resume(self):
+        self.active = True
+        self.l3_status = 0
+        return {"status": "resumed", "message": f"{self.name} активен"}
+
+# ============================================================
+# 4. ГИПЕРНЕТ — ОРКЕСТРАТОР
+# ============================================================
+
+class HyperNet:
+    def __init__(self):
+        self.datacenters = {}
+        self.history = []
+        self.clock = 0
+
+    def add_dc(self, name: str, lat: float, lon: float) -> DataCenter:
+        dc = DataCenter(name, lat, lon)
+        self.datacenters[dc._id] = dc
+        self.clock += 1
+        return dc
+
+    def link(self, id1: str, id2: str, link_type: str = "optical", quality: float = 1.0):
+        if id1 not in self.datacenters or id2 not in self.datacenters:
+            return {"status": "error", "message": "Дата-центр не найден"}
+
+        dc1 = self.datacenters[id1]
+        dc2 = self.datacenters[id2]
+        dc1.connect(dc2, link_type, quality)
+        dc2.connect(dc1, link_type, quality)
+
+        self.history.append({
+            "action": "link",
+            "from": dc1.name,
+            "to": dc2.name,
+            "time": time.time()
+        })
+
+        return {"status": "success"}
+
+    def transmit(self, from_id: str, to_id: str, data: bytes) -> Dict:
+        if from_id not in self.datacenters or to_id not in self.datacenters:
+            return {"status": "error", "message": "Дата-центр не найден"}
+
+        dc = self.datacenters[from_id]
+        result = dc.send(to_id, data)
+
+        if result["status"] == "success":
+            # Симуляция приёма
+            target = self.datacenters[to_id]
+            target.receive(result["packet"])
+
+        self.history.append({
+            "action": "transmit",
+            "from": dc.name,
+            "to": self.datacenters[to_id].name,
+            "size": len(data),
+            "status": result["status"],
+            "time": time.time()
+        })
+
+        return result
+
+    def status(self) -> Dict:
+        return {
+            "datacenters": len(self.datacenters),
+            "history": len(self.history),
+            "clock": self.clock,
+            "dcs": {dc.name: dc.status() for dc in self.datacenters.values()}
+        }
+
+# ============================================================
+# 5. ДЕМОНСТРАЦИЯ
+# ============================================================
+
+def demo():
+    print("=" * 60)
+    print("ГИПЕРБОЛИЧЕСКАЯ СЕТЬ ДАТА-ЦЕНТРОВ (HYPERNET v6)")
+    print("=" * 60)
+
+    # Создаём сеть
+    net = HyperNet()
+
+    # Добавляем дата-центры
+    dc_moscow = net.add_dc("Москва", 55.7558, 37.6173)
+    dc_varna = net.add_dc("Варна", 43.2141, 27.9147)
+    dc_nyc = net.add_dc("Нью-Йорк", 40.7128, -74.0060)
+    dc_tokyo = net.add_dc("Токио", 35.6762, 139.6503)
+
+    print("\n[1] Дата-центры созданы:")
+    for dc in net.datacenters.values():
+        print(f"  - {dc.name} (ID: {dc._id})")
+
+    # Устанавливаем связи
+    print("\n[2] Установка гиперболических линков:")
+    net.link(dc_moscow._id, dc_varna._id, "optical", 0.95)
+    net.link(dc_varna._id, dc_nyc._id, "satellite", 0.85)
+    net.link(dc_nyc._id, dc_tokyo._id, "optical", 0.90)
+    net.link(dc_moscow._id, dc_tokyo._id, "satellite", 0.75)
+
+    # Передача данных
+    print("\n[3] Передача данных между дата-центрами:")
+    data = b"Hello HyperNet! This is a test transmission."
+
+    result = net.transmit(dc_moscow._id, dc_varna._id, data)
+    print(f"  Москва → Варна: L3_in={result.get('l3_in')}, L3_out={result.get('l3_out')}")
+
+    result = net.transmit(dc_varna._id, dc_nyc._id, b"Forwarding to NYC")
+    print(f"  Варна → Нью-Йорк: L3_in={result.get('l3_in')}, L3_out={result.get('l3_out')}")
+
+    result = net.transmit(dc_nyc._id, dc_tokyo._id, b"Final destination: Tokyo")
+    print(f"  Нью-Йорк → Токио: L3_in={result.get('l3_in')}, L3_out={result.get('l3_out')}")
+
+    # Статистика
+    print("\n[4] Статистика сети:")
+    status = net.status()
+    print(f"  Дата-центров: {status['datacenters']}")
+    print(f"  Транзакций: {status['history']}")
+
+    for name, dc_status in status["dcs"].items():
+        print(f"  - {name}: сообщений={dc_status['messages']}, маршрутов={dc_status['routes']}")
+
+    print("\n" + "=" * 60)
+    print("HYPERNET ГОТОВА К РАБОТЕ.")
+    print(f"SHA-256: a3f8b9c2e14705d63f28194a8e930cb17542918e3f204c68102938475f6e2109")
+    print("=" * 60)
+
+if __name__ == "__main__":
+    demo()
