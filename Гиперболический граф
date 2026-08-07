@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <title>Гиперболический граф (Лобачевский) — визуализация v6</title>
+    <style>
+        body {
+            margin: 0;
+            background: #14161B;
+            color: #EAE8E3;
+            font-family: 'IBM Plex Mono', monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            background: #0B0D11;
+            border-radius: 12px;
+            box-shadow: 0 0 40px rgba(0,0,0,0.8);
+            cursor: grab;
+            width: 95vmin;
+            height: 95vmin;
+        }
+        canvas:active { cursor: grabbing; }
+        .info {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 14px;
+            color: #8A8F99;
+            background: #1C1F26;
+            padding: 8px 18px;
+            border-radius: 40px;
+            border: 1px solid #2C3038;
+            text-align: center;
+            pointer-events: none;
+            user-select: none;
+            font-family: 'Manrope', sans-serif;
+        }
+        .info strong { color: #FBBF24; }
+        .legend {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #1C1F26;
+            border: 1px solid #2C3038;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            color: #8A8F99;
+            font-family: 'Manrope', sans-serif;
+            line-height: 1.6;
+        }
+        .legend span { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+        .legend .plus { background: #4ADE80; }
+        .legend .zero { background: #FBBF24; }
+        .legend .minus { background: #F87171; }
+    </style>
+</head>
+<body>
+
+<canvas id="graphCanvas"></canvas>
+<div class="legend">
+    <div><span class="plus"></span> Узел (+1)</div>
+    <div><span class="zero"></span> Узел (0)</div>
+    <div><span class="minus"></span> Узел (−1)</div>
+    <div style="margin-top:4px;border-top:1px solid #2C3038;padding-top:4px;">📏 Гиперболическое расстояние</div>
+</div>
+<div class="info">
+    🌀 <strong>Гиперболический граф</strong> · перетаскивайте узлы · расстояния растут <strong>экспоненциально</strong> (Лобачевский)
+</div>
+
+<script>
+    const canvas = document.getElementById('graphCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Размер канваса
+    const size = Math.min(window.innerWidth * 0.93, window.innerHeight * 0.85, 800);
+    canvas.width = size;
+    canvas.height = size;
+
+    // Центр и радиус гиперболического пространства
+    const cx = size / 2;
+    const cy = size / 2;
+    const RADIUS = size * 0.42;
+
+    // Параметры гиперболики
+    const K = 1.2; // кривизна (чем выше, тем сильнее "выталкивание" к краю)
+
+    // Генерация узлов с троичными состояниями
+    const nodes = [];
+    const labels = ['Процесс A', 'Процесс B', 'Блок X', 'Блок Z', 'Агент', 'Пользователь', 'Радио', 'Спутник'];
+
+    for (let i = 0; i < 8; i++) {
+        const angle = (i / 8) * 2 * Math.PI + Math.random() * 0.2;
+        const r = 0.25 + Math.random() * 0.55;
+        const x = cx + Math.cos(angle) * r * RADIUS;
+        const y = cy + Math.sin(angle) * r * RADIUS;
+        const state = [-1, 0, 1][i % 3];
+        nodes.push({
+            id: i,
+            label: labels[i] || `Узел ${i}`,
+            x, y,
+            state,
+            r: 0.05 + Math.random() * 0.03
+        });
+    }
+
+    // Связи (рёбра)
+    const edges = [];
+    for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+            const dx = nodes[i].x - nodes[j].x;
+            const dy = nodes[i].y - nodes[j].y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            // Гиперболическое расстояние: экспоненциально зависит от евклидова
+            const hyperbolicDist = Math.exp(dist / RADIUS * K) - 1;
+            if (hyperbolicDist < 1.8) {
+                edges.push({ i, j, weight: hyperbolicDist });
+            }
+        }
+    }
+
+    let selectedNode = null;
+    let dragOffsetX = 0, dragOffsetY = 0;
+    let isDragging = false;
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Рисуем гиперболические круги
+        ctx.strokeStyle = '#1C1F26';
+        ctx.lineWidth = 0.5;
+        for (let r = 0.2; r <= 0.9; r += 0.15) {
+            ctx.beginPath();
+            ctx.arc(cx, cy, r * RADIUS, 0, 2 * Math.PI);
+            ctx.stroke();
+        }
+
+        // Рёбра (гиперболические)
+        edges.forEach(edge => {
+            const n1 = nodes[edge.i];
+            const n2 = nodes[edge.j];
+            const dx = n1.x - n2.x;
+            const dy = n1.y - n2.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            const weight = Math.exp(dist / RADIUS * K) - 1;
+
+            ctx.beginPath();
+            ctx.moveTo(n1.x, n1.y);
+            ctx.lineTo(n2.x, n2.y);
+            ctx.strokeStyle = `rgba(251,191,36,${Math.min(0.4, weight * 0.3)})`;
+            ctx.lineWidth = 1 + weight * 0.8;
+            ctx.stroke();
+
+            // Подпись расстояния
+            const mx = (n1.x + n2.x) / 2;
+            const my = (n1.y + n2.y) / 2;
+            ctx.fillStyle = '#4A4F5A';
+            ctx.font = '8px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(weight.toFixed(2), mx, my - 6);
+        });
+
+        // Узлы
+        nodes.forEach(node => {
+            const color = node.state === 1 ? '#4ADE80' : node.state === -1 ? '#F87171' : '#FBBF24';
+            const glow = node.state === 1 ? 'rgba(74,222,128,0.2)' : node.state === -1 ? 'rgba(248,113,113,0.2)' : 'rgba(251,191,36,0.2)';
+
+            // Свечение
+            const grad = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, 24);
+            grad.addColorStop(0, glow);
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, 24, 0, 2 * Math.PI);
+            ctx.fill();
+
+            // Тело узла
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, 12 + node.r * 30, 0, 2 * Math.PI);
+            ctx.fillStyle = '#14161B';
+            ctx.fill();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2.5;
+            ctx.stroke();
+
+            // Метка
+            ctx.fillStyle = '#EAE8E3';
+            ctx.font = 'bold 10px Manrope, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(node.label, node.x, node.y - 16);
+        });
+    }
+
+    // Перетаскивание
+    canvas.addEventListener('mousedown', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const mx = (e.clientX - rect.left) * scaleX;
+        const my = (e.clientY - rect.top) * scaleY;
+
+        for (let i = nodes.length - 1; i >= 0; i--) {
+            const n = nodes[i];
+            const dx = mx - n.x;
+            const dy = my - n.y;
+            if (dx*dx + dy*dy < 300) {
+                selectedNode = n;
+                dragOffsetX = n.x - mx;
+                dragOffsetY = n.y - my;
+                isDragging = true;
+                canvas.style.cursor = 'grabbing';
+                break;
+            }
+        }
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if (!isDragging || !selectedNode) return;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const mx = (e.clientX - rect.left) * scaleX;
+        const my = (e.clientY - rect.top) * scaleY;
+
+        selectedNode.x = Math.min(Math.max(mx + dragOffsetX, 20), canvas.width - 20);
+        selectedNode.y = Math.min(Math.max(my + dragOffsetY, 20), canvas.height - 20);
+
+        // Обновляем рёбра (пересчёт гиперболических весов)
+        edges.forEach(edge => {
+            const n1 = nodes[edge.i];
+            const n2 = nodes[edge.j];
+            const dx = n1.x - n2.x;
+            const dy = n1.y - n2.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            edge.weight = Math.exp(dist / RADIUS * K) - 1;
+        });
+
+        draw();
+    });
+
+    window.addEventListener('mouseup', () => {
+        isDragging = false;
+        selectedNode = null;
+        canvas.style.cursor = 'grab';
+    });
+
+    // Touch support
+    canvas.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        const touch = e.touches[0];
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const mx = (touch.clientX - rect.left) * scaleX;
+        const my = (touch.clientY - rect.top) * scaleY;
+
+        for (let i = nodes.length - 1; i >= 0; i--) {
+            const n = nodes[i];
+            const dx = mx - n.x;
+            const dy = my - n.y;
+            if (dx*dx + dy*dy < 300) {
+                selectedNode = n;
+                dragOffsetX = n.x - mx;
+                dragOffsetY = n.y - my;
+                isDragging = true;
+                break;
+            }
+        }
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        if (!isDragging || !selectedNode) return;
+        const touch = e.touches[0];
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const mx = (touch.clientX - rect.left) * scaleX;
+        const my = (touch.clientY - rect.top) * scaleY;
+
+        selectedNode.x = Math.min(Math.max(mx + dragOffsetX, 20), canvas.width - 20);
+        selectedNode.y = Math.min(Math.max(my + dragOffsetY, 20), canvas.height - 20);
+
+        edges.forEach(edge => {
+            const n1 = nodes[edge.i];
+            const n2 = nodes[edge.j];
+            const dx = n1.x - n2.x;
+            const dy = n1.y - n2.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            edge.weight = Math.exp(dist / RADIUS * K) - 1;
+        });
+
+        draw();
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', () => {
+        isDragging = false;
+        selectedNode = null;
+    });
+
+    // Начальная отрисовка
+    draw();
+
+    // Перерисовка при изменении размера окна (адаптивно)
+    window.addEventListener('resize', () => {
+        const newSize = Math.min(window.innerWidth * 0.93, window.innerHeight * 0.85, 800);
+        canvas.width = newSize;
+        canvas.height = newSize;
+        // Пересчёт координат (упрощённо)
+        const scale = newSize / size;
+        nodes.forEach(n => { n.x *= scale; n.y *= scale; });
+        // Пересчёт рёбер
+        edges.forEach(edge => {
+            const n1 = nodes[edge.i];
+            const n2 = nodes[edge.j];
+            const dx = n1.x - n2.x;
+            const dy = n1.y - n2.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            edge.weight = Math.exp(dist / (newSize * 0.42) * K) - 1;
+        });
+        draw();
+    });
+
+    // Подпись: гиперболическое расстояние на рёбрах
+    // уже добавлено в draw()
+</script>
+</body>
+</html>
