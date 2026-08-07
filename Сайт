@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <title>BXOS / Block X — новая парадигма вычислений</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0B0D11;
+            --panel: #14161B;
+            --panel-hi: #1C1F26;
+            --line: #2C3038;
+            --text: #EAE8E3;
+            --text-dim: #8A8F99;
+            --plus: #4ADE80;
+            --zero: #FBBF24;
+            --minus: #F87171;
+            --mono: 'IBM Plex Mono', monospace;
+            --sans: 'Manrope', sans-serif;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--sans);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        a { color: var(--zero); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px 24px 60px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 0 20px;
+            border-bottom: 1px solid var(--line);
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .logo {
+            font-family: var(--mono);
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+        }
+        .logo span { color: var(--text-dim); font-weight: 400; }
+
+        .trit-indicator {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .trit-lamp {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #333844;
+            transition: all .3s;
+        }
+        .trit-lamp.active-plus { background: var(--plus); box-shadow: 0 0 12px rgba(74,222,128,.5); }
+        .trit-lamp.active-zero { background: var(--zero); box-shadow: 0 0 12px rgba(251,191,36,.5); }
+        .trit-lamp.active-minus { background: var(--minus); box-shadow: 0 0 12px rgba(248,113,113,.5); }
+
+        .trit-label {
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--text-dim);
+            letter-spacing: 0.08em;
+            margin-left: 4px;
+        }
+
+        .hero {
+            text-align: center;
+            padding: 60px 0 40px;
+        }
+        .hero h1 {
+            font-size: 42px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            line-height: 1.2;
+        }
+        .hero h1 .highlight {
+            background: linear-gradient(135deg, var(--plus), var(--zero));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .hero p {
+            font-size: 18px;
+            color: var(--text-dim);
+            max-width: 640px;
+            margin: 16px auto 28px;
+        }
+
+        .badge-group {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 12px 24px;
+            margin-bottom: 30px;
+        }
+        .badge {
+            font-family: var(--mono);
+            font-size: 13px;
+            color: var(--text-dim);
+            background: var(--panel-hi);
+            padding: 4px 14px;
+            border-radius: 40px;
+            border: 1px solid var(--line);
+        }
+        .badge strong { color: var(--text); }
+
+        .btn {
+            display: inline-block;
+            background: var(--zero);
+            color: #0B1410;
+            font-weight: 600;
+            padding: 12px 32px;
+            border-radius: 40px;
+            font-size: 16px;
+            border: none;
+            cursor: pointer;
+            transition: opacity .2s, transform .1s;
+        }
+        .btn:hover { opacity: 0.85; text-decoration: none; }
+        .btn:active { transform: scale(0.96); }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--text);
+            border: 1px solid var(--line);
+        }
+        .btn-outline:hover { background: var(--panel-hi); }
+
+        .section {
+            margin-top: 60px;
+            padding-top: 40px;
+            border-top: 1px solid var(--line);
+        }
+        .section h2 {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+        .section h2 .badge-count {
+            font-size: 14px;
+            font-weight: 400;
+            color: var(--text-dim);
+            font-family: var(--mono);
+            margin-left: 10px;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 20px;
+        }
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            padding: 20px 22px;
+            border-radius: 14px;
+            transition: border-color .2s;
+        }
+        .card:hover { border-color: var(--zero); }
+        .card .icon { font-size: 24px; margin-bottom: 6px; }
+        .card h3 { font-size: 17px; margin-bottom: 4px; }
+        .card p { font-size: 14px; color: var(--text-dim); }
+
+        .card .tag {
+            display: inline-block;
+            font-family: var(--mono);
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 20px;
+            background: var(--panel-hi);
+            border: 1px solid var(--line);
+            color: var(--text-dim);
+            margin-top: 6px;
+        }
+
+        .patent-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 12px;
+        }
+        .patent-item {
+            background: var(--panel-hi);
+            border: 1px solid var(--line);
+            padding: 6px 16px;
+            border-radius: 40px;
+            font-family: var(--mono);
+            font-size: 13px;
+            color: var(--text-dim);
+        }
+        .patent-item strong { color: var(--text); }
+
+        .footer-links {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 20px 40px;
+            margin-top: 40px;
+            padding-top: 30px;
+            border-top: 1px solid var(--line);
+            font-size: 14px;
+            color: var(--text-dim);
+        }
+        .footer-links a { color: var(--text-dim); }
+        .footer-links a:hover { color: var(--text); }
+
+        .video-placeholder {
+            background: var(--panel-hi);
+            border: 2px dashed var(--line);
+            border-radius: 16px;
+            padding: 40px 20px;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 15px;
+            margin: 16px 0;
+        }
+        .video-placeholder strong { color: var(--text); }
+
+        @media (max-width: 600px) {
+            .hero h1 { font-size: 28px; }
+            .hero p { font-size: 16px; }
+            .badge-group { gap: 8px; }
+            .btn { padding: 10px 24px; font-size: 14px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+
+    <header>
+        <div class="logo">BXOS <span>/ Block X</span></div>
+        <div class="trit-indicator">
+            <div class="trit-lamp active-plus"></div>
+            <div class="trit-lamp active-zero"></div>
+            <div class="trit-lamp active-minus"></div>
+            <span class="trit-label">L3 · уверен</span>
+        </div>
+    </header>
+
+    <section class="hero">
+        <h1>Новая парадигма <br><span class="highlight">вычислений</span></h1>
+        <p>
+            Троичная логика, гиперболическая геометрия, двойной Rashomon, когнитивный блокчейн,
+            постквантовая криптография и бесфайловая ОС — в одном стеке.
+        </p>
+
+        <div class="badge-group">
+            <span class="badge">🧠 <strong>v6</strong> · 15 модулей</span>
+            <span class="badge">📦 <strong>v5</strong> · 40 блоков</span>
+            <span class="badge">🛰️ <strong>Спутник</strong> · радио · оптоволокно</span>
+            <span class="badge">🔐 <strong>EP3563704</strong> · патент ЕС</span>
+            <span class="badge">📈 <strong>€18M</strong> · оценка</span>
+        </div>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-top: 12px;">
+            <a href="#" class="btn">📹 Смотреть демо</a>
+            <a href="#" class="btn btn-outline">📂 GitHub</a>
+        </div>
+    </section>
+
+    <!-- Видео / демо -->
+    <div class="video-placeholder">
+        🎬 <strong>Видео-демонстрация</strong> (загружается)<br>
+        <span style="font-size: 13px;">Агент · сжатие · радио · спутник · гиперболический граф</span>
+    </div>
+
+    <!-- Архитектура -->
+    <section class="section">
+        <h2>Архитектура <span class="badge-count">v5 + v6</span></h2>
+        <div class="grid-2">
+            <div class="card">
+                <div class="icon">🧩</div>
+                <h3>Block X</h3>
+                <p>Ядро принятия решений. Троичная логика, L3-статус, Rashomon, STOP Veto.</p>
+                <span class="tag">v6.3.3</span>
+            </div>
+            <div class="card">
+                <div class="icon">⚙️</div>
+                <h3>BXOS</h3>
+                <p>Бесфайловая ОС на гиперболическом графе. Процессы, память, планировщик.</p>
+                <span class="tag">v1.4</span>
+            </div>
+            <div class="card">
+                <div class="icon">🔮</div>
+                <h3>Оракул V6</h3>
+                <p>ИИ-агент с L3-фильтром, памятью, STOP Veto и гиперболическим анализом.</p>
+                <span class="tag">агент</span>
+            </div>
+            <div class="card">
+                <div class="icon">🛰️</div>
+                <h3>Радио / Спутник</h3>
+                <p>Неевклидова передача данных. Троичная модуляция, гиперболическая траектория.</p>
+                <span class="tag">физический уровень</span>
+            </div>
+            <div class="card">
+                <div class="icon">🔐</div>
+                <h3>GME + P‑Chain</h3>
+                <p>Постквантовая криптография и блокчейн с Proof‑of‑Tension консенсусом.</p>
+                <span class="tag">безопасность</span>
+            </div>
+            <div class="card">
+                <div class="icon">📦</div>
+                <h3>Сжатие 60–70%</h3>
+                <p>Без потерь. Байт → трит → свёртка. Проверено на реальных данных.</p>
+                <span class="tag">TMTP</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Патенты -->
+    <section class="section">
+        <h2>Патенты и оценка</h2>
+        <div class="patent-list">
+            <span class="patent-item"><strong>EP3563704</strong> · Европейский союз (17 стран)</span>
+            <span class="patent-item"><strong>RU 2731869</strong> · Россия</span>
+            <span class="patent-item"><strong>TR 2025-005368</strong> · Турция</span>
+            <span class="patent-item"><strong>€18 014 387</strong> · оценка (2020)</span>
+        </div>
+        <p style="color: var(--text-dim); font-size: 14px; margin-top: 10px;">
+            Официальная оценка Технического университета Варны. Патенты охватывают Европу, Россию и Турцию.
+        </p>
+    </section>
+
+    <!-- Связь -->
+    <section class="section">
+        <h2>Связь и передача</h2>
+        <div class="grid-2">
+            <div class="card">
+                <div class="icon">🌐</div>
+                <h3>Оптоволокно</h3>
+                <p>Лобачевский в кабеле. Гиперболическая коррекция, сжатие TMTP.</p>
+            </div>
+            <div class="card">
+                <div class="icon">📡</div>
+                <h3>Радио</h3>
+                <p>Троичная модуляция, гиперболическое расширение, устойчивость к шуму.</p>
+            </div>
+            <div class="card">
+                <div class="icon">🛰️</div>
+                <h3>Спутник</h3>
+                <p>LEO / MEO / GEO. Доплер, задержка, космический шум — всё учитывается.</p>
+            </div>
+            <div class="card">
+                <div class="icon">🏢</div>
+                <h3>Дата-центры</h3>
+                <p>Гиперболическая сеть. Прямая передача смыслов, без очередей.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- GitHub -->
+    <section class="section">
+        <h2>GitHub</h2>
+        <p style="color: var(--text-dim);">
+            Весь код открыт и доступен. Агент, радио, спутник, сеть, L3-интерфейс — всё в репозитории.
+        </p>
+        <div style="margin-top: 8px;">
+            <a href="#" class="btn btn-outline" style="font-size: 14px; padding: 8px 20px;">📂 github.com/glovesandfactories/new-phyton</a>
+        </div>
+    </section>
+
+    <!-- Контакты -->
+    <section class="section" style="text-align: center;">
+        <h2 style="font-size: 22px;">📬 Контакты</h2>
+        <p style="color: var(--text-dim); max-width: 480px; margin: 0 auto 12px;">
+            Автор и правообладатель — Владимир Заводюк (Root-Architect).<br>
+            Готов к переговорам, презентациям и партнёрству.
+        </p>
+        <div class="badge-group" style="gap: 8px;">
+            <span class="badge">📧 vzavodiuk3@gmail.com</span>
+            <span class="badge">📍 Варна, Болгария</span>
+            <span class="badge">🔐 SHA‑256: a3f8...</span>
+        </div>
+    </section>
+
+    <div class="footer-links">
+        <span>© 2026 Владимир Заводюк</span>
+        <a href="#">Лицензия MIT</a>
+        <a href="#">GitHub</a>
+        <a href="#">Патент EP3563704</a>
+    </div>
+
+</div>
+
+<script>
+    // L3-индикатор: живёт и пульсирует
+    const lamps = document.querySelectorAll('.trit-lamp');
+    const label = document.querySelector('.trit-label');
+    const states = ['active-plus', 'active-zero', 'active-minus'];
+    let idx = 0;
+
+    setInterval(() => {
+        lamps.forEach((l, i) => {
+            l.className = 'trit-lamp';
+            if (i === idx) l.classList.add(states[idx]);
+        });
+        const labels = ['L3 · уверен', 'L3 · уточнение', 'L3 · конфликт'];
+        label.textContent = labels[idx];
+        idx = (idx + 1) % states.length;
+    }, 2000);
+</script>
+
+</body>
+</html>
