@@ -1,0 +1,445 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+ARCHITECT CORE V6 — СОЕДИНЕНИЕ БУКВЕННЫХ БЛОКОВ И V6
+================================================================================
+Автор: Владимир Заводюк (Root-Architect)
+Версия: 1.0
+SHA-256: a3f8b9c2e14705d63f28194a8e930cb17542918e3f204c68102938475f6e2109
+Лицензия: MIT
+================================================================================
+Описание:
+Единый модуль, объединяющий философию (блоки G–J) и реализацию (v6).
+Позволяет системе "мыслить" как архитектор и "действовать" как v6.
+================================================================================
+"""
+
+import math
+import time
+import hashlib
+import json
+from typing import Dict, Any, List, Optional
+
+# ============================================================
+# 1. БУКВЕННЫЕ БЛОКИ — ФИЛОСОФИЯ И СТРАТЕГИЯ
+# ============================================================
+
+class Philosophy:
+    """Блок G — Философия и законы архитектурного мышления."""
+    
+    laws = [
+        "Архитектура выше деталей.",
+        "Замысел выше технологии.",
+        "Система важнее объекта.",
+        "Боль рождает ценность.",
+        "Понимание рождается из синтеза множества слабых сигналов.",
+        "Доверие нельзя купить. Его можно только построить.",
+        "Любая сложная система развивается через архитектуру, а не через случайные улучшения.",
+        "Патенты являются инструментом управления архитектурой рынка.",
+        "Архитектор ищет не ответы, а правильные вопросы.",
+        "Настоящая ценность возникает тогда, когда изменение архитектуры приносит выгоду всем участникам системы.",
+        "Любая архитектура существует исключительно ради достижения цели инициатора её изменения."
+    ]
+    
+    def __init__(self):
+        self.name = "Философия архитектурного мышления"
+    
+    def think(self) -> str:
+        return "Архитектурное мышление — способность видеть систему целиком."
+
+
+class DecisionProcess:
+    """Блок A — Архитектура принятия решений."""
+    
+    stages = [
+        "Исследование среды",
+        "Определение зрелости рынка",
+        "Поиск боли",
+        "Формирование цели",
+        "Формирование замысла",
+        "Построение архитектуры",
+        "Поиск технической реализации",
+        "Проверка архитектуры",
+        "Патентование",
+        "Масштабирование"
+    ]
+    
+    def __init__(self):
+        self.name = "Архитектура принятия решений"
+    
+    def decide(self, context: Dict) -> str:
+        return "Решение принято на основе архитектурного анализа."
+
+
+class Calculations:
+    """Блок B — Расчёты и коэффициенты."""
+    
+    def __init__(self):
+        self.name = "Расчёты и коэффициенты"
+    
+    def cost(self, money: float, time: float, risk: float, losses: float) -> float:
+        """C = Cденьги + Cвремя + Cриск + Cпотери"""
+        return money + time + risk + losses
+    
+    def gain(self, income: float, cost: float) -> float:
+        """G = Доход − Стоимость"""
+        return income - cost
+    
+    def is_cooperation_beneficial(self, gain_coop: float, cost_conflict: float) -> bool:
+        """Gc > Cf"""
+        return gain_coop > cost_conflict
+
+
+class Market:
+    """Блок C — Рынок и архитектура отрасли."""
+    
+    def __init__(self):
+        self.name = "Рынок и архитектура отрасли"
+        self.players = {}
+        self.deserts = []
+    
+    def add_player(self, name: str, architecture: str, maturity: float):
+        self.players[name] = {"architecture": architecture, "maturity": maturity}
+    
+    def find_desert(self, density: float) -> bool:
+        return density < 0.3  # архитектурная пустыня
+
+
+class Stakeholders:
+    """Блок D — Интересанты и приоритеты."""
+    
+    def __init__(self):
+        self.name = "Интересанты и приоритеты"
+        self.stakeholders = {}
+    
+    def add(self, name: str, priority: int, pain: float, potential: float):
+        self.stakeholders[name] = {
+            "priority": priority,
+            "pain": pain,
+            "potential": potential,
+            "status": "не контактировали"
+        }
+    
+    def get_priority_order(self) -> List[str]:
+        return sorted(self.stakeholders, key=lambda x: self.stakeholders[x]["priority"], reverse=True)
+
+
+class Research:
+    """Блок E — Новые патенты и направления."""
+    
+    def __init__(self):
+        self.name = "Новые патенты и направления"
+        self.patents = []
+        self.hypotheses = []
+    
+    def add_patent(self, name: str, description: str):
+        self.patents.append({"name": name, "description": description})
+    
+    def add_hypothesis(self, hypothesis: str):
+        self.hypotheses.append(hypothesis)
+
+
+class KnowledgeDevelopment:
+    """Блок F — Архитектура развития знаний."""
+    
+    formula = "ΔR → P → B → S → Re → W → H → N → ΔЖ"
+    
+    def __init__(self):
+        self.name = "Архитектура развития знаний"
+    
+    def evolve(self, reality_change: str) -> str:
+        return f"Изменение реальности ({reality_change}) → новая архитектура"
+
+
+class Realization:
+    """Блок H — Реализация и развитие."""
+    
+    cycle = ["Замысел", "Архитектура", "Реализация", "Результат", "Обратная связь", "Анализ", "Корректировка", "Новая архитектура"]
+    
+    def __init__(self):
+        self.name = "Реализация и развитие"
+        self.history = []
+    
+    def add_step(self, step: str):
+        self.history.append(step)
+
+
+class Viability:
+    """Переменная Ж — Жизнеспособность архитектуры."""
+    
+    def __init__(self, value: float = 1.0):
+        self.value = value
+        self.history = []
+    
+    def update(self, delta: float):
+        self.value += delta
+        self.history.append(self.value)
+    
+    def trend(self) -> str:
+        if self.value > 1.0: return "растёт 📈"
+        if self.value < 1.0: return "снижается 📉"
+        return "стабильна ➖"
+
+
+class Quality:
+    """Блок I — Измерение качества архитектуры."""
+    
+    def __init__(self):
+        self.name = "Измерение качества архитектуры"
+    
+    def quality(self, losses: float) -> float:
+        """K ∼ 1/L"""
+        if losses == 0: return float('inf')
+        return 1.0 / losses
+
+
+class Architect:
+    """Блок J — Архитектор."""
+    
+    def __init__(self, name: str = "Владимир Заводюк"):
+        self.name = name
+        self.role = "Root-Architect"
+        self.sha256 = "a3f8b9c2e14705d63f28194a8e930cb17542918e3f204c68102938475f6e2109"
+    
+    def create(self, vision: str) -> str:
+        return f"Архитектор {self.name} создаёт новую архитектуру: {vision}"
+    
+    def veto(self) -> str:
+        return "STOP Veto активирован. Система остановлена."
+
+
+# ============================================================
+# 2. ЯДРО V6 (УПРОЩЁННАЯ ВЕРСИЯ ДЛЯ ИНТЕГРАЦИИ)
+# ============================================================
+
+class L3:
+    """Троичная логика."""
+    
+    @staticmethod
+    def quantize(value: float, low: float = 0.3, high: float = 0.7) -> int:
+        if value >= high: return 1
+        if value <= low: return -1
+        return 0
+    
+    @staticmethod
+    def fold(values: List[int]) -> int:
+        s = sum(values)
+        if s > 0: return 1
+        if s < 0: return -1
+        return 0
+
+
+class BlockX:
+    """Ядро принятия решений."""
+    
+    def __init__(self):
+        self.l3_status = 0
+        self.memory = []
+    
+    def evaluate(self, input_data: Dict) -> Dict:
+        l3_in = L3.quantize(input_data.get("confidence", 0.5))
+        if l3_in == -1:
+            return {"status": "veto", "l3": -1, "message": "Блокировано STOP Veto"}
+        return {"status": "accepted", "l3": l3_in, "message": "Решение принято"}
+
+
+# ============================================================
+# 3. ЕДИНОЕ ЯДРО АРХИТЕКТОРА
+# ============================================================
+
+class ArchitectCore:
+    """
+    Главное ядро, объединяющее буквенные блоки и v6.
+    Система, которая мыслит как архитектор и действует как v6.
+    """
+    
+    def __init__(self, architect_name: str = "Владимир Заводюк"):
+        # Буквенные блоки
+        self.G = Philosophy()
+        self.A = DecisionProcess()
+        self.B = Calculations()
+        self.C = Market()
+        self.D = Stakeholders()
+        self.E = Research()
+        self.F = KnowledgeDevelopment()
+        self.H = Realization()
+        self.Ж = Viability()
+        self.I = Quality()
+        self.J = Architect(architect_name)
+        
+        # Ядро v6
+        self.block_x = BlockX()
+        self.l3 = L3()
+        
+        # Состояние
+        self.state = "active"
+        self.history = []
+        self.architect_hash = self.J.sha256
+        
+        print(f"[ArchitectCore] Инициализирован. Root-Architect: {architect_name}")
+        print(f"[ArchitectCore] SHA-256: {self.architect_hash[:16]}...")
+    
+    # ----------------------------------------------------------
+    # МЕТОДЫ МЫШЛЕНИЯ (БУКВЕННЫЕ БЛОКИ)
+    # ----------------------------------------------------------
+    
+    def think(self) -> str:
+        """Блок G — философия"""
+        return self.G.think()
+    
+    def decide(self, context: Dict) -> str:
+        """Блок A — принятие решений"""
+        return self.A.decide(context)
+    
+    def calculate_gain(self, income: float, cost: float) -> float:
+        """Блок B — расчёт выгоды"""
+        return self.B.gain(income, cost)
+    
+    def is_deal_good(self, gain_coop: float, cost_conflict: float) -> bool:
+        """Блок B — Gc > Cf"""
+        return self.B.is_cooperation_beneficial(gain_coop, cost_conflict)
+    
+    def add_stakeholder(self, name: str, priority: int, pain: float, potential: float):
+        """Блок D — добавление интересанта"""
+        self.D.add(name, priority, pain, potential)
+    
+    def get_priority_order(self) -> List[str]:
+        """Блок D — приоритеты взаимодействия"""
+        return self.D.get_priority_order()
+    
+    def add_patent(self, name: str, description: str):
+        """Блок E — новый патент"""
+        self.E.add_patent(name, description)
+    
+    def update_viability(self, delta: float):
+        """Переменная Ж — обновление жизнеспособности"""
+        self.Ж.update(delta)
+    
+    def quality(self, losses: float) -> float:
+        """Блок I — качество архитектуры"""
+        return self.I.quality(losses)
+    
+    def architect_create(self, vision: str) -> str:
+        """Блок J — создание архитектуры"""
+        return self.J.create(vision)
+    
+    def architect_veto(self) -> str:
+        """Блок J — STOP Veto"""
+        self.state = "veto"
+        return self.J.veto()
+    
+    # ----------------------------------------------------------
+    # МЕТОДЫ ДЕЙСТВИЯ (V6)
+    # ----------------------------------------------------------
+    
+    def evaluate_input(self, confidence: float) -> Dict:
+        """L3-оценка входа"""
+        return self.block_x.evaluate({"confidence": confidence})
+    
+    def quantize_value(self, value: float) -> int:
+        """Квантование в трит"""
+        return self.l3.quantize(value)
+    
+    # ----------------------------------------------------------
+    # ПОЛНЫЙ ЦИКЛ
+    # ----------------------------------------------------------
+    
+    def full_cycle(self, input_data: Dict) -> Dict:
+        """
+        Полный цикл: философия → решение → действие → результат.
+        """
+        # 1. Мысль (Блок G)
+        thought = self.think()
+        
+        # 2. Решение (Блок A)
+        decision = self.decide(input_data)
+        
+        # 3. L3-оценка (v6)
+        l3_result = self.evaluate_input(input_data.get("confidence", 0.5))
+        
+        # 4. Проверка на Veto
+        if l3_result["status"] == "veto":
+            self.architect_veto()
+            return {
+                "status": "veto",
+                "thought": thought,
+                "decision": decision,
+                "l3": -1,
+                "message": "Система остановлена STOP Veto"
+            }
+        
+        # 5. Обновление жизнеспособности
+        self.update_viability(0.05)
+        
+        # 6. Сохранение в историю
+        self.history.append({
+            "input": input_data,
+            "thought": thought,
+            "decision": decision,
+            "l3": l3_result["l3"],
+            "viability": self.Ж.value,
+            "time": time.time()
+        })
+        
+        return {
+            "status": "success",
+            "thought": thought,
+            "decision": decision,
+            "l3": l3_result["l3"],
+            "viability": self.Ж.value,
+            "history_size": len(self.history)
+        }
+
+
+# ============================================================
+# 4. ДЕМОНСТРАЦИЯ
+# ============================================================
+
+def demo():
+    print("=" * 70)
+    print("ARCHITECT CORE V6 — СОЕДИНЕНИЕ БЛОКОВ И V6")
+    print("=" * 70)
+    
+    # Создаём ядро
+    core = ArchitectCore()
+    
+    print("\n[1] Философия (Блок G):")
+    print(f"  {core.think()}")
+    
+    print("\n[2] Добавление интересантов (Блок D):")
+    core.add_stakeholder("Anthropic", 3, 0.9, 1.2e9)
+    core.add_stakeholder("Amazon", 3, 0.8, 1.5e9)
+    core.add_stakeholder("NVIDIA", 2, 0.6, 1.0e9)
+    print(f"  Приоритеты: {core.get_priority_order()}")
+    
+    print("\n[3] Расчёт выгоды (Блок B):")
+    gain = core.calculate_gain(1.5e9, 0.3e9)
+    print(f"  Выгода: ${gain:,.0f}")
+    print(f"  Gc > Cf: {core.is_deal_good(1.5e9, 0.5e9)}")
+    
+    print("\n[4] L3-оценка (v6):")
+    result = core.evaluate_input(0.85)
+    print(f"  L3 статус: {result['l3']}")
+    
+    print("\n[5] Полный цикл:")
+    cycle = core.full_cycle({"task": "Продажа архитектуры", "confidence": 0.9})
+    print(f"  Статус: {cycle['status']}")
+    print(f"  Мысль: {cycle['thought']}")
+    print(f"  L3: {cycle['l3']}")
+    print(f"  Жизнеспособность: {cycle['viability']:.2f}")
+    
+    print("\n[6] Качество архитектуры (Блок I):")
+    quality = core.quality(losses=0.1)
+    print(f"  K ∼ 1/L = {quality:.2f}")
+    
+    print("\n" + "=" * 70)
+    print("✅ ARCHITECT CORE V6 УСПЕШНО ЗАПУЩЕН.")
+    print(f"   Root-Architect: {core.J.name}")
+    print(f"   SHA-256: {core.architect_hash[:16]}...")
+    print("=" * 70)
+
+
+if __name__ == "__main__":
+    demo()
