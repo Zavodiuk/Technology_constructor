@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BXOS / Block X — презентация v6</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0B0D11;
+            --panel: #14161B;
+            --panel-hi: #1C1F26;
+            --line: #2C3038;
+            --text: #EAE8E3;
+            --text-dim: #8A8F99;
+            --plus: #4ADE80;
+            --zero: #FBBF24;
+            --minus: #F87171;
+            --mono: 'IBM Plex Mono', monospace;
+            --sans: 'Manrope', sans-serif;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--sans);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .slide-container {
+            width: 100%;
+            max-width: 1100px;
+            height: 90vh;
+            max-height: 700px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 20px 40px;
+            position: relative;
+            background: var(--panel);
+            border-radius: 20px;
+            border: 1px solid var(--line);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.8);
+            transition: background 0.3s;
+        }
+
+        .slide {
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            height: 100%;
+            animation: fade 0.4s ease;
+        }
+        .slide.active { display: flex; }
+
+        @keyframes fade {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .slide h1 {
+            font-size: 42px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            line-height: 1.2;
+            margin-bottom: 12px;
+        }
+        .slide h1 .highlight {
+            background: linear-gradient(135deg, var(--plus), var(--zero));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .slide h2 {
+            font-size: 32px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+        .slide p {
+            font-size: 18px;
+            color: var(--text-dim);
+            max-width: 720px;
+            line-height: 1.6;
+        }
+        .slide .sub {
+            font-size: 14px;
+            color: var(--text-dim);
+            margin-top: 8px;
+            font-family: var(--mono);
+        }
+        .slide ul {
+            list-style: none;
+            padding: 0;
+            margin: 12px 0;
+        }
+        .slide ul li {
+            font-size: 17px;
+            padding: 6px 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--text);
+        }
+        .slide ul li::before {
+            content: "▹";
+            color: var(--zero);
+            font-size: 18px;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px 30px;
+            margin: 10px 0;
+        }
+        .grid-2 .item {
+            background: var(--panel-hi);
+            padding: 14px 18px;
+            border-radius: 10px;
+            border: 1px solid var(--line);
+        }
+        .grid-2 .item strong { color: var(--text); display: block; font-size: 16px; }
+        .grid-2 .item span { color: var(--text-dim); font-size: 14px; }
+
+        .badge-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px 16px;
+            margin: 12px 0;
+        }
+        .badge {
+            font-family: var(--mono);
+            font-size: 13px;
+            color: var(--text-dim);
+            background: var(--panel-hi);
+            padding: 4px 14px;
+            border-radius: 40px;
+            border: 1px solid var(--line);
+        }
+
+        .nav {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            background: var(--panel-hi);
+            padding: 8px 18px;
+            border-radius: 40px;
+            border: 1px solid var(--line);
+            z-index: 10;
+        }
+        .nav button {
+            background: none;
+            border: none;
+            color: var(--text);
+            font-size: 20px;
+            cursor: pointer;
+            padding: 0 8px;
+            transition: color .2s;
+        }
+        .nav button:hover { color: var(--zero); }
+        .nav .counter {
+            font-family: var(--mono);
+            font-size: 13px;
+            color: var(--text-dim);
+            min-width: 50px;
+            text-align: center;
+        }
+
+        .l3-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--plus);
+            margin-right: 8px;
+            box-shadow: 0 0 12px rgba(74,222,128,.4);
+        }
+
+        @media (max-width: 700px) {
+            .slide-container { padding: 20px; height: 85vh; }
+            .slide h1 { font-size: 28px; }
+            .slide h2 { font-size: 22px; }
+            .slide p { font-size: 15px; }
+            .grid-2 { grid-template-columns: 1fr; }
+            .slide ul li { font-size: 15px; }
+            .nav { padding: 6px 14px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="slide-container" id="slideContainer">
+
+    <!-- СЛАЙД 1: ТИТУЛ -->
+    <div class="slide active" data-index="0">
+        <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 20px;">
+            <span class="l3-dot"></span>
+            <span style="font-family: var(--mono); font-size: 14px; color: var(--text-dim);">L3 · уверен</span>
+            <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim); margin-left: auto;">v6.3</span>
+        </div>
+        <h1>BXOS / <span class="highlight">Block X</span></h1>
+        <p style="font-size: 20px; color: var(--text); font-weight: 500;">Новая парадигма вычислений</p>
+        <p style="margin-top: 20px; font-size: 16px;">
+            Троичная логика · Гиперболическая геометрия · Rashomon · Когнитивный блокчейн
+        </p>
+        <div class="badge-group" style="margin-top: 20px;">
+            <span class="badge">🧠 v6 · 15 модулей</span>
+            <span class="badge">📦 v5 · 40 блоков</span>
+            <span class="badge">🔐 EP3563704</span>
+            <span class="badge">📈 €18M оценка</span>
+        </div>
+        <p class="sub" style="margin-top: 20px;">Владимир Заводюк · Root-Architect · 2026</p>
+    </div>
+
+    <!-- СЛАЙД 2: ПРОБЛЕМА -->
+    <div class="slide" data-index="1">
+        <h2>⚠️ Проблема</h2>
+        <p>Современные системы построены на <strong>бинарной логике</strong> и <strong>евклидовой геометрии</strong>.</p>
+        <ul>
+            <li>Они не различают <strong>уверенность</strong> и <strong>неопределённость</strong></li>
+            <li>Не могут обрабатывать <strong>конфликты</strong> и <strong>противоречия</strong></li>
+            <li>Теряют <strong>до 30% точности</strong> при эмуляции троичных состояний</li>
+            <li>Сжатие — <strong>с потерями</strong>, энергия — <strong>перерасход</strong></li>
+        </ul>
+        <p style="margin-top: 10px; font-size: 15px; color: var(--text-dim);">
+            Нужна система, которая <strong>думает</strong>, а не просто вычисляет.
+        </p>
+    </div>
+
+    <!-- СЛАЙД 3: РЕШЕНИЕ -->
+    <div class="slide" data-index="2">
+        <h2>🧠 Решение — <span class="highlight">v6</span></h2>
+        <p>Новая архитектура, которая меняет базис вычислений.</p>
+        <div class="grid-2" style="margin-top: 8px;">
+            <div class="item"><strong>Троичная логика</strong><span>−1, 0, +1 — уверенность, сомнение, вето</span></div>
+            <div class="item"><strong>Гиперболическая геометрия</strong><span>Пространство Лобачевского — экспоненциальные расстояния</span></div>
+            <div class="item"><strong>Двойной Rashomon</strong><span>Анализ неопределённости на входе и выходе</span></div>
+            <div class="item"><strong>STOP Veto</strong><span>Ядерная кнопка для остановки системы</span></div>
+            <div class="item"><strong>Сжатие 60–70%</strong><span>Без потерь, проверено на реальных данных</span></div>
+            <div class="item"><strong>P‑Chain + GME</strong><span>Постквантовая криптография и новый консенсус</span></div>
+        </div>
+    </div>
+
+    <!-- СЛАЙД 4: АРХИТЕКТУРА -->
+    <div class="slide" data-index="3">
+        <h2>🏛️ Архитектура</h2>
+        <div class="grid-2">
+            <div class="item"><strong>v5</strong><span>40 блоков — фундамент</span></div>
+            <div class="item"><strong>v6</strong><span>15 модулей, 100+ команд</span></div>
+            <div class="item"><strong>Block X</strong><span>Ядро принятия решений</span></div>
+            <div class="item"><strong>BXOS</strong><span>Бесфайловая ОС на гиперболическом графе</span></div>
+            <div class="item"><strong>New Phyton</strong><span>Язык с геометрической алгеброй</span></div>
+            <div class="item"><strong>Оракул V6</strong><span>ИИ-агент с L3-фильтром</span></div>
+        </div>
+        <p class="sub">Всё — в одном стеке. От математики до ОС.</p>
+    </div>
+
+    <!-- СЛАЙД 5: L3 и ТРОИЧНАЯ ЛОГИКА -->
+    <div class="slide" data-index="4">
+        <h2>🔺 Троичная логика · L3</h2>
+        <p style="margin-bottom: 6px;">Каждое решение получает статус:</p>
+        <ul>
+            <li><span style="color: var(--plus);">+1</span> — <strong>уверенность</strong> (зелёный)</li>
+            <li><span style="color: var(--zero);">0</span> — <strong>неопределённость</strong> (жёлтый) → уточнение</li>
+            <li><span style="color: var(--minus);">−1</span> — <strong>конфликт / вето</strong> (красный)</li>
+        </ul>
+        <p style="margin-top: 6px; font-size: 15px; color: var(--text-dim);">
+            Это позволяет системе <strong>признавать</strong>, когда она не уверена, а не выдавать ложные ответы.
+        </p>
+    </div>
+
+    <!-- СЛАЙД 6: ГИПЕРБОЛИЧЕСКАЯ ГЕОМЕТРИЯ -->
+    <div class="slide" data-index="5">
+        <h2>🌀 Гиперболическая геометрия</h2>
+        <p>Вместо евклидовых расстояний — <strong>пространство Лобачевского</strong>.</p>
+        <ul>
+            <li>Расстояния растут <strong>экспоненциально</strong></li>
+            <li>Естественно для <strong>иерархий</strong> и <strong>антагонизмов</strong></li>
+            <li>Графы процессов и файлов <strong>укладываются</strong> в гиперболический шар</li>
+            <li>Поиск — <strong>по смыслу</strong>, а не по ключу</li>
+        </ul>
+        <p class="sub">Это как перейти от карты метро к карте космоса.</p>
+    </div>
+
+    <!-- СЛАЙД 7: СЖАТИЕ -->
+    <div class="slide" data-index="6">
+        <h2>📦 Сжатие 60–70% без потерь</h2>
+        <p>Байт → биты → триты (−1, 0, +1) → свёртка → компактное представление.</p>
+        <ul>
+            <li>Проверено на реальных файлах</li>
+            <li>Применимо к тексту, изображениям, видео, коду</li>
+            <li>Экономия <strong>$15–30 млн/год</strong> для облачного провайдера (на 100 ПБ)</li>
+        </ul>
+        <p class="sub">TMTP — 3 бита на 5 состояний.</p>
+    </div>
+
+    <!-- СЛАЙД 8: СВЯЗЬ -->
+    <div class="slide" data-index="7">
+        <h2>🌐 Оптоволокно · Радио · Спутник</h2>
+        <p>Одна логика — для всех сред.</p>
+        <ul>
+            <li><strong>Оптоволокно</strong> — гиперболическая коррекция, сжатие</li>
+            <li><strong>Радио</strong> — троичная модуляция, устойчивость к шуму</li>
+            <li><strong>Спутник</strong> — LEO / MEO / GEO, доплер, задержка</li>
+            <li><strong>Дата-центры</strong> — гиперболическая сеть без очередей</li>
+        </ul>
+        <p class="sub">Покрыты все среды: проводная, беспроводная, космическая.</p>
+    </div>
+
+    <!-- СЛАЙД 9: ПАТЕНТЫ И ОЦЕНКА -->
+    <div class="slide" data-index="8">
+        <h2>📜 Патенты и оценка</h2>
+        <div class="grid-2">
+            <div class="item"><strong>EP3563704</strong><span>ЕС · 17 стран</span></div>
+            <div class="item"><strong>RU 2731869</strong><span>Россия</span></div>
+            <div class="item"><strong>TR 2025-005368</strong><span>Турция</span></div>
+            <div class="item"><strong>€18 014 387</strong><span>Официальная оценка (2020)</span></div>
+        </div>
+        <p style="margin-top: 8px; font-size: 15px; color: var(--text-dim);">
+            Технический университет Варны · независимый оценщик · сертификат КНО
+        </p>
+    </div>
+
+    <!-- СЛАЙД 10: ДЕМО -->
+    <div class="slide" data-index="9">
+        <h2>🎬 Демонстрация</h2>
+        <ul>
+            <li><strong>Оракул V6</strong> — ИИ-агент с L3-статусом</li>
+            <li><strong>Гиперболический граф</strong> — визуализация узлов и расстояний</li>
+            <li><strong>Радио-спутник</strong> — передача сигнала с троичным кодированием</li>
+            <li><strong>Сжатие</strong> — реальные цифры 60–70%</li>
+        </ul>
+        <p style="margin-top: 8px; font-size: 15px; color: var(--text-dim);">
+            Всё работает. Всё показано. Готово к пилоту.
+        </p>
+    </div>
+
+    <!-- СЛАЙД 11: АВТОР -->
+    <div class="slide" data-index="10">
+        <h2>👤 Автор</h2>
+        <p style="font-size: 20px; font-weight: 600; color: var(--text);">Владимир Заводюк</p>
+        <p style="font-size: 16px; color: var(--text-dim);">Root-Architect · изобретатель · системный архитектор</p>
+        <ul>
+            <li>Автор v5, v6, Block X, BXOS, New Phyton</li>
+            <li>Международные патенты (ЕС, Россия, Турция)</li>
+            <li>Оценка патентов — €18 млн</li>
+            <li>Остановил систему Gemini — дважды</li>
+        </ul>
+        <p class="sub">Варна, Болгария · SHA-256: a3f8...</p>
+    </div>
+
+    <!-- СЛАЙД 12: КОНТАКТЫ И ПРИЗЫВ -->
+    <div class="slide" data-index="11">
+        <h2>📬 Контакты</h2>
+        <p style="font-size: 18px;">Готов к переговорам, пилоту и партнёрству.</p>
+        <div style="margin: 16px 0;">
+            <div style="background: var(--panel-hi); padding: 12px 20px; border-radius: 10px; border: 1px solid var(--line); display: inline-block;">
+                <span style="font-family: var(--mono); color: var(--text);">vzavodiuk3@gmail.com</span>
+            </div>
+        </div>
+        <div class="badge-group">
+            <span class="badge">📍 Варна, Болгария</span>
+            <span class="badge">🔐 SHA-256: a3f8...</span>
+            <span class="badge">📂 GitHub</span>
+        </div>
+        <p style="margin-top: 16px; font-size: 18px; font-weight: 600; color: var(--plus);">
+            🚀 Готов к диалогу.
+        </p>
+    </div>
+
+</div>
+
+<!-- Навигация -->
+<div class="nav">
+    <button id="prevBtn">◀</button>
+    <span class="counter" id="counter">1 / 12</span>
+    <button id="nextBtn">▶</button>
+</div>
+
+<script>
+    const slides = document.querySelectorAll('.slide');
+    const container = document.getElementById('slideContainer');
+    const counter = document.getElementById('counter');
+    let current = 0;
+    const total = slides.length;
+
+    function goTo(index) {
+        if (index < 0) index = total - 1;
+        if (index >= total) index = 0;
+        slides.forEach((s, i) => s.classList.toggle('active', i === index));
+        current = index;
+        counter.textContent = `${current + 1} / ${total}`;
+    }
+
+    function next() { goTo(current + 1); }
+    function prev() { goTo(current - 1); }
+
+    document.getElementById('nextBtn').addEventListener('click', next);
+    document.getElementById('prevBtn').addEventListener('click', prev);
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ') { e.preventDefault(); next(); }
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); prev(); }
+    });
+
+    // swipe (touch)
+    let touchStartX = 0;
+    container.addEventListener('touchstart', (e) => { touchStartX = e.changedTouches[0].screenX; });
+    container.addEventListener('touchend', (e) => {
+        const diff = touchStartX - e.changedTouches[0].screenX;
+        if (diff > 40) next();
+        else if (diff < -40) prev();
+    });
+
+    goTo(0);
+</script>
+
+</body>
+</html>
