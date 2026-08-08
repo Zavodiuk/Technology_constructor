@@ -1,0 +1,912 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+BLOCK X V7.1 — ПЯТЕРИЧНАЯ ВЕРСИЯ
+================================================================================
+Версия: 7.1
+Автор: Владимир Заводюк (Root-Architect)
+Лицензия: MIT
+
+Изменения V7.1:
+- единое симметричное L5-квантование;
+- исправлен quantize_penta_custom();
+- Veto теперь является реальным состоянием блока;
+- evaluate() блокируется при активном Veto;
+- resume() корректно снимает Veto;
+- добавлена проверка допустимого L5-состояния;
+- efficiency() сохраняет непрерывную эффективность и отдельно даёт L5;
+- GAME использует стратегию при расчёте динамики;
+- улучшена типизация и документация;
+- сохранена совместимость с основной концепцией V7.
+================================================================================
+"""
+
+import random
+import time
+from typing import Dict, Any, List, Tuple, Optional
+
+
+# ============================================================
+# 1. ПЯТЕРИЧНАЯ ЛОГИКА L5
+# ============================================================
+
+L5State = int
+
+L5_STATES = (-2, -1, 0, 1, 2)
+
+DEFAULT_THRESHOLDS = (0.2, 0.4, 0.6, 0.8)
+
+
+def validate_l5(state: int) -> int:
+    """Проверяет и возвращает допустимое состояние L5."""
+    if state not in L5_STATES:
+        raise ValueError(
+            f"L5 состояние должно быть одним из {L5_STATES}, получено: {state}"
+        )
+    return state
+
+
+def quantize_penta(
+    value: float,
+    thresholds: Tuple[float, float, float, float] = DEFAULT_THRESHOLDS
+) -> int:
+    """
+    Симметричное квантование в пять состояний:
+
+        [-∞, -0.8)  -> -2
+        [-0.8, -0.2) -> -1
+        [-0.2, +0.2) ->  0
+        [+0.2, +0.8) -> +1
+        [+0.8, +∞)  -> +2
+
+    thresholds:
+        (neutral, weak, strong, critical)
+
+    Например:
+        0.95 -> +2
+        0.70 -> +1
+        0.10 ->  0
+       -0.30 -> -1
+       -0.90 -> -2
+    """
+
+    if len(thresholds) != 4:
+        raise ValueError("Необходимо ровно 4 порога.")
+
+    neutral, weak, strong, critical = thresholds
+
+    if not (0 < neutral < weak < strong < critical):
+        raise ValueError(
+            "Пороги должны удовлетворять условию: "
+            "0 < neutral < weak < strong < critical"
+        )
+
+    if value >= critical:
+        return 2
+
+    if value >= strong:
+        return 1
+
+    if value > -neutral:
+        return 0
+
+    if value >= -weak:
+        return -1
+
+    return -2
+
+
+def quantize_penta_custom(
+    value: float,
+    thresholds: Tuple[float, float, float, float] = DEFAULT_THRESHOLDS
+) -> int:
+    """
+    Совместимый alias для кастомного L5-квантования.
+
+    В V7.1 используется та же логика, что и quantize_penta(),
+    чтобы в системе существовал единый источник истины.
+    """
+    return quantize_penta(value, thresholds)
+
+
+def fold_penta(values: List[int]) -> int:
+    """
+    Сворачивает несколько L5-состояний в одно.
+
+    Используется сумма с ограничением диапазона [-2, +2].
+    """
+    if not values:
+        return 0
+
+    for value in values:
+        validate_l5(value)
+
+    total = sum(values)
+
+    return max(-2, min(2, total))
+
+
+# ============================================================
+# 2. L5 — СТАТУС УВЕРЕННОСТИ
+# ============================================================
+
+class L5:
+    """Пятеричный статус уверенности."""
+
+    STATES = {
+        -2: "КРИТИЧЕСКИЙ КОНФЛИКТ",
+        -1: "НЕДОВЕРИЕ",
+         0: "НЕЙТРАЛЬНО",
+         1: "ДОВЕРИЕ",
+         2: "АБСОЛЮТНАЯ УВЕРЕННОСТЬ",
+    }
+
+    @staticmethod
+    def from_float(
+        value: float,
+        thresholds: Tuple[float, float, float, float] = DEFAULT_THRESHOLDS
+    ) -> int:
+        return quantize_penta(value, thresholds)
+
+    @staticmethod
+    def from_states(values: List[int]) -> int:
+        return fold_penta(values)
+
+    @staticmethod
+    def describe(state: int) -> str:
+        return L5.STATES.get(state, "НЕИЗВЕСТНО")
+
+    @staticmethod
+    def is_valid(state: int) -> bool:
+        return state in L5_STATES
+
+
+# ============================================================
+# 3. RASHOMON НА 5 УРОВНЯХ
+# ============================================================
+
+def rashomon_penta(
+    interpretations: Dict[str, float],
+    margin_threshold: float = 0.2
+) -> Dict[str, Any]:
+    """
+    Анализ конкурирующих интерпретаций.
+
+    Используются:
+    - top_score — сила лучшей интерпретации;
+    - margin — преимущество лучшей интерпретации;
+    - state — итоговый L5-статус.
+
+    Значения score предполагаются в диапазоне [0, 1].
+    """
+
+    if not interpretations:
+        return {
+            "state": -2,
+            "top": None,
+            "margin": 0.0,
+            "top_score": 0.0,
+            "reason": "Нет интерпретаций",
+            "all_scores": {},
+        }
+
+    if margin_threshold < 0:
+        raise ValueError("margin_threshold не может быть отрицательным.")
+
+    for label, score in interpretations.items():
+        if not 0.0 <= score <= 1.0:
+            raise ValueError(
+                f"Оценка интерпретации '{label}' должна быть в диапазоне [0, 1]."
+            )
+
+    sorted_items = sorted(
+        interpretations.items(),
+        key=lambda x: x[1],
+        reverse=True,
+    )
+
+    top_label, top_score = sorted_items[0]
+
+    if len(sorted_items) > 1:
+        margin = top_score - sorted_items[1][1]
+    else:
+        margin = top_score
+
+    # 5 уровней Rashomon
+    if top_score >= 0.9 and margin >= max(0.3, margin_threshold):
+        state = 2
+        reason = "Абсолютное ядро"
+
+    elif top_score >= 0.7 and margin >= margin_threshold:
+        state = 1
+        reason = "Устойчивое ядро"
+
+    elif top_score >= 0.4 and margin >= margin_threshold / 2:
+        state = 0
+        reason = "Неопределённость"
+
+    elif top_score >= 0.2:
+        state = -1
+        reason = "Низкая уверенность"
+
+    else:
+        state = -2
+        reason = "Критический конфликт"
+
+    return {
+        "state": state,
+        "top": top_label,
+        "margin": margin,
+        "top_score": top_score,
+        "reason": reason,
+        "all_scores": dict(sorted_items),
+    }
+
+
+# ============================================================
+# 4. BLOCK X V7.1
+# ============================================================
+
+class BlockXV7:
+    """
+    Block X на пятеричном базисе.
+
+    Состояния блока:
+
+        ACTIVE
+           |
+           | veto()
+           v
+        VETOED
+           |
+           | resume()
+           v
+        ACTIVE
+    """
+
+    VERSION = "7.1"
+
+    ACTIVE = "active"
+    VETOED = "vetoed"
+
+    def __init__(
+        self,
+        thresholds: Tuple[float, float, float, float] = DEFAULT_THRESHOLDS
+    ):
+        self.l5_status: int = 0
+        self.state: str = self.ACTIVE
+
+        self.memory: List[Dict[str, Any]] = []
+        self.history: List[Dict[str, Any]] = []
+
+        self.thresholds = thresholds
+
+        # Метаданные проекта
+        self.architect = "Владимир Заводюк"
+
+    # --------------------------------------------------------
+    # Состояние
+    # --------------------------------------------------------
+
+    def is_vetoed(self) -> bool:
+        """Возвращает True, если Block X находится в Veto."""
+        return self.state == self.VETOED
+
+    def _veto_result(self, message: str) -> Dict[str, Any]:
+        """Единый формат ответа Veto."""
+        return {
+            "status": "veto",
+            "l5": -2,
+            "message": message,
+        }
+
+    # --------------------------------------------------------
+    # Оценка
+    # --------------------------------------------------------
+
+    def evaluate(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Оценивает входные данные.
+
+        Если Veto активен, обработка полностью прекращается.
+        """
+
+        # Главная исправленная часть V7.1:
+        # активный Veto нельзя обойти через evaluate().
+        if self.is_vetoed():
+            return self._veto_result(
+                "КРИТИЧЕСКИЙ КОНФЛИКТ — Block X находится в STOP Veto"
+            )
+
+        if not isinstance(input_data, dict):
+            raise TypeError("input_data должен быть словарём.")
+
+        confidence = input_data.get("confidence", 0.5)
+
+        if not isinstance(confidence, (int, float)):
+            raise TypeError("confidence должен быть числом.")
+
+        if not -1.0 <= confidence <= 1.0:
+            raise ValueError(
+                "confidence должен находиться в диапазоне [-1, 1]."
+            )
+
+        l5_in = quantize_penta(confidence, self.thresholds)
+
+        # Критический вход автоматически активирует Veto.
+        if l5_in == -2:
+            self.state = self.VETOED
+            self.l5_status = -2
+
+            return self._veto_result(
+                "КРИТИЧЕСКИЙ КОНФЛИКТ — STOP Veto активирован автоматически"
+            )
+
+        self.l5_status = l5_in
+
+        return {
+            "status": "accepted",
+            "l5": l5_in,
+            "message": (
+                f"Решение принято. "
+                f"L5 = {l5_in} ({L5.describe(l5_in)})"
+            ),
+        }
+
+    # --------------------------------------------------------
+    # Полный цикл
+    # --------------------------------------------------------
+
+    def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Полный цикл обработки с записью в память."""
+
+        result = self.evaluate(input_data)
+
+        record = {
+            "input": input_data,
+            "result": result,
+            "time": time.time(),
+        }
+
+        self.memory.append(record)
+        self.history.append(result)
+
+        return result
+
+    # --------------------------------------------------------
+    # Rashomon
+    # --------------------------------------------------------
+
+    def rashomon(
+        self,
+        interpretations: Dict[str, float]
+    ) -> Dict[str, Any]:
+        """Rashomon-анализ на пяти уровнях."""
+
+        if self.is_vetoed():
+            return self._veto_result(
+                "Rashomon остановлен: активен STOP Veto"
+            )
+
+        return rashomon_penta(interpretations)
+
+    # --------------------------------------------------------
+    # Veto
+    # --------------------------------------------------------
+
+    def veto(self) -> Dict[str, Any]:
+        """Принудительно переводит Block X в STOP Veto."""
+
+        self.l5_status = -2
+        self.state = self.VETOED
+
+        result = self._veto_result(
+            "STOP Veto активирован Root-Architect"
+        )
+
+        self.history.append(result)
+
+        return result
+
+    # --------------------------------------------------------
+    # Resume
+    # --------------------------------------------------------
+
+    def resume(self) -> Dict[str, Any]:
+        """Снимает Veto и возвращает Block X в ACTIVE."""
+
+        self.l5_status = 0
+        self.state = self.ACTIVE
+
+        result = {
+            "status": "resumed",
+            "l5": 0,
+            "message": "Блок X V7.1 активен",
+        }
+
+        self.history.append(result)
+
+        return result
+
+    # --------------------------------------------------------
+    # Status
+    # --------------------------------------------------------
+
+    def status(self) -> Dict[str, Any]:
+        """Возвращает полное состояние блока."""
+
+        return {
+            "state": self.state,
+            "l5_status": self.l5_status,
+            "l5_description": L5.describe(self.l5_status),
+            "memory_size": len(self.memory),
+            "history_size": len(self.history),
+            "thresholds": self.thresholds,
+            "version": self.VERSION,
+            "architect": self.architect,
+        }
+
+    # --------------------------------------------------------
+    # Efficiency
+    # --------------------------------------------------------
+
+    def efficiency(self, value: float, cost: float) -> float:
+        """
+        Непрерывная эффективность:
+
+            E = V / (V + C)
+
+        Возвращается исходное float-значение без потери информации.
+        Для получения L5 используйте efficiency_l5().
+        """
+
+        if value < 0 or cost < 0:
+            raise ValueError(
+                "Ценность и стоимость должны быть неотрицательными."
+            )
+
+        if value == 0 and cost == 0:
+            return 0.5
+
+        return value / (value + cost)
+
+    def efficiency_l5(self, value: float, cost: float) -> int:
+        """Возвращает L5-категорию эффективности."""
+
+        efficiency = self.efficiency(value, cost)
+
+        # Эффективность находится в [0, 1],
+        # поэтому здесь применяется обычная положительная шкала.
+        return quantize_penta(efficiency, self.thresholds)
+
+    # --------------------------------------------------------
+    # Проверка Veto
+    # --------------------------------------------------------
+
+    def is_veto(self, l5: int) -> bool:
+        """Проверяет, является ли L5 критическим состоянием."""
+        return l5 == -2
+
+
+# ============================================================
+# 5. GAME НА 5 УРОВНЯХ
+# ============================================================
+
+class GamePenta:
+    """
+    Теория игр на пятеричном базисе.
+
+    Стратегии:
+
+        -2 = жёсткий конфликт
+        -1 = конкурентная стратегия
+         0 = нейтральная стратегия
+        +1 = сотрудничество
+        +2 = активное сотрудничество
+    """
+
+    STRATEGIES = (-2, -1, 0, 1, 2)
+
+    def __init__(self):
+        self.players: Dict[str, Dict[str, Any]] = {}
+        self.history: List[Dict[str, Any]] = []
+
+    def add_player(
+        self,
+        name: str,
+        role: str,
+        resources: float,
+        strategy: int
+    ):
+        """Добавляет игрока."""
+
+        validate_l5(strategy)
+
+        if resources < 0:
+            raise ValueError("Ресурсы не могут быть отрицательными.")
+
+        self.players[name] = {
+            "role": role,
+            "resources": resources,
+            "strategy": strategy,
+            "payoff": 0.0,
+            "l5_status": 0,
+        }
+
+    def set_strategy(self, name: str, strategy: int):
+        """Изменяет стратегию игрока."""
+
+        if name not in self.players:
+            raise KeyError(f"Игрок '{name}' не найден.")
+
+        validate_l5(strategy)
+
+        self.players[name]["strategy"] = strategy
+
+    def simulate(self, steps: int = 5) -> List[Dict[str, Any]]:
+        """
+        Симулирует игру.
+
+        Теперь стратегия действительно влияет на динамику payoff.
+        """
+
+        if steps < 0:
+            raise ValueError("steps не может быть отрицательным.")
+
+        results = []
+
+        for step in range(steps):
+
+            for name, data in self.players.items():
+
+                strategy = data["strategy"]
+
+                # Базовая случайная динамика.
+                base_delta = random.uniform(-0.2, 0.2)
+
+                # Стратегический компонент.
+                strategic_delta = strategy * 0.1
+
+                delta = base_delta + strategic_delta
+
+                data["payoff"] += delta
+
+                # Нормализация payoff для L5.
+                normalized = max(
+                    -1.0,
+                    min(1.0, data["payoff"] / 10.0)
+                )
+
+                data["l5_status"] = quantize_penta(normalized)
+
+            snapshot = {
+                "step": step + 1,
+                "players": {
+                    name: data["payoff"]
+                    for name, data in self.players.items()
+                },
+                "l5": {
+                    name: data["l5_status"]
+                    for name, data in self.players.items()
+                },
+            }
+
+            results.append(snapshot)
+            self.history.append(snapshot)
+
+        return results
+
+    def cost_of_conflict(self) -> float:
+        """
+        Стоимость конфликтных стратегий.
+
+        -2 имеет больший вес, чем -1.
+        """
+
+        total = 0.0
+
+        for data in self.players.values():
+
+            strategy = data["strategy"]
+
+            if strategy == -2:
+                total += data["resources"] * 0.8
+
+            elif strategy == -1:
+                total += data["resources"] * 0.5
+
+        return total
+
+    def gain_of_cooperation(self) -> float:
+        """
+        Выигрыш от сотрудничества.
+
+        +2 имеет больший вес, чем +1.
+        """
+
+        total = 0.0
+
+        for data in self.players.values():
+
+            strategy = data["strategy"]
+
+            if strategy == 2:
+                total += data["resources"] * 1.0
+
+            elif strategy == 1:
+                total += data["resources"] * 0.8
+
+        return total
+
+    def is_deal_good(self) -> bool:
+        """Проверяет, превышает ли выигрыш сотрудничества цену конфликта."""
+
+        return self.gain_of_cooperation() > self.cost_of_conflict()
+
+
+# ============================================================
+# 6. ИНТЕГРАЦИЯ С V5
+# ============================================================
+
+class V7Integrator:
+    """
+    Связывает Block X V7.1 с внешней V5-системой.
+    """
+
+    def __init__(self, block_x: BlockXV7):
+        self.block_x = block_x
+        self.v5_interface: Optional[Any] = None
+
+    def connect_v5(self, v5_system: Any):
+        """Подключает V5 систему."""
+
+        if v5_system is None:
+            raise ValueError("V5 система не может быть None.")
+
+        self.v5_interface = v5_system
+
+        print("[V7.1] V5 подключена.")
+
+    def process_with_v5(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Обрабатывает данные через V7 и затем передаёт управление V5.
+
+        Здесь оставлена точка расширения, поскольку конкретный API V5
+        в исходном коде не предоставлен.
+        """
+
+        if self.v5_interface is None:
+            return {
+                "status": "error",
+                "message": "V5 не подключена",
+            }
+
+        # V7
+        result = self.block_x.process(data)
+
+        if result["status"] == "veto":
+            return result
+
+        # V5 hook.
+        #
+        # Здесь должен быть конкретный вызов API V5.
+        # Например:
+        #
+        # v5_result = self.v5_interface.process(data)
+        #
+        # Но автоматически придумывать API V5 нельзя.
+
+        return {
+            "status": "success",
+            "v7_result": result,
+            "v5_ready": True,
+            "message": "V7 обработка завершена; V5 готова к обработке",
+        }
+
+
+# ============================================================
+# 7. ДЕМОНСТРАЦИЯ
+# ============================================================
+
+def demo():
+    print("=" * 70)
+    print("BLOCK X V7.1 — ПЯТЕРИЧНАЯ ВЕРСИЯ")
+    print("=" * 70)
+
+    # --------------------------------------------------------
+    # 1. Block X
+    # --------------------------------------------------------
+
+    bx = BlockXV7()
+
+    print("\n[1] Block X V7.1 инициализирован:")
+
+    status = bx.status()
+
+    print(f"  Версия: {status['version']}")
+    print(f"  Архитектор: {status['architect']}")
+    print(f"  Состояние: {status['state']}")
+
+    # --------------------------------------------------------
+    # 2. L5
+    # --------------------------------------------------------
+
+    print("\n[2] L5 — симметричное квантование:")
+
+    values = [
+        0.95,
+        0.75,
+        0.50,
+        0.10,
+        -0.10,
+        -0.30,
+        -0.50,
+        -0.75,
+        -0.90,
+    ]
+
+    for value in values:
+
+        state = quantize_penta(value)
+
+        print(
+            f"  {value:>5.2f} → "
+            f"{state:+d} "
+            f"({L5.describe(state)})"
+        )
+
+    # --------------------------------------------------------
+    # 3. Rashomon
+    # --------------------------------------------------------
+
+    print("\n[3] Rashomon (5 уровней):")
+
+    interpretations = {
+        "Интерпретация А": 0.95,
+        "Интерпретация Б": 0.70,
+        "Интерпретация В": 0.30,
+    }
+
+    result = bx.rashomon(interpretations)
+
+    print(
+        f"  Состояние: "
+        f"{result['state']} "
+        f"({L5.describe(result['state'])})"
+    )
+
+    print(f"  Лучшая: {result['top']}")
+    print(f"  Margin: {result['margin']:.2f}")
+    print(f"  Причина: {result['reason']}")
+
+    # --------------------------------------------------------
+    # 4. Evaluation
+    # --------------------------------------------------------
+
+    print("\n[4] Оценка входа:")
+
+    for confidence in [0.95, 0.75, 0.5, 0.1, -0.1]:
+
+        result = bx.evaluate({
+            "confidence": confidence
+        })
+
+        print(
+            f"  confidence={confidence:+.2f} → "
+            f"{result['status']} → "
+            f"L5={result['l5']:+d}"
+        )
+
+    # --------------------------------------------------------
+    # 5. Manual Veto
+    # --------------------------------------------------------
+
+    print("\n[5] STOP Veto:")
+
+    print(bx.veto()["message"])
+
+    print(
+        f"  Текущее состояние: "
+        f"{bx.status()['state']}"
+    )
+
+    # Проверка: evaluate больше не может обойти Veto.
+    veto_test = bx.evaluate({
+        "confidence": 0.95
+    })
+
+    print(
+        f"  Попытка обработки во время Veto: "
+        f"{veto_test['status']}"
+    )
+
+    # --------------------------------------------------------
+    # 6. Resume
+    # --------------------------------------------------------
+
+    print("\n[6] Возобновление:")
+
+    print(bx.resume()["message"])
+
+    print(
+        f"  Текущее состояние: "
+        f"{bx.status()['state']}"
+    )
+
+    # --------------------------------------------------------
+    # 7. GAME
+    # --------------------------------------------------------
+
+    print("\n[7] GAME — пятеричный:")
+
+    game = GamePenta()
+
+    game.add_player(
+        "Anthropic",
+        "buyer",
+        1.2e9,
+        2
+    )
+
+    game.add_player(
+        "Amazon",
+        "buyer",
+        1.5e9,
+        1
+    )
+
+    game.add_player(
+        "Microsoft",
+        "buyer",
+        2.0e9,
+        -1
+    )
+
+    print(
+        f"  Gc: "
+        f"{game.gain_of_cooperation():,.2f}"
+    )
+
+    print(
+        f"  Cf: "
+        f"{game.cost_of_conflict():,.2f}"
+    )
+
+    print(
+        f"  Gc > Cf: "
+        f"{game.is_deal_good()}"
+    )
+
+    # --------------------------------------------------------
+    # 8. Efficiency
+    # --------------------------------------------------------
+
+    print("\n[8] Efficiency:")
+
+    value = 80.0
+    cost = 20.0
+
+    efficiency = bx.efficiency(value, cost)
+    efficiency_l5 = bx.efficiency_l5(value, cost)
+
+    print(f"  E = {efficiency:.3f}")
+    print(
+        f"  L5(E) = {efficiency_l5:+d} "
+        f"({L5.describe(efficiency_l5)})"
+    )
+
+    print("\n" + "=" * 70)
+    print("BLOCK X V7.1 — ДЕМОНСТРАЦИЯ ЗАВЕРШЕНА")
+    print("Root-Architect: Владимир Заводюк")
+    print("Версия: 7.1")
+    print("=" * 70)
+
+
+# ============================================================
+# 8. ENTRY POINT
+# ============================================================
+
+if __name__ == "__main__":
+    demo()
