@@ -1,0 +1,525 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+ФАЙЛ: v8_integralnaya_architektura.py
+ВЕРСИЯ: V8 (Интегральная архитектура)
+АВТОР: Владимир Заводюк (Root-Architect)
+ДАТА: 09.08.2026
+SHA-256: (вычисляется при сборке)
+
+ОПИСАНИЕ:
+V8 — интегральная архитектура, объединяющая лучшие решения V5–V7.
+Ключевые компоненты:
+- GameEngine (движок управления состояниями)
+- Графы состояний (визуализация переходов)
+- Уравнения состояний (математическая модель)
+- Консоль V8 (единый интерфейс)
+- Поддержка всех предыдущих версий через оркестратор
+
+ОТЛИЧИЯ ОТ V7:
+- Полная интеграция всех модулей
+- Единая точка входа
+- Расширенная визуализация
+- Поддержка троичной и пентарной логики одновременно
+"""
+
+import json
+import time
+import hashlib
+from typing import Dict, Any, Optional, List, Tuple, Union
+from dataclasses import dataclass, field
+from enum import Enum
+import math
+
+# ============================================================
+# 1. УНИВЕРСАЛЬНЫЕ ТИПЫ (ПОДДЕРЖКА V5–V7)
+# ============================================================
+
+class LogicType(Enum):
+    """Тип логики, используемый в системе"""
+    BINARY = "binary"      # V5
+    TERNARY = "ternary"    # V6
+    PENTARY = "pentary"    # V7
+
+class UniversalState:
+    """
+    Универсальное состояние, работающее с любым типом логики
+    """
+    def __init__(self, logic_type: LogicType, value: Union[int, float],
+                 confidence: float = 0.5):
+        self.logic_type = logic_type
+        self.value = value
+        self.confidence = min(max(confidence, 0.0), 1.0)
+        self.timestamp = time.time()
+
+    def to_dict(self) -> Dict:
+        return {
+            'logic_type': self.logic_type.value,
+            'value': self.value,
+            'confidence': self.confidence,
+            'timestamp': self.timestamp
+        }
+
+    def normalize(self) -> float:
+        """Нормализовать значение в диапазон [-1, 1]"""
+        if self.logic_type == LogicType.BINARY:
+            return 1.0 if self.value > 0 else -1.0
+        elif self.logic_type == LogicType.TERNARY:
+            return float(self.value)  # -1, 0, 1
+        else:  # PENTARY
+            return self.value / 2.0  # -1..1
+
+    def __repr__(self):
+        return f"UniversalState({self.logic_type.value}, {self.value}, {self.confidence:.2f})"
+
+# ============================================================
+# 2. GAME ENGINE — ДВИЖОК УПРАВЛЕНИЯ СОСТОЯНИЯМИ
+# ============================================================
+
+@dataclass
+class GameBlock:
+    """Блок состояния в GameEngine"""
+    index: int
+    state: UniversalState
+    prev_hash: str
+    payload: Dict[str, Any]
+    timestamp: float = field(default_factory=time.time)
+
+    @property
+    def hash(self) -> str:
+        data = f"{self.index}{self.state.to_dict()}{self.prev_hash}{json.dumps(self.payload)}{self.timestamp}"
+        return hashlib.sha256(data.encode()).hexdigest()
+
+    def to_dict(self) -> Dict:
+        return {
+            'index': self.index,
+            'state': self.state.to_dict(),
+            'prev_hash': self.prev_hash[:16] + '...' if len(self.prev_hash) > 16 else self.prev_hash,
+            'payload': self.payload,
+            'timestamp': self.timestamp,
+            'hash': self.hash[:16] + '...'
+        }
+
+class GameEngine:
+    """
+    Движок управления состояниями V8
+    Управляет переходами, историей, графами и уравнениями
+    """
+
+    def __init__(self, logic_type: LogicType = LogicType.TERNARY):
+        self.logic_type = logic_type
+        self.current_state: Optional[UniversalState] = None
+        self.history: List[GameBlock] = []
+        self.equations: Dict[str, Any] = {}
+        self.transition_rules: List[Dict] = []
+
+        self._log(f"GameEngine инициализирован (logic={logic_type.value})")
+
+    def _log(self, msg: str):
+        print(f"[GameEngine] {msg}")
+
+    # ---- УПРАВЛЕНИЕ СОСТОЯНИЕМ ----
+
+    def set_state(self, value: Union[int, float], confidence: float = 0.5,
+                  payload: Dict[str, Any] = None) -> UniversalState:
+        """Установить текущее состояние"""
+        state = UniversalState(self.logic_type, value, confidence)
+        self.current_state = state
+
+        # Сохраняем в историю
+        block = GameBlock(
+            index=len(self.history),
+            state=state,
+            prev_hash=self.history[-1].hash if self.history else 'GENESIS',
+            payload=payload or {'type': 'state_set'}
+        )
+        self.history.append(block)
+
+        self._log(f"Состояние установлено: {value} (conf={confidence:.2f})")
+        return state
+
+    def transition(self, new_value: Union[int, float], confidence: float = 0.5,
+                   payload: Dict[str, Any] = None) -> UniversalState:
+        """Переход в новое состояние"""
+        return self.set_state(new_value, confidence, payload)
+
+    # ---- ГРАФЫ ----
+
+    def get_graph(self) -> Dict:
+        """Построить граф состояний"""
+        nodes = []
+        edges = []
+
+        for i, block in enumerate(self.history):
+            nodes.append({
+                'id': i,
+                'label': f"S{i}",
+                'value': block.state.value,
+                'confidence': block.state.confidence,
+                'logic_type': block.state.logic_type.value,
+                'timestamp': block.timestamp
+            })
+            if i > 0:
+                edges.append({
+                    'from': i - 1,
+                    'to': i,
+                    'label': '→',
+                    'confidence': block.state.confidence
+                })
+
+        return {
+            'nodes': nodes,
+            'edges': edges,
+            'current': self.current_state.to_dict() if self.current_state else None,
+            'total_blocks': len(self.history)
+        }
+
+    # ---- УРАВНЕНИЯ СОСТОЯНИЙ ----
+
+    def add_equation(self, name: str, formula: str, variables: Dict[str, float]):
+        """Добавить уравнение состояния"""
+        self.equations[name] = {
+            'formula': formula,
+            'variables': variables,
+            'timestamp': time.time()
+        }
+
+    def solve_equation(self, name: str) -> Optional[float]:
+        """Решить уравнение состояния"""
+        if name not in self.equations:
+            return None
+
+        eq = self.equations[name]
+        # Упрощённое решение — подставляем текущее состояние
+        if self.current_state:
+            # Пример: формула "state * weight + bias"
+            try:
+                result = self.current_state.normalize()
+                for var, val in eq['variables'].items():
+                    if var == 'weight':
+                        result *= val
+                    elif var == 'bias':
+                        result += val
+                return min(max(result, -1.0), 1.0)
+            except:
+                return None
+        return None
+
+    def get_equations(self) -> Dict:
+        """Получить все уравнения"""
+        return self.equations
+
+    # ---- ПЕРЕХОДЫ ----
+
+    def add_transition_rule(self, from_state: Union[int, float],
+                           to_state: Union[int, float],
+                           condition: str = "always"):
+        """Добавить правило перехода"""
+        self.transition_rules.append({
+            'from': from_state,
+            'to': to_state,
+            'condition': condition,
+            'timestamp': time.time()
+        })
+
+    def get_transition_rules(self) -> List[Dict]:
+        return self.transition_rules
+
+    # ---- АНАЛИЗ ----
+
+    def analyze(self) -> Dict:
+        """Анализ текущего состояния"""
+        if self.current_state is None:
+            return {'error': 'Состояние не установлено'}
+
+        # Стабильность
+        stability = self.current_state.confidence
+
+        # Тренд (изменение относительно предыдущего)
+        trend = 0
+        if len(self.history) >= 2:
+            prev = self.history[-2].state.normalize()
+            curr = self.current_state.normalize()
+            trend = curr - prev
+
+        return {
+            'current': self.current_state.to_dict(),
+            'stability': stability,
+            'trend': trend,
+            'history_len': len(self.history),
+            'logic_type': self.logic_type.value,
+            'equations': list(self.equations.keys())
+        }
+
+    # ---- УТИЛИТЫ ----
+
+    def get_state(self) -> Dict:
+        """Полное состояние GameEngine"""
+        return {
+            'version': 'V8',
+            'logic_type': self.logic_type.value,
+            'current_state': self.current_state.to_dict() if self.current_state else None,
+            'history_len': len(self.history),
+            'equations_count': len(self.equations),
+            'transition_rules_count': len(self.transition_rules),
+            'timestamp': time.time()
+        }
+
+    def to_dict(self) -> Dict:
+        return {
+            'current': self.current_state.to_dict() if self.current_state else None,
+            'history': [b.to_dict() for b in self.history[-10:]],  # последние 10
+            'equations': self.equations,
+            'rules': self.transition_rules
+        }
+
+# ============================================================
+# 3. КОНСОЛЬ V8
+# ============================================================
+
+class ConsoleV8:
+    """
+    Консоль для работы с V8
+    Поддерживает все команды для управления GameEngine
+    """
+
+    def __init__(self, engine: Optional[GameEngine] = None):
+        self.engine = engine or GameEngine(LogicType.TERNARY)
+        self.running = True
+
+        print("\n🧠 V8 CONSOLE ACTIVE")
+        print("   Интегральная архитектура")
+        print("   Поддерживает: binary, ternary, pentary")
+        print("=" * 60)
+
+    def _render(self):
+        print("\n" + "=" * 60)
+        print("🧠 ROOT-ARCHITECT V8 — ИНТЕГРАЛЬНАЯ АРХИТЕКТУРА")
+        print("=" * 60)
+
+        if self.engine.current_state:
+            state = self.engine.current_state
+            print(f"\n📊 ТЕКУЩЕЕ СОСТОЯНИЕ:")
+            print(f"  Тип: {state.logic_type.value}")
+            print(f"  Значение: {state.value}")
+            print(f"  Уверенность: {state.confidence*100:.1f}%")
+            print(f"  Время: {time.ctime(state.timestamp)}")
+        else:
+            print("\n⚠️ Состояние не установлено")
+
+        print(f"\n📈 ИСТОРИЯ: {len(self.engine.history)} блоков")
+        print(f"📐 УРАВНЕНИЙ: {len(self.engine.equations)}")
+        print(f"📋 ПРАВИЛ ПЕРЕХОДОВ: {len(self.engine.transition_rules)}")
+
+        print("\n" + "-" * 60)
+        print("КОМАНДЫ:")
+        print("  state <value> [confidence] - установить состояние")
+        print("  transition <value> [confidence] - переход")
+        print("  graph - показать граф")
+        print("  analyze - анализ состояния")
+        print("  equation <name> <formula> - добавить уравнение")
+        print("  rule <from> <to> - добавить правило перехода")
+        print("  info - полная информация")
+        print("  clear - очистить историю")
+        print("  exit - выход")
+        print("=" * 60)
+
+    def _set_state(self, args: List[str]):
+        """Установить состояние"""
+        if not args:
+            print("❌ Укажите значение")
+            return
+
+        try:
+            value = int(args[0])
+            confidence = float(args[1]) if len(args) > 1 else 0.5
+            self.engine.set_state(value, confidence)
+            print(f"✅ Состояние установлено: {value} (conf={confidence:.2f})")
+        except ValueError:
+            print("❌ Некорректное значение")
+
+    def _transition(self, args: List[str]):
+        """Переход"""
+        if not args:
+            print("❌ Укажите значение")
+            return
+
+        try:
+            value = int(args[0])
+            confidence = float(args[1]) if len(args) > 1 else 0.5
+            self.engine.transition(value, confidence)
+            print(f"✅ Переход выполнен: {value} (conf={confidence:.2f})")
+        except ValueError:
+            print("❌ Некорректное значение")
+
+    def _graph(self):
+        """Показать граф"""
+        graph = self.engine.get_graph()
+        print("\n📊 ГРАФ СОСТОЯНИЙ:")
+        print(f"  Узлов: {len(graph['nodes'])}")
+        print(f"  Рёбер: {len(graph['edges'])}")
+        if graph['current']:
+            print(f"  Текущее состояние: {graph['current']['value']}")
+
+        # Показать последние 5 узлов
+        print("\n  Последние состояния:")
+        for node in graph['nodes'][-5:]:
+            print(f"    {node['label']}: {node['value']} (conf={node['confidence']:.2f})")
+
+    def _analyze(self):
+        """Анализ"""
+        analysis = self.engine.analyze()
+        print("\n📊 АНАЛИЗ СОСТОЯНИЯ:")
+        print(json.dumps(analysis, indent=2, ensure_ascii=False))
+
+    def _equation(self, args: List[str]):
+        """Добавить уравнение"""
+        if len(args) < 2:
+            print("❌ Использование: equation <name> <formula>")
+            return
+
+        name = args[0]
+        formula = " ".join(args[1:])
+        self.engine.add_equation(name, formula, {'weight': 1.0, 'bias': 0.0})
+        print(f"✅ Уравнение добавлено: {name}")
+
+    def _rule(self, args: List[str]):
+        """Добавить правило перехода"""
+        if len(args) < 2:
+            print("❌ Использование: rule <from> <to>")
+            return
+
+        try:
+            from_val = int(args[0])
+            to_val = int(args[1])
+            self.engine.add_transition_rule(from_val, to_val)
+            print(f"✅ Правило добавлено: {from_val} → {to_val}")
+        except ValueError:
+            print("❌ Некорректные значения")
+
+    def _info(self):
+        """Полная информация"""
+        state = self.engine.get_state()
+        print("\n📊 ПОЛНАЯ ИНФОРМАЦИЯ:")
+        print(json.dumps(state, indent=2, ensure_ascii=False))
+
+    def _clear(self):
+        """Очистить историю"""
+        self.engine.history.clear()
+        print("✅ История очищена")
+
+    def run(self):
+        """Главный цикл консоли"""
+        while self.running:
+            self._render()
+
+            cmd = input("\n➜ ").strip().split()
+            if not cmd:
+                continue
+
+            action = cmd[0].lower()
+
+            if action == "exit":
+                self.running = False
+                print("👋 Выход из V8 Console")
+            elif action == "state":
+                self._set_state(cmd[1:])
+            elif action == "transition":
+                self._transition(cmd[1:])
+            elif action == "graph":
+                self._graph()
+            elif action == "analyze":
+                self._analyze()
+            elif action == "equation":
+                self._equation(cmd[1:])
+            elif action == "rule":
+                self._rule(cmd[1:])
+            elif action == "info":
+                self._info()
+            elif action == "clear":
+                self._clear()
+            else:
+                print(f"❌ Неизвестная команда: {action}")
+
+            input("\nНажмите Enter для продолжения...")
+
+
+# ============================================================
+# 4. ГЛАВНЫЙ КЛАСС V8 SYSTEM
+# ============================================================
+
+class V8System:
+    """
+    Интегральная система V8
+    Объединяет GameEngine, графы, уравнения и консоль
+    """
+
+    def __init__(self, logic_type: str = "ternary"):
+        logic_map = {
+            'binary': LogicType.BINARY,
+            'ternary': LogicType.TERNARY,
+            'pentary': LogicType.PENTARY
+        }
+        self.logic_type = logic_map.get(logic_type, LogicType.TERNARY)
+        self.engine = GameEngine(self.logic_type)
+        self.console = ConsoleV8(self.engine)
+
+        self._log(f"V8 System инициализирована (logic={logic_type})")
+
+    def _log(self, msg: str):
+        print(f"[V8] {msg}")
+
+    def run(self):
+        """Запуск V8 системы"""
+        self._log("Запуск V8...")
+        self.console.run()
+
+    def get_state(self) -> Dict:
+        """Полное состояние системы"""
+        return {
+            'version': 'V8',
+            'logic_type': self.logic_type.value,
+            'engine': self.engine.get_state(),
+            'timestamp': time.time()
+        }
+
+
+# ============================================================
+# 5. ТОЧКА ВХОДА (ДЕМО)
+# ============================================================
+
+if __name__ == "__main__":
+    print("\n🚀 ЗАПУСК V8 — ИНТЕГРАЛЬНАЯ АРХИТЕКТУРА")
+    print("   Объединяет: GameEngine, Графы, Уравнения, Консоль")
+    print("   Поддерживает: binary, ternary, pentary")
+    print("=" * 60)
+
+    # Создаём систему
+    system = V8System(logic_type="ternary")
+
+    # Демонстрация
+    print("\n📊 ДЕМОНСТРАЦИЯ V8:")
+    system.engine.set_state(1, confidence=0.85, payload={'type': 'init'})
+    system.engine.transition(0, confidence=0.6, payload={'type': 'transition'})
+    system.engine.transition(1, confidence=0.9, payload={'type': 'final'})
+
+    # Добавляем уравнение
+    system.engine.add_equation("stability", "state * weight + bias", {'weight': 0.8, 'bias': 0.2})
+
+    # Добавляем правило
+    system.engine.add_transition_rule(0, 1, "if confidence > 0.7")
+
+    # Граф
+    graph = system.engine.get_graph()
+    print("\n📊 ГРАФ СОСТОЯНИЙ:")
+    print(json.dumps(graph, indent=2, ensure_ascii=False))
+
+    # Состояние
+    print("\n📊 СОСТОЯНИЕ V8:")
+    print(json.dumps(system.get_state(), indent=2, ensure_ascii=False))
+
+    print("\n✅ V8 демонстрация завершена")
+
+    # Запуск консоли (интерактивный режим)
+    # system.run()
