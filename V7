@@ -1,0 +1,542 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+ФАЙЛ: v7_pentarny_block_x.py
+ВЕРСИЯ: V7 (Пентарный Block X)
+АВТОР: Владимир Заводюк (Root-Architect)
+ДАТА: 09.08.2026
+SHA-256: (вычисляется при сборке)
+
+ОПИСАНИЕ:
+V7 — эволюция V6. Расширение троичной логики до 5 состояний.
+Ключевые нововведения:
+- 5 состояний вместо 3 (добавлены градации уверенности)
+- Пентарный Block X (L5)
+- Улучшенная работа с цепочками блоков
+- Подготовка к распределённым вычислениям
+
+ОТЛИЧИЯ ОТ V6:
+- Больше состояний → точнее моделирование
+- Усложнённая логика переходов
+- Более надёжный консенсус
+"""
+
+import json
+import time
+import hashlib
+from typing import Dict, Any, Optional, List, Tuple
+from dataclasses import dataclass
+from enum import Enum
+
+# ============================================================
+# 1. БАЗОВЫЕ ТИПЫ — ПЕНТАРНАЯ ЛОГИКА (5 СОСТОЯНИЙ)
+# ============================================================
+
+class PentarnyState(Enum):
+    """
+    5 состояний пентарной логики:
+    -2: Сильная ложь (strong false)
+    -1: Ложь (false)
+     0: Неопределённость (undefined)
+     1: Истина (true)
+     2: Сильная истина (strong true)
+    """
+    STRONG_FALSE = -2
+    FALSE = -1
+    UNDEFINED = 0
+    TRUE = 1
+    STRONG_TRUE = 2
+
+    def is_positive(self) -> bool:
+        return self.value > 0
+
+    def is_negative(self) -> bool:
+        return self.value < 0
+
+    def is_undefined(self) -> bool:
+        return self.value == 0
+
+    def strength(self) -> float:
+        """Сила состояния: 0.0 – 1.0"""
+        return abs(self.value) / 2.0
+
+@dataclass
+class PentarnyStateData:
+    """Пентарное состояние системы"""
+    value: PentarnyState
+    confidence: float  # 0.0 – 1.0
+    timestamp: float
+    metadata: Dict[str, Any]
+
+    def to_dict(self) -> Dict:
+        return {
+            'value': self.value.value,
+            'label': self.value.name,
+            'confidence': self.confidence,
+            'timestamp': self.timestamp,
+            'metadata': self.metadata
+        }
+
+# ============================================================
+# 2. L5 — ПЕНТАРНАЯ ЛОГИКА УРОВНЕЙ
+# ============================================================
+
+class L5Layer(Enum):
+    """Пять уровней L5"""
+    INTENT = "intent"
+    GOAL = "goal"
+    ONTOLOGY = "ontology"
+    CONTEXT = "context"
+    ACTION = "action"
+
+@dataclass
+class L5State:
+    """Состояние уровня L5"""
+    layer: L5Layer
+    state: PentarnyStateData
+    transition_energy: float  # 0.0 – 1.0
+
+    def to_dict(self) -> Dict:
+        return {
+            'layer': self.layer.value,
+            'state': self.state.to_dict(),
+            'transition_energy': self.transition_energy
+        }
+
+class L5Engine:
+    """Движок L5 — управление пентарной логикой"""
+
+    def __init__(self):
+        self.states: Dict[L5Layer, Optional[PentarnyStateData]] = {
+            L5Layer.INTENT: None,
+            L5Layer.GOAL: None,
+            L5Layer.ONTOLOGY: None,
+            L5Layer.CONTEXT: None,
+            L5Layer.ACTION: None
+        }
+        self.history: List[L5State] = []
+        self.energy = 0.5  # общая энергия системы
+
+    def set_state(self, layer: L5Layer, value: int, confidence: float = 0.5,
+                  metadata: Dict[str, Any] = None) -> PentarnyStateData:
+        """Установить состояние для уровня"""
+        if value not in [-2, -1, 0, 1, 2]:
+            raise ValueError("Значение должно быть -2, -1, 0, 1 или 2")
+
+        p_state = PentarnyState(value)
+        state_data = PentarnyStateData(
+            value=p_state,
+            confidence=confidence,
+            timestamp=time.time(),
+            metadata=metadata or {}
+        )
+        self.states[layer] = state_data
+
+        # Энергия перехода
+        transition_energy = abs(value) / 2.0
+        self.history.append(L5State(layer, state_data, transition_energy))
+        self.energy = (self.energy + transition_energy) / 2.0
+
+        return state_data
+
+    def get_state(self, layer: L5Layer) -> Optional[PentarnyStateData]:
+        return self.states.get(layer)
+
+    def evaluate(self) -> Dict[str, Any]:
+        """Оценка всей L5 системы"""
+        result = {}
+        total_energy = 0
+        count = 0
+
+        for layer in L5Layer:
+            state = self.states.get(layer)
+            if state:
+                result[layer.value] = state.to_dict()
+                total_energy += abs(state.value.value) / 2.0
+                count += 1
+            else:
+                result[layer.value] = None
+
+        # Средняя энергия
+        avg_energy = total_energy / count if count > 0 else 0
+
+        # Уровень согласованности
+        values = [s.value.value for s in self.states.values() if s is not None]
+        if values:
+            avg_val = sum(values) / len(values)
+            if avg_val > 0.5:
+                consistency = "positive"
+            elif avg_val < -0.5:
+                consistency = "negative"
+            else:
+                consistency = "neutral"
+        else:
+            consistency = "undefined"
+
+        return {
+            'states': result,
+            'avg_energy': avg_energy,
+            'consistency': consistency,
+            'system_energy': self.energy,
+            'history_len': len(self.history)
+        }
+
+    def to_dict(self) -> Dict:
+        return {
+            'states': {k.value: v.to_dict() if v else None for k, v in self.states.items()},
+            'energy': self.energy,
+            'history_len': len(self.history)
+        }
+
+# ============================================================
+# 3. ПЕНТАРНЫЙ RASHOMON
+# ============================================================
+
+class PentarnyRashomon:
+    """Rashomon-анализ для пентарной логики"""
+
+    def __init__(self):
+        self.perspectives = {
+            'technical': self._technical,
+            'legal': self._legal,
+            'business': self._business,
+            'strategic': self._strategic
+        }
+
+    def _technical(self, state: PentarnyStateData) -> Dict:
+        return {
+            'score': state.value.value / 2.0,
+            'stability': state.confidence,
+            'complexity': abs(state.value.value) / 2.0
+        }
+
+    def _legal(self, state: PentarnyStateData) -> Dict:
+        return {
+            'score': 0.5 if state.value.is_positive() else -0.5,
+            'risk': 1.0 - state.confidence,
+            'compliance': 1.0 if state.value != PentarnyState.UNDEFINED else 0.0
+        }
+
+    def _business(self, state: PentarnyStateData) -> Dict:
+        return {
+            'score': state.value.value / 2.0 * state.confidence,
+            'roi': state.confidence * 0.8,
+            'market_fit': abs(state.value.value) / 2.0
+        }
+
+    def _strategic(self, state: PentarnyStateData) -> Dict:
+        return {
+            'score': state.value.value / 2.0,
+            'urgency': 1.0 - state.confidence,
+            'recommendation': self._get_recommendation(state)
+        }
+
+    def _get_recommendation(self, state: PentarnyStateData) -> str:
+        if state.value == PentarnyState.STRONG_TRUE:
+            return "Активно действовать"
+        elif state.value == PentarnyState.TRUE:
+            return "Продолжать"
+        elif state.value == PentarnyState.UNDEFINED:
+            return "Требуется анализ"
+        elif state.value == PentarnyState.FALSE:
+            return "Пересмотреть"
+        else:  # STRONG_FALSE
+            return "Немедленно остановиться"
+
+    def analyze(self, state: PentarnyStateData) -> Dict[str, Dict]:
+        """Провести анализ со всех перспектив"""
+        return {name: func(state) for name, func in self.perspectives.items()}
+
+    def to_dict(self, state: PentarnyStateData) -> Dict:
+        return {
+            'state': state.to_dict(),
+            'analysis': self.analyze(state)
+        }
+
+# ============================================================
+# 4. ПЕНТАРНЫЙ BLOCK X (L5)
+# ============================================================
+
+@dataclass
+class PentarnyBlock:
+    """Блок в пентарной цепочке"""
+    index: int
+    version: str
+    timestamp: float
+    prev_hash: str
+    state: PentarnyStateData
+    payload: Dict[str, Any]
+    signature: str
+    nonce: int = 0
+
+    @property
+    def hash(self) -> str:
+        data = f"{self.index}{self.version}{self.timestamp}{self.prev_hash}{json.dumps(self.payload)}{self.signature}{self.nonce}"
+        return hashlib.sha256(data.encode()).hexdigest()
+
+    def verify(self, difficulty: int = 4) -> bool:
+        return self.hash.startswith('0' * difficulty)
+
+    def mine(self, difficulty: int = 4):
+        """Доказательство работы (майнинг)"""
+        while not self.hash.startswith('0' * difficulty):
+            self.nonce += 1
+        return self.nonce
+
+    def to_dict(self) -> Dict:
+        return {
+            'index': self.index,
+            'version': self.version,
+            'timestamp': self.timestamp,
+            'prev_hash': self.prev_hash[:16] + '...' if len(self.prev_hash) > 16 else self.prev_hash,
+            'state': self.state.to_dict(),
+            'payload': self.payload,
+            'signature': self.signature,
+            'nonce': self.nonce,
+            'hash': self.hash[:16] + '...'
+        }
+
+class PentarnyBlockChain:
+    """Пентарная цепочка блоков"""
+
+    def __init__(self, difficulty: int = 4):
+        self.blocks: List[PentarnyBlock] = []
+        self.difficulty = difficulty
+
+    def add_block(self, state: PentarnyStateData, payload: Dict[str, Any]) -> PentarnyBlock:
+        """Добавить блок с майнингом"""
+        block = PentarnyBlock(
+            index=len(self.blocks),
+            version='V7',
+            timestamp=time.time(),
+            prev_hash=self.blocks[-1].hash if self.blocks else 'GENESIS',
+            state=state,
+            payload=payload,
+            signature='Root-Architect'
+        )
+        block.mine(self.difficulty)
+        self.blocks.append(block)
+        return block
+
+    def verify_chain(self) -> Tuple[bool, int]:
+        """Проверить целостность цепочки"""
+        for i, block in enumerate(self.blocks):
+            if not block.verify(self.difficulty):
+                return False, i
+            if i > 0 and block.prev_hash != self.blocks[i-1].hash:
+                return False, i
+        return True, -1
+
+    def get_last(self) -> Optional[PentarnyBlock]:
+        return self.blocks[-1] if self.blocks else None
+
+    def to_dict(self) -> Dict:
+        verified, error_idx = self.verify_chain()
+        return {
+            'length': len(self.blocks),
+            'difficulty': self.difficulty,
+            'verified': verified,
+            'error_index': error_idx if not verified else None,
+            'blocks': [b.to_dict() for b in self.blocks[-5:]]
+        }
+
+# ============================================================
+# 5. ГЛАВНЫЙ КЛАСС V7 SYSTEM
+# ============================================================
+
+class V7System:
+    """
+    Пентарная система V7
+    База: L5 + Pentarny Rashomon + Pentarny Block X
+    """
+
+    def __init__(self, difficulty: int = 4):
+        self.l5 = L5Engine()
+        self.rashomon = PentarnyRashomon()
+        self.blockchain = PentarnyBlockChain(difficulty)
+        self.current_state: Optional[PentarnyStateData] = None
+
+        self._log(f"V7 System инициализирована (difficulty={difficulty})")
+
+    def _log(self, msg: str):
+        print(f"[V7] {msg}")
+
+    # ---- УПРАВЛЕНИЕ СОСТОЯНИЕМ ----
+
+    def set_state(self, value: int, confidence: float = 0.5,
+                  metadata: Dict[str, Any] = None) -> PentarnyStateData:
+        """Установить текущее пентарное состояние"""
+        if value not in [-2, -1, 0, 1, 2]:
+            raise ValueError("Значение должно быть -2, -1, 0, 1 или 2")
+
+        p_state = PentarnyState(value)
+        self.current_state = PentarnyStateData(
+            value=p_state,
+            confidence=confidence,
+            timestamp=time.time(),
+            metadata=metadata or {}
+        )
+
+        # Сохраняем в Block X
+        self.blockchain.add_block(self.current_state, {
+            'type': 'state_set',
+            'value': value,
+            'confidence': confidence
+        })
+
+        self._log(f"Состояние установлено: {value} (conf={confidence:.2f})")
+        return self.current_state
+
+    # ---- L5 ----
+
+    def set_l5_state(self, layer: str, value: int, confidence: float = 0.5,
+                     metadata: Dict[str, Any] = None):
+        """Установить состояние на уровне L5"""
+        layer_map = {
+            'intent': L5Layer.INTENT,
+            'goal': L5Layer.GOAL,
+            'ontology': L5Layer.ONTOLOGY,
+            'context': L5Layer.CONTEXT,
+            'action': L5Layer.ACTION
+        }
+        if layer not in layer_map:
+            raise ValueError("Допустимые слои: intent, goal, ontology, context, action")
+
+        self.l5.set_state(layer_map[layer], value, confidence, metadata)
+
+    def evaluate_l5(self) -> Dict:
+        """Оценка L5"""
+        return self.l5.evaluate()
+
+    # ---- RASHOMON ----
+
+    def analyze_rashomon(self) -> Dict:
+        """Rashomon-анализ текущего состояния"""
+        if self.current_state is None:
+            return {'error': 'Состояние не установлено'}
+
+        return self.rashomon.to_dict(self.current_state)
+
+    # ---- BLOCK X ----
+
+    def get_blockchain_state(self) -> Dict:
+        """Состояние Block X"""
+        return self.blockchain.to_dict()
+
+    # ---- ЗАПУСК ----
+
+    def run(self, data: Optional[Dict] = None) -> Dict:
+        """Запуск V7 системы"""
+        self._log("Запуск V7...")
+
+        if self.current_state is None:
+            return {
+                'status': 'error',
+                'message': 'Состояние не установлено. Используйте set_state()'
+            }
+
+        # Оценка L5
+        l5_result = self.l5.evaluate()
+
+        # Rashomon-анализ
+        rashomon_result = self.rashomon.to_dict(self.current_state)
+
+        # Block X
+        block_x_result = self.blockchain.to_dict()
+
+        return {
+            'status': 'running',
+            'version': 'V7',
+            'current_state': self.current_state.to_dict(),
+            'l5': l5_result,
+            'rashomon': rashomon_result,
+            'block_x': block_x_result,
+            'timestamp': time.time()
+        }
+
+    # ---- УТИЛИТЫ ----
+
+    def get_state(self) -> Dict:
+        """Полное состояние системы"""
+        return {
+            'version': 'V7',
+            'current_state': self.current_state.to_dict() if self.current_state else None,
+            'l5': self.l5.to_dict(),
+            'blockchain': self.blockchain.to_dict(),
+            'timestamp': time.time()
+        }
+
+    def get_graph(self) -> Dict:
+        """Граф состояний V7"""
+        nodes = []
+        edges = []
+
+        # Узлы: состояния L5
+        for i, layer in enumerate([L5Layer.INTENT, L5Layer.GOAL, L5Layer.ONTOLOGY,
+                                   L5Layer.CONTEXT, L5Layer.ACTION]):
+            state = self.l5.get_state(layer)
+            nodes.append({
+                'id': i,
+                'label': layer.value,
+                'state': state.value.value if state else 0,
+                'confidence': state.confidence if state else 0.0,
+                'energy': abs(state.value.value) / 2.0 if state else 0.0
+            })
+            if i > 0:
+                edges.append({'from': i-1, 'to': i, 'label': '→'})
+
+        # Текущее состояние
+        if self.current_state:
+            nodes.append({
+                'id': 5,
+                'label': 'Current',
+                'state': self.current_state.value.value,
+                'confidence': self.current_state.confidence,
+                'energy': self.current_state.value.strength()
+            })
+            edges.append({'from': 4, 'to': 5, 'label': '→'})
+
+        return {'nodes': nodes, 'edges': edges}
+
+
+# ============================================================
+# 6. ТОЧКА ВХОДА (ДЕМО)
+# ============================================================
+
+if __name__ == "__main__":
+    print("\n🚀 ЗАПУСК V7 — ПЕНТАРНЫЙ BLOCK X")
+    print("   5 состояний: -2 (Сильная ложь), -1 (Ложь), 0 (Неопределённость),")
+    print("               1 (Истина), 2 (Сильная истина)")
+    print("   Модули: L5, Pentarny Rashomon, Pentarny Block X")
+    print("=" * 60)
+
+    system = V7System(difficulty=3)
+
+    # Демонстрация
+    system.set_state(1, confidence=0.85, metadata={'source': 'demo'})
+
+    system.set_l5_state('intent', 2, confidence=0.9, metadata={'priority': 'high'})
+    system.set_l5_state('goal', 1, confidence=0.8)
+    system.set_l5_state('ontology', 0, confidence=0.5)
+    system.set_l5_state('context', 1, confidence=0.7)
+    system.set_l5_state('action', 2, confidence=0.9)
+
+    # Запуск
+    result = system.run()
+    print("\n📊 РЕЗУЛЬТАТ:")
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    # Rashomon
+    print("\n📊 RASHOMON-АНАЛИЗ (V7):")
+    print(json.dumps(system.analyze_rashomon(), indent=2, ensure_ascii=False))
+
+    # Состояние
+    print("\n📊 СОСТОЯНИЕ V7:")
+    print(json.dumps(system.get_state(), indent=2, ensure_ascii=False))
+
+    # Граф
+    print("\n📊 ГРАФ V7:")
+    print(json.dumps(system.get_graph(), indent=2, ensure_ascii=False))
+
+    print("\n✅ V7 демонстрация завершена")
