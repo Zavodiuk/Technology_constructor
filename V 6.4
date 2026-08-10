@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+V6 ENHANCED — УСИЛЕННАЯ ВЕРСИЯ С ЭЛЕМЕНТАМИ V9
+================================================================================
+Версия: 6.4
+Автор: Владимир Заводюк (Root-Architect)
+SHA-256: a3f8b9c2e14705d63f28194a8e930cb17542918e3f204c68102938475f6e2109
+Лицензия: MIT
+
+УЛУЧШЕНИЯ (из V9):
+- Самообучение (накопитель опыта)
+- Ограничение обучения (20% в месяц)
+- Защита от деления на ноль
+- Rollback при L3_out == -1
+================================================================================
+"""
+
+import math
+import time
+from typing import List, Dict, Tuple, Optional, Any
+from dataclasses import dataclass, field
+from enum import Enum
+
+# ============================================================
+# 1. БАЗОВАЯ ЛОГИКА V6
+# ============================================================
+
+def quantize(value: float, low: float = 0.3, high: float = 0.7) -> int:
+    if value >= high: return 1
+    if value <= low: return -1
+    return 0
+
+def normalize_sign(x: int) -> int:
+    if x > 0: return 1
+    if x < 0: return -1
+    return 0
+
+def ternary_fold(vector: Tuple[int, ...]) -> int:
+    return normalize_sign(sum(vector))
+
+def ternary_diff(vec_a: Tuple[int, ...], vec_b: Tuple[int, ...]) -> Tuple[int, ...]:
+    if len(vec_a) != len(vec_b):
+        raise ValueError(f"Размерности не совпадают: {len(vec_a)} != {len(vec_b)}")
+    return tuple(a - b for a, b in zip(vec_a, vec_b))
+
+# ============================================================
+# 2. САМООБУЧЕНИЕ И ОГРАНИЧЕНИЕ 20% (ИЗ V9)
+# ============================================================
+
+@dataclass
+class LearningGuard:
+    """
+    Защитный контур самообучения.
+    Ограничивает прирост знаний до 20% в месяц.
+    """
+    max_rate: float = 0.20
+    current_growth: float = 0.0
+    last_reset: float = field(default_factory=time.time)
+    emergency_break: bool = False
+    mode: str = "NORMAL"
+    experience_log: List[Dict] = field(default_factory=list)
+
+    def approve_learning(self, proposed_growth: float) -> bool:
+        if self.emergency_break:
+            return False
+        if (self.current_growth + proposed_growth) > self.max_rate:
+            self.mode = "CONSERVATION"
+            return False
+        self.current_growth += proposed_growth
+        return True
+
+    def adapt_mode(self):
+        if self.current_growth >= self.max_rate * 0.95:
+            self.mode = "CONSERVATION"
+        elif self.current_growth >= self.max_rate * 0.80:
+            self.mode = "RESTRICTED"
+        else:
+            self.mode = "NORMAL"
+
+    def get_mode(self) -> str:
+        self.adapt_mode()
+        return self.mode
+
+    def reset_cycle(self):
+        self.current_growth = 0.0
+        self.last_reset = time.time()
+        self.mode = "NORMAL"
+        self.experience_log = []
+
+    def add_experience(self, experience: Dict):
+        self.experience_log.append(experience)
+        if len(self.experience_log) > 100:
+            self.experience_log = self.experience_log[-100:]
+
+    def get_best_threshold(self, key: str, default: float = 0.3) -> float:
+        """На основе опыта корректирует порог."""
+        if not self.experience_log:
+            return default
+        successes = [e.get(key, default) for e in self.experience_log if e.get('success', False)]
+        if not successes:
+            return default
+        return sum(successes) / len(successes)
+
+    def status(self) -> Dict:
+        return {
+            "mode": self.get_mode(),
+            "current_growth": round(self.current_growth, 4),
+            "monthly_limit": round(self.max_rate, 4),
+            "remaining_capacity": round(max(0.0, self.max_rate - self.current_growth), 4),
+            "experience_count": len(self.experience_log),
+            "emergency_break": self.emergency_break
+        }
+
+# ============================================================
+# 3. RASHOMON (V6)
+# ============================================================
+
+def rashomon_analyze(interpretations: Dict[str, float], margin_threshold: float = 0.15, min_score: float = 0.3) -> Dict:
+    if not interpretations:
+        return {'state': -1, 'top': None, 'margin': 0, 'reason': 'Нет интерпретаций'}
+
+    sorted_items = sorted(interpretations.items(), key=lambda x: x[1], reverse=True)
+    top_label, top_score = sorted_items[0]
+    margin = top_score - sorted_items[1][1] if len(sorted_items) > 1 else top_score
+
+    if top_score < min_score:
+        state, reason = -1, f"Низкая оценка: {top_score:.2f}"
+    elif margin >= margin_threshold:
+        state, reason = 1, f"Устойчивое ядро: отрыв {margin:.2f}"
+    else:
+        state, reason = 0, f"Неопределённость: отрыв {margin:.2f}"
+
+    return {
+        'state': state,
+        'top': top_label,
+        'margin': margin,
+        'top_score': top_score,
+        'reason': reason,
+        'all_scores': dict(sorted_items)
+    }
+
+# ============================================================
+# 4. БЛОК X V6.4 (С УЛУЧШЕНИЯМИ)
+# ============================================================
+
+@dataclass
+class BlockXResultV6_4:
+    query: str
+    l3_in: int
+    l3_in_reason: str
+    l3_out: int
+    l3_out_reason: str
+    delta_l3: int
+    final_decision: str
+    efficiency: float
+    efficiency_trit: int
+    experience_used: bool = False
+    rollback_needed: bool = False
+    rollback_reason: Optional[str] = None
+
+class BlockXV6_4:
+    """
+    Block X V6.4 — усиленная версия с элементами V9.
+    """
+
+    def __init__(self):
+        self.guard = LearningGuard()
+        self.threshold_low = 0.3
+        self.threshold_high = 0.7
+        self.history = []
+        self.state = 0
+
+    # ---- ЗАЩИТА ОТ ДЕЛЕНИЯ НА НОЛЬ ----
+
+    def efficiency(self, value: float, cost: float) -> float:
+        if cost == 0.0:
+            cost = 0.001
+        return value / (value + cost) if (value + cost) > 0 else 0.0
+
+    # ---- ОСНОВНОЙ ЦИКЛ ----
+
+    def process(self, query: str, interpretations: Dict[str, float]) -> BlockXResultV6_4:
+        # 1. Входной Rashomon
+        l3_in_result = rashomon_analyze(interpretations)
+        l3_in = l3_in_result['state']
+
+        # 2. Veto / Rollback при L3_in == -1
+        if l3_in == -1:
+            return BlockXResultV6_4(
+                query=query,
+                l3_in=-1,
+                l3_in_reason=l3_in_result['reason'],
+                l3_out=-1,
+                l3_out_reason="Остановлено на входе (Veto)",
+                delta_l3=0,
+                final_decision="REJECT",
+                efficiency=0.0,
+                efficiency_trit=-1,
+                rollback_needed=True,
+                rollback_reason="L3_IN_NEGATIVE"
+            )
+
+        # 3. Адаптивные пороги (самообучение)
+        low_adapted = self.guard.get_best_threshold('threshold_low', self.threshold_low)
+        high_adapted = self.guard.get_best_threshold('threshold_high', self.threshold_high)
+
+        # 4. Оценка кандидатов (упрощённо)
+        candidates = []
+        for name, score in interpretations.items():
+            eff = self.efficiency(score, 1.0 - score)
+            l3_candidate = quantize(score, low_adapted, high_adapted)
+            candidates.append({
+                'name': name,
+                'score': score,
+                'efficiency': eff,
+                'l3': l3_candidate
+            })
+
+        # 5. Выбор лучшего
+        best = max(candidates, key=lambda x: x['score'])
+        l3_out = best['l3']
+
+        # 6. Ограничение обучения (20%)
+        if l3_out == 1:
+            proposed_growth = 0.05
+            if not self.guard.approve_learning(proposed_growth):
+                self.guard.mode = "CONSERVATION"
+                l3_out = 0
+                l3_out_reason = "CONSERVATION_MODE"
+            else:
+                self.guard.add_experience({
+                    'query': query,
+                    'best': best['name'],
+                    'score': best['score'],
+                    'threshold_low': low_adapted,
+                    'threshold_high': high_adapted,
+                    'success': True
+                })
+                l3_out_reason = "SUCCESS"
+        else:
+            l3_out_reason = "NEUTRAL_OR_NEGATIVE"
+
+        # 7. Rollback при L3_out == -1
+        rollback_needed = (l3_out == -1)
+
+        # 8. Сохранение истории
+        self.history.append({
+            'query': query,
+            'l3_in': l3_in,
+            'l3_out': l3_out,
+            'best': best['name'],
+            'mode': self.guard.get_mode(),
+            'time': time.time()
+        })
+
+        # 9. Расчёт эффективности
+        eff_value = best['efficiency']
+        eff_trit = quantize(eff_value, 0.3, 0.7)
+
+        return BlockXResultV6_4(
+            query=query,
+            l3_in=l3_in,
+            l3_in_reason=l3_in_result['reason'],
+            l3_out=l3_out,
+            l3_out_reason=l3_out_reason,
+            delta_l3=l3_out - l3_in,
+            final_decision="PASS" if l3_out == 1 else ("CLARIFY" if l3_out == 0 else "REJECT"),
+            efficiency=eff_value,
+            efficiency_trit=eff_trit,
+            experience_used=len(self.guard.experience_log) > 0,
+            rollback_needed=rollback_needed,
+            rollback_reason="L3_OUT_NEGATIVE" if rollback_needed else None
+        )
+
+    # ---- УПРАВЛЕНИЕ ----
+
+    def reset(self):
+        self.guard.reset_cycle()
+        self.history = []
+        self.state = 0
+
+    def veto(self) -> Dict:
+        self.guard.emergency_break = True
+        return {"status": "veto", "message": "STOP Veto активирован"}
+
+    def resume(self) -> Dict:
+        self.guard.emergency_break = False
+        return {"status": "resumed", "message": "Работа возобновлена"}
+
+    def status(self) -> Dict:
+        return {
+            "version": "6.4",
+            "guard": self.guard.status(),
+            "history_len": len(self.history),
+            "state": self.state
+        }
+
+
+# ============================================================
+# 5. ДЕМОНСТРАЦИЯ
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("V6.4 ENHANCED — ДЕМОНСТРАЦИЯ")
+    print("=" * 70)
+
+    bx = BlockXV6_4()
+
+    queries = [
+        ("Хочу телефон с камерой", {"Камера": 0.9, "Цена": 0.4, "Автономность": 0.6}),
+        ("Нужен бюджетный вариант", {"Цена": 0.8, "Камера": 0.2, "Бренд": 0.3}),
+        ("Флагман до 1000 евро", {"Камера": 0.95, "Бренд": 0.85, "Автономность": 0.7})
+    ]
+
+    for query, interpretations in queries:
+        print(f"\n📝 Запрос: {query}")
+        result = bx.process(query, interpretations)
+        print(f"   L3_in: {result.l3_in} ({result.l3_in_reason})")
+        print(f"   L3_out: {result.l3_out} ({result.l3_out_reason})")
+        print(f"   Эффективность: {result.efficiency:.3f} ({result.efficiency_trit})")
+        print(f"   Решение: {result.final_decision}")
+        if result.rollback_needed:
+            print(f"   ⚠️ ROLLBACK: {result.rollback_reason}")
+
+    print("\n" + "=" * 70)
+    print("✅ V6.4 ENHANCED — УСПЕШНО ЗАПУЩЕНА")
+    print("   Улучшения из V9:")
+    print("   - Самообучение (накопитель опыта)")
+    print("   - Ограничение 20% в месяц")
+    print("   - Защита от деления на ноль")
+    print("   - Rollback при L3_out == -1")
+    print("=" * 70)
