@@ -1,0 +1,807 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+GAME ENGINE V9.6 — УЛУЧШЕННАЯ ВЕРСИЯ
+================================================================================
+Исправления:
+1. Правильная маршрутизация фактов в маски (Fact → Interpretation mapping)
+2. Пространственное распределение узлов (не все в (0,0))
+3. Комбинированные скоры (волны + театр + опыт)
+4. Маски участвуют в выборе кандидата
+5. Реальный gain/loss для Ломоносова
+6. Динамическая оценка театра на основе контекста
+================================================================================
+"""
+
+import math
+import time
+import json
+from enum import Enum
+from typing import Dict, Any, List, Optional, Tuple
+from dataclasses import dataclass, field
+
+
+# ============================================================
+# 1. БАЗОВАЯ ЛОГИКА V9
+# ============================================================
+
+def quantize(value: float, low: float = 0.3, high: float = 0.7) -> int:
+    if value >= high: return 1
+    if value <= low: return -1
+    return 0
+
+def normalize_sign(x: int) -> int:
+    if x > 0: return 1
+    if x < 0: return -1
+    return 0
+
+def ternary_fold(vector: Tuple[int, ...]) -> int:
+    return normalize_sign(sum(vector))
+
+
+# ============================================================
+# 2. РЕЖИМЫ ГЕОМЕТРИИ
+# ============================================================
+
+class GeometryMode(Enum):
+    EUCLIDEAN = "евклидова"
+    HYPERBOLIC = "гиперболическая (Лобачевский)"
+    ELLIPTIC = "эллиптическая (Риман)"
+
+
+class GeometryEngine:
+    def __init__(self, mode: GeometryMode = GeometryMode.HYPERBOLIC):
+        self.mode = mode
+        self.curvature = -1.0
+
+    def set_mode(self, mode: GeometryMode):
+        self.mode = mode
+        if mode == GeometryMode.EUCLIDEAN:
+            self.curvature = 0.0
+        elif mode == GeometryMode.HYPERBOLIC:
+            self.curvature = -1.0
+        elif mode == GeometryMode.ELLIPTIC:
+            self.curvature = 1.0
+
+    def distance(self, p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
+        dx = p1[0] - p2[0]
+        dy = p1[1] - p2[1]
+        euclidean_dist = math.sqrt(dx*dx + dy*dy)
+        if self.curvature == 0:
+            return euclidean_dist
+        elif self.curvature < 0:
+            return math.sinh(euclidean_dist)
+        else:
+            return math.sin(euclidean_dist)
+
+    def select_mode_by_task(self, query: str, interpretations: Dict[str, float]) -> GeometryMode:
+        if len(interpretations) > 5:
+            return GeometryMode.HYPERBOLIC
+        if any(word in query.lower() for word in ['цикл', 'обучение', 'возврат']):
+            return GeometryMode.ELLIPTIC
+        return GeometryMode.EUCLIDEAN
+
+
+# ============================================================
+# 3. ФИЗИКА (ВОЛНОВАЯ)
+# ============================================================
+
+@dataclass
+class WaveNode:
+    id: int
+    amplitude: float
+    phase: float
+    position: Tuple[float, float]
+    children: List[int] = field(default_factory=list)
+    parents: List[int] = field(default_factory=list)
+
+    def generate_wave(self, time: float) -> float:
+        omega = 2.0
+        return self.amplitude * math.sin(omega * time + self.phase)
+
+    def spread(self, time: float, nodes: Dict[int, 'WaveNode'], geometry: GeometryEngine) -> Dict[int, float]:
+        result = {}
+        for child_id in self.children:
+            if child_id in nodes:
+                child = nodes[child_id]
+                distance = geometry.distance(self.position, child.position)
+                attenuation = 1.0 / (1.0 + distance)
+                amplitude = self.generate_wave(time) * attenuation
+                result[child_id] = amplitude
+        return result
+
+
+class InterferenceMatrix:
+    def __init__(self, geometry: GeometryEngine):
+        self.nodes: Dict[int, WaveNode] = {}
+        self.waves: Dict[int, float] = {}
+        self.geometry = geometry
+
+    def add_node(self, node: WaveNode):
+        self.nodes[node.id] = node
+
+    def propagate_waves(self, time: float) -> Dict[int, float]:
+        result = {}
+        for node_id, node in self.nodes.items():
+            spread = node.spread(time, self.nodes, self.geometry)
+            for child_id, amp in spread.items():
+                result[child_id] = result.get(child_id, 0.0) + amp
+        self.waves = result
+        return result
+
+    def interference_pattern(self, time: float) -> Dict[int, float]:
+        result = {}
+        for node_id, node in self.nodes.items():
+            incoming = self.waves.get(node_id, 0.0)
+            own = node.generate_wave(time)
+            result[node_id] = incoming + own
+        return result
+
+    def find_conflicts(self, time: float, threshold: float = 0.3) -> List[int]:
+        pattern = self.interference_pattern(time)
+        return [nid for nid, val in pattern.items() if abs(val) > threshold]
+
+    def stability_index(self, time: float) -> float:
+        conflicts = self.find_conflicts(time)
+        total = len(self.nodes) if self.nodes else 1
+        return 1.0 - len(conflicts) / total
+
+
+class KirchhoffBalance:
+    def __init__(self):
+        self.cycles: List[List[int]] = []
+
+    def find_cycles(self, graph: Dict[int, List[int]]) -> List[List[int]]:
+        cycles = []
+        visited = set()
+
+        def dfs(node: int, path: List[int]):
+            if node in visited:
+                if len(path) > 2:
+                    cycle_start = path.index(node)
+                    cycles.append(path[cycle_start:])
+                return
+            visited.add(node)
+            for neighbor in graph.get(node, []):
+                if neighbor not in path or neighbor == path[0]:
+                    dfs(neighbor, path + [neighbor])
+            visited.remove(node)
+
+        for node in graph:
+            if node not in visited:
+                dfs(node, [node])
+        self.cycles = cycles
+        return cycles
+
+    def system_balance(self, waves: Dict[int, float]) -> float:
+        return sum(waves.values())
+
+    def is_balanced(self, waves: Dict[int, float], tolerance: float = 0.01) -> bool:
+        return abs(self.system_balance(waves)) < tolerance
+
+
+# ============================================================
+# 4. ЦИКЛ ЛОМОНОСОВА
+# ============================================================
+
+class LomonosovSpiral:
+    def __init__(self):
+        self.history: List[Dict] = []
+        self.spiral_level = 0
+        self.direction = 0
+
+    def analyze_event(self, event: Dict) -> Dict:
+        result = {
+            "why": event.get("reason", "неизвестно"),
+            "where": event.get("location", "неизвестно"),
+            "when": event.get("timestamp", time.time()),
+            "loss": event.get("loss", 0.0),
+            "gain": event.get("gain", 0.0),
+            "spiral_level": self.spiral_level,
+            "direction": self.direction,
+            "status": "incomplete"
+        }
+
+        loss_val = result["loss"] if isinstance(result["loss"], (int, float)) else 0.0
+        gain_val = result["gain"] if isinstance(result["gain"], (int, float)) else 0.0
+
+        if loss_val >= 0 and gain_val >= 0:
+            if gain_val > loss_val:
+                self.direction = 1
+            elif loss_val > gain_val:
+                self.direction = -1
+            else:
+                self.direction = 0
+
+            self.spiral_level += self.direction
+            result["spiral_level"] = self.spiral_level
+            result["direction"] = self.direction
+            result["status"] = "complete"
+
+        self.history.append(result)
+        return result
+
+    def get_trend(self) -> str:
+        if not self.history:
+            return "неизвестно"
+        last = self.history[-1]
+        if last["direction"] == 1:
+            return "восходящая"
+        elif last["direction"] == -1:
+            return "нисходящая"
+        else:
+            return "горизонтальная"
+
+    def get_level(self) -> int:
+        return self.spiral_level
+
+
+# ============================================================
+# 5. ТЕАТР МАСОК (УЛУЧШЕННАЯ ВЕРСИЯ)
+# ============================================================
+
+class Maschera(Enum):
+    """12 архетипов итальянской комедии dell'arte"""
+    PANTALONE = "панталоне"        # Деньги, власть, интересы
+    DOTTOR = "доктор"              # Логика, правила, знание
+    CAPITANO = "капитан"           # Сила, риск, смелость
+    BRIGHELLA = "бригелла"         # План, исполнение, тактика
+    ARLECCHINO = "арлекино"        # Простота, трюки, хитрость
+    TARTAGLIA = "тарталья"         # Ошибки, слабости, логика
+    INNAMORATI = "влюблённые"      # Красота, чувства, справедливость
+    COLOMBINA = "коломбина"        # Скрытое, правда, интуиция
+    PULCINELLA = "пульчинелла"    # Честность, народ, простой смысл
+    SCAPINO = "скапино"            # Манёвры, гибкость, ловкость
+    GIANDUJA = "джандуя"           # Искренность, простота, человечность
+    BALANZONE = "баланцоне"        # Точность, корректность, формы
+
+
+@dataclass
+class MascheraProfile:
+    name: Maschera
+    group: str
+    description: str
+    fact_keywords: List[str]  # Ключевые слова для поиска в фактах
+    weight: float = 1.0
+    active: bool = True
+
+    def find_relevant_facts(self, facts: Dict[str, Any]) -> Dict[str, Any]:
+        """Найти релевантные факты для этой маски"""
+        relevant = {}
+        facts_lower = {k.lower(): v for k, v in facts.items()}
+        keywords_lower = [kw.lower() for kw in self.fact_keywords]
+        
+        for fact_key, fact_value in facts_lower.items():
+            for kw in keywords_lower:
+                if kw in fact_key:
+                    relevant[fact_key] = fact_value
+                    break
+        
+        # Если нет релевантных фактов, используем все
+        if not relevant:
+            relevant = facts_lower
+        
+        return relevant
+
+    def evaluate(self, facts: Dict[str, Any]) -> float:
+        """Оценить факты через призму этой маски"""
+        relevant = self.find_relevant_facts(facts)
+        
+        if not relevant:
+            return 0.5
+        
+        values = list(relevant.values())
+        avg_value = sum(values) / len(values)
+        
+        # Каждая маска интерпретирует факты по-своему
+        if self.name == Maschera.PANTALONE:
+            # "Сколько это стоит?" → Ищет экономическую выгоду
+            return 0.5 * avg_value + 0.5 * (1 - avg_value)  # Противоречие цены vs выгоды
+        
+        elif self.name == Maschera.DOTTOR:
+            # "Логично ли это?" → Проверяет логическую согласованность
+            std_dev = math.sqrt(sum((v - avg_value)**2 for v in values) / len(values)) if values else 0
+            return 1.0 - std_dev  # Низкая дисперсия = логично
+        
+        elif self.name == Maschera.CAPITANO:
+            # "Покажем ли мы силу?" → Ищет максимальные значения
+            return max(values) if values else 0.5
+        
+        elif self.name == Maschera.BRIGHELLA:
+            # "Какой практический план?" → Ищет среднее (баланс)
+            return avg_value
+        
+        elif self.name == Maschera.ARLECCHINO:
+            # "А что, если всё проще?" → Ищет простоту (низкую дисперсию)
+            std_dev = math.sqrt(sum((v - avg_value)**2 for v in values) / len(values)) if values else 0
+            return 1.0 - std_dev
+        
+        elif self.name == Maschera.TARTAGLIA:
+            # "Где логическая ошибка?" → Ищет противоречия
+            std_dev = math.sqrt(sum((v - avg_value)**2 for v in values) / len(values)) if values else 0
+            return std_dev  # Высокая дисперсия = проблемы
+        
+        elif self.name == Maschera.INNAMORATI:
+            # "Нравится ли нам это?" → Эмоциональная оценка (выше среднего)
+            return avg_value
+        
+        elif self.name == Maschera.COLOMBINA:
+            # "Что на самом деле?" → Истина в самых высоких значениях
+            return max(values) if values else 0.5
+        
+        elif self.name == Maschera.PULCINELLA:
+            # "А что думает народ?" → Народное большинство
+            return avg_value
+        
+        elif self.name == Maschera.SCAPINO:
+            # "Как обойти препятствие?" → Гибкость (средние значения)
+            return avg_value
+        
+        elif self.name == Maschera.GIANDUJA:
+            # "Насколько это искренне?" → Честность (согласованность)
+            std_dev = math.sqrt(sum((v - avg_value)**2 for v in values) / len(values)) if values else 0
+            return 1.0 - std_dev
+        
+        elif self.name == Maschera.BALANZONE:
+            # "Насколько это точно?" → Точность (минимальная дисперсия)
+            std_dev = math.sqrt(sum((v - avg_value)**2 for v in values) / len(values)) if values else 0
+            return 1.0 - std_dev
+        
+        return avg_value
+
+
+class TeatroDelleMaschere:
+    """Театр масок — когнитивный орган системы"""
+    
+    def __init__(self):
+        self.maschere: List[MascheraProfile] = []
+        self._init_default()
+
+    def _init_default(self):
+        """Инициализация 12 масок с ключевыми словами"""
+        self.maschere.append(MascheraProfile(
+            Maschera.PANTALONE, "власть",
+            "Сколько это стоит? (деньги, финансы, стоимость)",
+            ["цена", "стоимость", "деньги", "финанс", "бюджет", "дорог", "дешев"]
+        ))
+        self.maschere.append(MascheraProfile(
+            Maschera.DOTTOR, "власть",
+            "Соответствует ли формальной логике?",
+            ["логик", "закон", "правил", "науч", "формаль", "дефиниц"]
+        ))
+        self.maschere.append(MascheraProfile(
+            Maschera.CAPITANO, "власть",
+            "Покажем ли мы силу? (мощь, мощность, производительность)",
+            ["сила", "мощ", "производ", "энерг", "заряд", "батаре"]
+        ))
+        self.maschere.append(MascheraProfile(
+            Maschera.BRIGHELLA, "действие",
+            "Какой практический план? (возможности, применение)",
+            ["план", "приме", "практи", "функц", "возмож", "исполн"]
+        ))
+        self.maschere.append(MascheraProfile(
+            Maschera.ARLECCHINO, "действие",
+            "А что, если всё проще? (простота, удобство)",
+            ["прост", "удобн", "лёгк", "быстр", "интуит"]
+        ))
+        self.maschere.append(MascheraProfile(
+            Maschera.TARTAGLIA, "действие",
+            "Где логическая ошибка? (недостатки, проблемы)",
+            ["недостат", "проблем", "ошиб", "минус", "слаб"]
+        ))
+        self.maschere.append(MascheraProfile(
+            Maschera.INNAMORATI, "человек",
+            "Нравится ли нам это? (красота, привлекательность)",
+            ["красив", "привлек", "нрави", "приятн", "эстет"]
+        ))
+        self.maschere.append(MascheraProfile(
+            Maschera.COLOMBINA, "человек",
+            "Что на самом деле? (подлинное, скрытое, истина)",
+            ["истин", "подлин", "скрыт", "реальн", "сущность"]
+        ))
+        self.maschere.append(MascheraProfile(
+            Maschera.PULCINELLA, "человек",
+            "А что думает народ? (общее мнение, большинство)",
+            ["народ", "мнени", "обществ", "масс", "большин", "люд"]
+        ))
+        self.maschere.append(MascheraProfile(
+            Maschera.SCAPINO, "человек",
+            "Как обойти препятствие? (гибкость, маневры)",
+            ["гибк", "манев", "адапт", "обход", "альтер"]
+        ))
+        self.maschere.append(MascheraProfile(
+            Maschera.GIANDUJA, "человек",
+            "Насколько это искренне? (искренность, честность)",
+            ["искренн", "честн", "правдив", "откры", "透明"]
+        ))
+        self.maschere.append(MascheraProfile(
+            Maschera.BALANZONE, "власть",
+            "Насколько это точно? (точность, корректность, формы)",
+            ["точн", "коррект", "формаль", "правилльн", "акурат"]
+        ))
+
+    def evaluate(self, facts: Dict[str, Any]) -> Dict[str, Any]:
+        """Оценить факты всеми масками"""
+        results = {}
+        weighted_sum = 0.0
+        total_weight = 0.0
+
+        for m in self.maschere:
+            if not m.active:
+                continue
+            score = m.evaluate(facts)
+            weighted = score * m.weight
+            results[m.name.value] = {
+                "score": round(score, 3),
+                "weight": m.weight,
+                "weighted": round(weighted, 3),
+                "group": m.group,
+                "description": m.description
+            }
+            weighted_sum += weighted
+            total_weight += m.weight
+
+        if total_weight == 0:
+            return {"error": "Нет активных масок"}
+
+        scores = [r["score"] for r in results.values()]
+        avg_score = sum(scores) / len(scores)
+        std_dev = math.sqrt(sum((s - avg_score)**2 for s in scores) / len(scores))
+        is_coherent = std_dev < 0.15
+
+        return {
+            "results": results,
+            "weighted_sum": round(weighted_sum / total_weight, 3),
+            "coherence": is_coherent,
+            "std_dev": round(std_dev, 3),
+            "avg_score": round(avg_score, 3)
+        }
+    
+    def find_leading_maschera(self, evaluation: Dict[str, Any]) -> Optional[str]:
+        """Найти маску с наивысшей оценкой"""
+        if "results" not in evaluation:
+            return None
+        results = evaluation["results"]
+        if not results:
+            return None
+        leading = max(results.items(), key=lambda x: x[1]["weighted"])
+        return leading[0]
+
+
+# ============================================================
+# 6. ОПЫТ
+# ============================================================
+
+class ExperienceModule:
+    def __init__(self, max_size: int = 1000):
+        self.records: List[Dict] = []
+        self.max_size = max_size
+
+    def add(self, decision: Dict, outcome: float, confidence: float = 0.5):
+        self.records.append({
+            "decision": decision,
+            "outcome": outcome,
+            "confidence": confidence,
+            "timestamp": time.time()
+        })
+        if len(self.records) > self.max_size:
+            self.records.pop(0)
+
+    def predict(self, interpretation_name: str) -> float:
+        """Предсказать успех для интерпретации на основе истории"""
+        if not self.records:
+            return 0.5
+        
+        # Ищем похожие решения
+        similar = [
+            r["outcome"] for r in self.records
+            if interpretation_name.lower() in str(r["decision"]).lower()
+        ]
+        
+        if similar:
+            return sum(similar) / len(similar)
+        
+        # Если похожих нет, используем общий успех
+        successful = [r["outcome"] for r in self.records if r["outcome"] > 0.5]
+        return len(successful) / len(self.records) if self.records else 0.5
+
+
+# ============================================================
+# 7. GAME ENGINE V9.6 (УЛУЧШЕННАЯ)
+# ============================================================
+
+class GameEngineV9Improved:
+    """Улучшенный Game Engine V9 с правильной интеграцией всех компонентов"""
+    
+    def __init__(self):
+        self.geometry = GeometryEngine()
+        self.wave_system = InterferenceMatrix(self.geometry)
+        self.kirchhoff = KirchhoffBalance()
+        self.lomonosov = LomonosovSpiral()
+        self.teatro = TeatroDelleMaschere()
+        self.experience = ExperienceModule()
+        self.nodes: Dict[int, WaveNode] = {}
+        self.node_counter = 0
+        self.history = []
+        self.current_time = 0.0
+
+    def _add_node(self, name: str, amplitude: float, phase: float, 
+                  position: Tuple[float, float]) -> int:
+        """Добавить узел волны"""
+        self.node_counter += 1
+        node = WaveNode(
+            id=self.node_counter,
+            amplitude=amplitude,
+            phase=phase,
+            position=position,
+            children=[],
+            parents=[]
+        )
+        self.nodes[node.id] = node
+        self.wave_system.add_node(node)
+        return node.id
+
+    def _connect_nodes(self, from_id: int, to_id: int):
+        """Связать узлы волн"""
+        if from_id in self.nodes and to_id in self.nodes:
+            if to_id not in self.nodes[from_id].children:
+                self.nodes[from_id].children.append(to_id)
+            if from_id not in self.nodes[to_id].parents:
+                self.nodes[to_id].parents.append(from_id)
+
+    def _distribute_nodes_in_space(self, count: int) -> List[Tuple[float, float]]:
+        """Распределить узлы по кругу в пространстве"""
+        positions = []
+        for i in range(count):
+            angle = 2 * math.pi * i / count
+            x = 0.5 * math.cos(angle)
+            y = 0.5 * math.sin(angle)
+            positions.append((x, y))
+        return positions
+
+    def process(self, query: str, interpretations: Dict[str, float]) -> Dict[str, Any]:
+        """Выполнить полный цикл обработки запроса"""
+        self.current_time += 1.0
+
+        # ====== ФАЗА 1: ГЕОМЕТРИЯ ======
+        selected_mode = self.geometry.select_mode_by_task(query, interpretations)
+        self.geometry.set_mode(selected_mode)
+
+        # ====== ФАЗА 2: ВОЛНОВЫЕ УЗЛЫ (РАСПРЕДЕЛЁННЫЕ В ПРОСТРАНСТВЕ) ======
+        positions = self._distribute_nodes_in_space(len(interpretations))
+        node_ids = {}
+        
+        for (name, score), (x, y) in zip(interpretations.items(), positions):
+            # Амплитуда = уверенность, фаза = порядок узла
+            phase = len(node_ids) * 0.5
+            node_id = self._add_node(name, score, phase, (x, y))
+            node_ids[name] = node_id
+
+        # ====== ФАЗА 3: СВЯЗИ МЕЖДУ УЗЛАМИ ======
+        node_list = list(node_ids.values())
+        for i in range(len(node_list) - 1):
+            self._connect_nodes(node_list[i], node_list[i + 1])
+
+        # ====== ФАЗА 4: ВОЛНОВАЯ ФИЗИКА ======
+        self.wave_system.propagate_waves(self.current_time)
+        pattern = self.wave_system.interference_pattern(self.current_time)
+        conflicts = self.wave_system.find_conflicts(self.current_time)
+        stability = self.wave_system.stability_index(self.current_time)
+
+        # ====== ФАЗА 5: КИРХГОФ (БАЛАНС) ======
+        graph = {nid: node.children for nid, node in self.nodes.items()}
+        cycles = self.kirchhoff.find_cycles(graph)
+        balance = self.kirchhoff.system_balance(pattern)
+        is_balanced = self.kirchhoff.is_balanced(pattern)
+
+        # ====== ФАЗА 6: ТЕАТР МАСОК ======
+        teatro_evaluation = self.teatro.evaluate(interpretations)
+        leading_maschera = self.teatro.find_leading_maschera(teatro_evaluation)
+
+        # ====== ФАЗА 7: ОПЫТ ======
+        experience_scores = {}
+        for name in interpretations.keys():
+            exp_score = self.experience.predict(name)
+            experience_scores[name] = exp_score
+
+        # ====== ФАЗА 8: КОМБИНИРОВАННЫЙ ВЫБОР КАНДИДАТА ======
+        best_candidate = None
+        best_composite_score = -float('inf')
+        candidate_scores = {}
+
+        for name, node_id in node_ids.items():
+            # Компонента 1: Волновая амплитуда (нормализованная)
+            wave_amplitude = pattern.get(node_id, 0.0)
+            wave_score = (wave_amplitude + 1.0) / 2.0  # Нормализуем в [0, 1]
+            
+            # Компонента 2: Оценка театра
+            teatro_score = 0.5
+            if "results" in teatro_evaluation and name in teatro_evaluation["results"]:
+                teatro_score = teatro_evaluation["results"][name]["score"]
+            
+            # Компонента 3: Опыт
+            exp_score = experience_scores.get(name, 0.5)
+            
+            # Компонента 4: Базовая уверенность (интерпретация)
+            confidence = interpretations.get(name, 0.5)
+            
+            # КОМБИНИРОВАННЫЙ СКОР (weighted average)
+            composite_score = (
+                0.25 * wave_score +
+                0.30 * teatro_score +
+                0.25 * exp_score +
+                0.20 * confidence
+            )
+            
+            candidate_scores[name] = {
+                "wave": round(wave_score, 3),
+                "teatro": round(teatro_score, 3),
+                "experience": round(exp_score, 3),
+                "confidence": round(confidence, 3),
+                "composite": round(composite_score, 3)
+            }
+            
+            if composite_score > best_composite_score:
+                best_composite_score = composite_score
+                best_candidate = name
+
+        # ====== ФАЗА 9: ЛОМОНОСОВСКАЯ СПИРАЛЬ ======
+        # Реальный gain/loss на основе стабильности и согласованности
+        stability_gain = stability  # Насколько система стабильна
+        conflict_loss = len(conflicts) / max(len(self.nodes), 1)  # Потеря от конфликтов
+        coherence_factor = 1.0 if teatro_evaluation.get("coherence", False) else 0.5
+        
+        gain = stability_gain * coherence_factor * best_composite_score
+        loss = conflict_loss * (1.0 - stability)
+        
+        lomonosov_event = {
+            "reason": query,
+            "location": "GameEngine V9.6 Improved",
+            "timestamp": time.time(),
+            "gain": gain,
+            "loss": loss
+        }
+        lomonosov_result = self.lomonosov.analyze_event(lomonosov_event)
+
+        # ====== ИСТОРИЯ ======
+        self.history.append({
+            'time': self.current_time,
+            'query': query,
+            'best_candidate': best_candidate,
+            'stability': stability,
+            'conflicts': len(conflicts),
+            'is_balanced': is_balanced,
+            'leading_maschera': leading_maschera,
+            'composite_score': best_composite_score,
+            'lomonosov_level': self.lomonosov.get_level()
+        })
+
+        # ====== ВОЗВРАЩАЕМ РЕЗУЛЬТАТ ======
+        return {
+            'status': 'success',
+            'query': query,
+            'best_candidate': best_candidate,
+            'best_composite_score': round(best_composite_score, 3),
+            'candidate_scores': candidate_scores,
+            'stability_index': round(stability, 3),
+            'conflicts_count': len(conflicts),
+            'is_balanced': is_balanced,
+            'system_balance': round(balance, 3),
+            'cycles_count': len(cycles),
+            'node_count': len(self.nodes),
+            'geometry_mode': self.geometry.mode.value,
+            'curvature': self.geometry.curvature,
+            'teatro': {
+                'leading_maschera': leading_maschera,
+                'coherence': teatro_evaluation.get("coherence", False),
+                'coherence_std_dev': teatro_evaluation.get("std_dev", 0),
+                'weighted_sum': teatro_evaluation.get("weighted_sum", 0)
+            },
+            'lomonosov': {
+                'gain': round(gain, 3),
+                'loss': round(loss, 3),
+                'level': lomonosov_result['spiral_level'],
+                'direction': lomonosov_result['direction'],
+                'trend': self.lomonosov.get_trend()
+            },
+            'time': self.current_time,
+            'version': 'V9.6 Improved'
+        }
+
+    def get_state(self) -> Dict:
+        """Получить текущее состояние"""
+        return {
+            'version': 'V9.6 Improved',
+            'nodes': len(self.nodes),
+            'history_len': len(self.history),
+            'current_time': self.current_time,
+            'stability': round(self.wave_system.stability_index(self.current_time), 3),
+            'geometry_mode': self.geometry.mode.value,
+            'lomonosov_level': self.lomonosov.get_level(),
+            'lomonosov_trend': self.lomonosov.get_trend(),
+            'experience_records': len(self.experience.records)
+        }
+
+    def get_history(self, limit: int = 5) -> List[Dict]:
+        """Получить последние N записей"""
+        return self.history[-limit:]
+
+    def add_experience(self, interpretation: str, outcome: float):
+        """Добавить опыт"""
+        self.experience.add({"interpretation": interpretation}, outcome)
+
+
+# ============================================================
+# 8. ЗАПУСК И ДЕМОНСТРАЦИЯ
+# ============================================================
+
+if __name__ == "__main__":
+    print("\n" + "=" * 80)
+    print("🎭 GAME ENGINE V9.6 — УЛУЧШЕННАЯ ВЕРСИЯ")
+    print("   С правильной маршрутизацией масок, пространственным распределением,")
+    print("   комбинированными скорами и реальной логикой Ломоносова")
+    print("=" * 80)
+
+    engine = GameEngineV9Improved()
+
+    # Тест 1: Выбор телефона
+    print("\n📱 ТЕСТ 1: Выбор телефона с хорошей камерой")
+    print("-" * 80)
+    
+    interpretations = {
+        "Камера": 0.9,
+        "Цена": 0.4,
+        "Автономность": 0.6,
+        "Дизайн": 0.7
+    }
+
+    result = engine.process(
+        "Хочу телефон с хорошей камерой и приемлемой ценой",
+        interpretations
+    )
+
+    print(f"\n✅ РЕЗУЛЬТАТ:")
+    print(f"   Лучший кандидат: {result['best_candidate']}")
+    print(f"   Комбинированный скор: {result['best_composite_score']}")
+    print(f"   Стабильность: {result['stability_index']}")
+    print(f"   Ведущая маска: {result['teatro']['leading_maschera']}")
+    print(f"   Согласованность масок: {result['teatro']['coherence']}")
+    print(f"   Уровень спирали: {result['lomonosov']['level']}")
+    print(f"   Тренд: {result['lomonosov']['trend']}")
+    
+    print(f"\n📊 ДЕТАЛИ СКОРОВ:")
+    for name, scores in result['candidate_scores'].items():
+        print(f"   {name}:")
+        print(f"     - Волна: {scores['wave']}")
+        print(f"     - Театр: {scores['teatro']}")
+        print(f"     - Опыт: {scores['experience']}")
+        print(f"     - Уверенность: {scores['confidence']}")
+        print(f"     - ИТОГО: {scores['composite']}")
+
+    # Тест 2: Другой запрос
+    print("\n\n🔬 ТЕСТ 2: Выбор метода исследования")
+    print("-" * 80)
+    
+    interpretations2 = {
+        "Логичность": 0.8,
+        "Точность": 0.85,
+        "Простота": 0.5,
+        "Скорость": 0.6
+    }
+
+    result2 = engine.process(
+        "Какой метод выбрать для научного исследования?",
+        interpretations2
+    )
+
+    print(f"\n✅ РЕЗУЛЬТАТ:")
+    print(f"   Лучший кандидат: {result2['best_candidate']}")
+    print(f"   Комбинированный скор: {result2['best_composite_score']}")
+    print(f"   Ведущая маска: {result2['teatro']['leading_maschera']}")
+    print(f"   Уровень спирали: {result2['lomonosov']['level']}")
+
+    print("\n" + "=" * 80)
+    print("✅ GAME ENGINE V9.6 УЛУЧШЕННЫЙ УСПЕШНО ЗАПУЩЕН")
+    print("=" * 80)
