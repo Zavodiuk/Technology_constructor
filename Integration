@@ -1,0 +1,589 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+INTEGRATION V9 — REAL ARCHITECTURE
+================================================================================
+Реальная интеграция четырёх компонентов V9:
+1. hyperbolic_graphs_v9.py       — пространство Лобачевского, гиперболические расстояния
+2. self_learning_guard.py        — защита от неконтролируемого обучения (max 20%/мес)
+3. byzantine_agreement.py        — консенсус (PBFT, троичная логика)
+4. v9_troichno_matrichnaya.py    — игровой движок, троичные матрицы, операции
+
+ЛОГИКА ИНТЕГРАЦИИ:
+- Каждый шаг проходит через консенсус
+- LearningGuard лимитирует рост знаний
+- GameEngine выполняет переходы
+- HyperbolicGraph отслеживает траекторию в L-пространстве
+- Ломоносовская спираль анализирует gain/loss
+================================================================================
+"""
+
+import json
+import time
+import math
+from typing import Dict, Any, Optional, List, Tuple
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+# ============================================================
+# ИМПОРТЫ КОМПОНЕНТОВ V9
+# ============================================================
+
+# Предполагается, что все четыре модуля находятся в sys.path
+# from hyperbolic_graphs_v9 import HyperbolicGraph, HyperbolicPoint, HyperbolicNode
+# from self_learning_guard import LearningGuard
+# from byzantine_agreement import PBFTEngine, TernaryConsensus
+# from v9_troichno_matrichnaya import GameEngineV9, TernaryMatrix, LomonosovSpiral
+
+
+# ============================================================
+# 1. ИНТЕГРАЦИОННЫЙ ТИП ДАННЫХ
+# ============================================================
+
+@dataclass
+class IntegrationStep:
+    """Результат одного интегрированного шага"""
+    step_number: int
+    timestamp: float
+    query: str
+    interpretations: Dict[str, float]
+    
+    # Результаты консенсуса
+    consensus_proposal_id: str
+    consensus_decision: Optional[int]  # -1, 0, 1
+    consensus_nodes_voted: int
+    
+    # Результаты LearningGuard
+    learning_approved: bool
+    learning_mode: str
+    learning_growth: float
+    
+    # Результаты GameEngine
+    engine_operation: str
+    engine_block_index: int
+    engine_stability: float
+    
+    # Результаты HyperbolicGraph
+    hyperbolic_node_id: str
+    hyperbolic_distance: float
+    
+    # Результаты Ломоносова
+    lomonosov_level: int
+    lomonosov_direction: int
+    
+    # Общий статус
+    success: bool
+    error_message: Optional[str] = None
+    
+    def to_dict(self) -> Dict:
+        return {
+            'step': self.step_number,
+            'timestamp': self.timestamp,
+            'query': self.query,
+            'consensus': {
+                'decision': self.consensus_decision,
+                'nodes_voted': self.consensus_nodes_voted,
+                'proposal_id': self.consensus_proposal_id
+            },
+            'learning': {
+                'approved': self.learning_approved,
+                'mode': self.learning_mode,
+                'growth': round(self.learning_growth, 4)
+            },
+            'engine': {
+                'operation': self.engine_operation,
+                'block_index': self.engine_block_index,
+                'stability': round(self.engine_stability, 3)
+            },
+            'hyperbolic': {
+                'node_id': self.hyperbolic_node_id,
+                'distance': round(self.hyperbolic_distance, 3)
+            },
+            'lomonosov': {
+                'level': self.lomonosov_level,
+                'direction': self.lomonosov_direction
+            },
+            'success': self.success,
+            'error': self.error_message
+        }
+
+
+# ============================================================
+# 2. ГЛАВНАЯ ИНТЕГРАЦИОННАЯ СИСТЕМА
+# ============================================================
+
+class ArchitectureV9Integrated:
+    """
+    Единая интеграция четырёх компонентов V9.
+    
+    Рабочий поток:
+    1. Запрос входит с query + interpretations
+    2. CONSENSUS проверяет согласие узлов (PBFT, троичная логика)
+    3. LEARNING_GUARD проверяет допуск на рост (max 20%/мес)
+    4. GAME_ENGINE выполняет переход в матричном пространстве
+    5. HYPERBOLIC_GRAPH отслеживает позицию в L-пространстве
+    6. LOMONOSOV анализирует gain/loss и уровень спирали
+    """
+    
+    def __init__(self, 
+                 consensus_engine=None,
+                 learning_guard=None,
+                 game_engine=None,
+                 hyperbolic_graph=None):
+        """
+        Args:
+            consensus_engine: PBFTEngine для консенсуса (optional)
+            learning_guard: LearningGuard для защиты (optional)
+            game_engine: GameEngineV9 для переходов (optional)
+            hyperbolic_graph: HyperbolicGraph для отслеживания (optional)
+        """
+        self.consensus = consensus_engine
+        self.learning_guard = learning_guard
+        self.game_engine = game_engine
+        self.hyperbolic_graph = hyperbolic_graph
+        
+        self.step_counter = 0
+        self.history: List[IntegrationStep] = []
+        self.active = True
+        
+        self._log("ArchitectureV9Integrated инициализирована")
+    
+    def _log(self, msg: str):
+        """Логирование с префиксом"""
+        print(f"[ArchitectureV9] {msg}")
+    
+    # ====================================================================
+    # ФАЗА 1: КОНСЕНСУС
+    # ====================================================================
+    
+    def _consensus_phase(self, query: str, interpretations: Dict[str, float]) -> Tuple[Optional[int], int, str]:
+        """
+        Фаза консенсуса (PBFT + троичная логика).
+        
+        Returns:
+            (decision, votes_count, proposal_id)
+            decision: -1 (против), 0 (воздержалась), 1 (за)
+        """
+        if not self.consensus:
+            # Симуляция: простое большинство
+            avg = sum(interpretations.values()) / len(interpretations)
+            return (1 if avg > 0.5 else (-1 if avg < 0.3 else 0), len(interpretations), "simulated")
+        
+        try:
+            # Создаём предложение
+            proposal = self.consensus.propose("node_0", {"query": query, "data": interpretations})
+            proposal_id = proposal.id
+            
+            # Каждый интерпретация становится голосом
+            vote_count = 0
+            for i, (name, score) in enumerate(interpretations.items()):
+                # Преобразуем score в троичный голос
+                if score > 0.6:
+                    vote = 1  # ЗА
+                elif score < 0.4:
+                    vote = -1  # ПРОТИВ
+                else:
+                    vote = 0  # ВОЗДЕРЖАЛАСЬ
+                
+                node_id = f"node_{i % 5}"  # Циклируем по 5 узлам
+                self.consensus.vote(node_id, proposal_id, vote)
+                vote_count += 1
+            
+            # Достигаем консенсуса
+            decision = self.consensus.reach_consensus(proposal_id, timeout=5.0)
+            
+            self._log(f"✅ Консенсус: решение={decision}, голосов={vote_count}, proposal={proposal_id[:8]}...")
+            return (decision, vote_count, proposal_id)
+        
+        except Exception as e:
+            self._log(f"❌ Ошибка консенсуса: {e}")
+            return (None, 0, "error")
+    
+    # ====================================================================
+    # ФАЗА 2: LEARNING GUARD
+    # ====================================================================
+    
+    def _learning_phase(self, interpretations: Dict[str, float]) -> Tuple[bool, str, float]:
+        """
+        Фаза проверки обучения.
+        
+        Вычисляем proposed_growth на основе средней уверенности
+        и проверяем, одобрит ли LearningGuard этот рост.
+        
+        Returns:
+            (approved, mode, growth_value)
+        """
+        if not self.learning_guard:
+            # Симуляция: всегда одобрено
+            avg = sum(interpretations.values()) / len(interpretations)
+            return (True, "NORMAL", avg * 0.1)
+        
+        try:
+            # Вычисляем предполагаемый рост
+            avg_confidence = sum(interpretations.values()) / len(interpretations)
+            proposed_growth = avg_confidence * 0.05  # До 5% при max confidence
+            
+            # Проверяем согласие
+            approved = self.learning_guard.approve_learning(proposed_growth)
+            mode = self.learning_guard.get_mode()
+            
+            self._log(f"🛡️ LearningGuard: одобрено={approved}, режим={mode}, рост={proposed_growth:.3f}")
+            return (approved, mode, proposed_growth)
+        
+        except Exception as e:
+            self._log(f"❌ Ошибка LearningGuard: {e}")
+            return (False, "ERROR", 0.0)
+    
+    # ====================================================================
+    # ФАЗА 3: GAME ENGINE
+    # ====================================================================
+    
+    def _engine_phase(self, consensus_decision: Optional[int], 
+                      interpretations: Dict[str, float]) -> Tuple[str, int, float]:
+        """
+        Фаза выполнения переходов в игровом движке.
+        
+        Выбираем операцию на основе консенсуса и запускаем переход.
+        
+        Returns:
+            (operation, block_index, stability)
+        """
+        if not self.game_engine:
+            return ("none", 0, 0.5)
+        
+        try:
+            # Выбираем операцию на основе решения консенсуса
+            if consensus_decision == 1:
+                operation = "add"
+            elif consensus_decision == -1:
+                operation = "multiply"
+            else:
+                operation = "transpose"
+            
+            # Выполняем переход
+            block = self.game_engine.transition(
+                operation,
+                payload={"interpretations": interpretations, "consensus": consensus_decision}
+            )
+            
+            stability = self.game_engine.state.stability_index()
+            
+            self._log(f"⚡ GameEngine: операция={operation}, блок=#{block.index}, стабильность={stability:.3f}")
+            return (operation, block.index, stability)
+        
+        except Exception as e:
+            self._log(f"❌ Ошибка GameEngine: {e}")
+            return ("error", -1, 0.0)
+    
+    # ====================================================================
+    # ФАЗА 4: HYPERBOLIC GRAPH
+    # ====================================================================
+    
+    def _hyperbolic_phase(self, consensus_decision: Optional[int],
+                         interpretations: Dict[str, float],
+                         learning_growth: float) -> Tuple[str, float]:
+        """
+        Фаза отслеживания в гиперболическом пространстве.
+        
+        Создаём узел в L-пространстве и вычисляем расстояние до центра.
+        
+        Returns:
+            (node_id, distance_to_center)
+        """
+        if not self.hyperbolic_graph:
+            return (f"node_{self.step_counter}", 0.0)
+        
+        try:
+            # Импортируем на лету, если нужно
+            try:
+                from hyperbolic_graphs_v9 import HyperbolicPoint
+            except ImportError:
+                self._log("⚠️ HyperbolicPoint не доступен, используем симуляцию")
+                return (f"node_{self.step_counter}", 0.0)
+            
+            # Создаём координаты на основе данных
+            avg_confidence = sum(interpretations.values()) / len(interpretations)
+            x = avg_confidence * 0.5
+            y = (consensus_decision or 0) * 0.3 if consensus_decision else 0.0
+            z = learning_growth * 0.2
+            
+            point = HyperbolicPoint(x, y, z)
+            
+            # Добавляем узел в граф
+            node_id = f"state_{self.step_counter}"
+            self.hyperbolic_graph.add_node(
+                node_id,
+                point,
+                label=f"Step {self.step_counter}",
+                value=consensus_decision or 0,
+                confidence=avg_confidence
+            )
+            
+            # Вычисляем расстояние до центра (0, 0, 0)
+            center = HyperbolicPoint(0.0, 0.0, 0.0)
+            distance = point.distance_to(center)
+            
+            self._log(f"🌀 HyperbolicGraph: узел={node_id}, расстояние={distance:.3f}")
+            return (node_id, distance)
+        
+        except Exception as e:
+            self._log(f"❌ Ошибка HyperbolicGraph: {e}")
+            return (f"node_{self.step_counter}", 0.0)
+    
+    # ====================================================================
+    # ФАЗА 5: LOMONOSOV SPIRAL
+    # ====================================================================
+    
+    def _lomonosov_phase(self, learning_growth: float, engine_stability: float) -> Tuple[int, int]:
+        """
+        Фаза анализа Ломоносовской спирали.
+        
+        gain = engine_stability (насколько система стабильна)
+        loss = 1.0 - learning_growth (сколько "неизвестного" осталось)
+        
+        Returns:
+            (spiral_level, direction)
+        """
+        if not self.game_engine:
+            return (0, 0)
+        
+        try:
+            lomonosov = self.game_engine.lomonosov
+            
+            # Анализируем событие
+            event = {
+                "reason": f"Step {self.step_counter}",
+                "location": "ArchitectureV9",
+                "timestamp": time.time(),
+                "gain": engine_stability,  # Стабильность = прибыль
+                "loss": 1.0 - learning_growth  # Остаток неизвестности = потеря
+            }
+            
+            result = lomonosov.analyze_event(event)
+            level = lomonosov.get_level()
+            direction = lomonosov.direction
+            
+            self._log(f"📊 Lomonosov: уровень={level}, направление={direction}, тренд={lomonosov.get_trend()}")
+            return (level, direction)
+        
+        except Exception as e:
+            self._log(f"❌ Ошибка Lomonosov: {e}")
+            return (0, 0)
+    
+    # ====================================================================
+    # ГЛАВНЫЙ МЕТОД: STEP
+    # ====================================================================
+    
+    def step(self, query: str, interpretations: Dict[str, float]) -> IntegrationStep:
+        """
+        Выполнить один полный шаг через все четыре компоненты.
+        
+        Args:
+            query: запрос пользователя
+            interpretations: словарь {interpretation_name: confidence_score}
+        
+        Returns:
+            IntegrationStep с полным результатом
+        """
+        self.step_counter += 1
+        timestamp = time.time()
+        
+        self._log(f"\n{'='*60}")
+        self._log(f"STEP #{self.step_counter}: {query}")
+        self._log(f"{'='*60}")
+        
+        try:
+            # ФАЗА 1: Консенсус
+            consensus_decision, consensus_votes, proposal_id = self._consensus_phase(query, interpretations)
+            if consensus_decision is None:
+                return IntegrationStep(
+                    step_number=self.step_counter,
+                    timestamp=timestamp,
+                    query=query,
+                    interpretations=interpretations,
+                    consensus_proposal_id=proposal_id,
+                    consensus_decision=None,
+                    consensus_nodes_voted=0,
+                    learning_approved=False,
+                    learning_mode="ERROR",
+                    learning_growth=0.0,
+                    engine_operation="none",
+                    engine_block_index=-1,
+                    engine_stability=0.0,
+                    hyperbolic_node_id="",
+                    hyperbolic_distance=0.0,
+                    lomonosov_level=0,
+                    lomonosov_direction=0,
+                    success=False,
+                    error_message="Consensus failed"
+                )
+            
+            # ФАЗА 2: Learning Guard
+            learning_approved, learning_mode, learning_growth = self._learning_phase(interpretations)
+            if not learning_approved:
+                self._log("⏸️ Переход заблокирован LearningGuard")
+                return IntegrationStep(
+                    step_number=self.step_counter,
+                    timestamp=timestamp,
+                    query=query,
+                    interpretations=interpretations,
+                    consensus_proposal_id=proposal_id,
+                    consensus_decision=consensus_decision,
+                    consensus_nodes_voted=consensus_votes,
+                    learning_approved=False,
+                    learning_mode=learning_mode,
+                    learning_growth=learning_growth,
+                    engine_operation="blocked",
+                    engine_block_index=-1,
+                    engine_stability=0.0,
+                    hyperbolic_node_id="",
+                    hyperbolic_distance=0.0,
+                    lomonosov_level=0,
+                    lomonosov_direction=0,
+                    success=False,
+                    error_message="Learning guard blocked transition"
+                )
+            
+            # ФАЗА 3: Game Engine
+            engine_operation, engine_block_index, engine_stability = self._engine_phase(
+                consensus_decision, interpretations
+            )
+            
+            # ФАЗА 4: Hyperbolic Graph
+            hyperbolic_node_id, hyperbolic_distance = self._hyperbolic_phase(
+                consensus_decision, interpretations, learning_growth
+            )
+            
+            # ФАЗА 5: Lomonosov Spiral
+            lomonosov_level, lomonosov_direction = self._lomonosov_phase(
+                learning_growth, engine_stability
+            )
+            
+            # Создаём результат
+            step_result = IntegrationStep(
+                step_number=self.step_counter,
+                timestamp=timestamp,
+                query=query,
+                interpretations=interpretations,
+                consensus_proposal_id=proposal_id,
+                consensus_decision=consensus_decision,
+                consensus_nodes_voted=consensus_votes,
+                learning_approved=learning_approved,
+                learning_mode=learning_mode,
+                learning_growth=learning_growth,
+                engine_operation=engine_operation,
+                engine_block_index=engine_block_index,
+                engine_stability=engine_stability,
+                hyperbolic_node_id=hyperbolic_node_id,
+                hyperbolic_distance=hyperbolic_distance,
+                lomonosov_level=lomonosov_level,
+                lomonosov_direction=lomonosov_direction,
+                success=True,
+                error_message=None
+            )
+            
+            self.history.append(step_result)
+            self._log(f"✅ STEP #{self.step_counter} завершён успешно")
+            
+            return step_result
+        
+        except Exception as e:
+            self._log(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
+            return IntegrationStep(
+                step_number=self.step_counter,
+                timestamp=timestamp,
+                query=query,
+                interpretations=interpretations,
+                consensus_proposal_id="",
+                consensus_decision=None,
+                consensus_nodes_voted=0,
+                learning_approved=False,
+                learning_mode="ERROR",
+                learning_growth=0.0,
+                engine_operation="error",
+                engine_block_index=-1,
+                engine_stability=0.0,
+                hyperbolic_node_id="",
+                hyperbolic_distance=0.0,
+                lomonosov_level=0,
+                lomonosov_direction=0,
+                success=False,
+                error_message=str(e)
+            )
+    
+    # ====================================================================
+    # АНАЛИТИКА
+    # ====================================================================
+    
+    def get_state(self) -> Dict[str, Any]:
+        """Получить текущее состояние архитектуры"""
+        return {
+            'version': 'V9 Integrated',
+            'step_counter': self.step_counter,
+            'history_len': len(self.history),
+            'active': self.active,
+            'components': {
+                'consensus': self.consensus is not None,
+                'learning_guard': self.learning_guard is not None,
+                'game_engine': self.game_engine is not None,
+                'hyperbolic_graph': self.hyperbolic_graph is not None
+            }
+        }
+    
+    def get_history(self, limit: int = 10) -> List[Dict]:
+        """Получить последние N шагов"""
+        return [step.to_dict() for step in self.history[-limit:]]
+    
+    def analyze(self) -> Dict[str, Any]:
+        """Полный анализ архитектуры"""
+        if not self.history:
+            return {'error': 'История пуста'}
+        
+        success_count = sum(1 for s in self.history if s.success)
+        blocked_count = sum(1 for s in self.history if s.learning_mode == "CONSERVATION")
+        
+        return {
+            'total_steps': len(self.history),
+            'successful': success_count,
+            'success_rate': success_count / len(self.history) if self.history else 0.0,
+            'learning_conservations': blocked_count,
+            'avg_stability': sum(s.engine_stability for s in self.history) / len(self.history) if self.history else 0.0,
+            'lomonosov_final_level': self.history[-1].lomonosov_level if self.history else 0,
+            'latest_step': self.history[-1].to_dict() if self.history else None
+        }
+
+
+# ============================================================
+# 3. ДЕМОНСТРАЦИЯ
+# ============================================================
+
+if __name__ == "__main__":
+    print("\n" + "="*70)
+    print("🚀 ARCHITECTURE V9 INTEGRATED — ДЕМОНСТРАЦИЯ")
+    print("   Объединяет четыре компоненты V9")
+    print("="*70)
+    
+    # Создаём архитектуру (пока без реальных компонентов)
+    arch = ArchitectureV9Integrated()
+    
+    print(f"\nСтатус: {arch.get_state()}")
+    
+    # Примеры запросов
+    test_queries = [
+        ("Принять архитектуру V9", {"технолог": 0.9, "юрист": 0.7, "маркетинг": 0.6}),
+        ("Расширить матрицу", {"инженер": 0.8, "архитектор": 0.85, "аналитик": 0.75}),
+        ("Запустить консенсус", {"узел_1": 0.5, "узел_2": 0.6, "узел_3": 0.4}),
+    ]
+    
+    print("\nЗАПУСК ТЕСТОВЫХ ЗАПРОСОВ:")
+    for query, interpretations in test_queries:
+        step = arch.step(query, interpretations)
+        print(f"\n{json.dumps(step.to_dict(), indent=2, ensure_ascii=False)}")
+    
+    print("\n" + "="*70)
+    print("ИТОГОВЫЙ АНАЛИЗ:")
+    print(json.dumps(arch.analyze(), indent=2, ensure_ascii=False))
+    print("="*70)
