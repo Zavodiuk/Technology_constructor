@@ -1,0 +1,569 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+RUBIKS CUBE V9 — КУБА РУ́БИКА КАК АЛГОРИТМ НА ТРОИЧНЫХ МАТРИЦАХ
+================================================================================
+ИДЕЯ:
+Кубик Рубика (3×3×3) = объемная троичная матрица L3
+Каждая ячейка (i, j, k) имеет состояние: -1 (конфликт), 0 (переход), 1 (гармония)
+
+ВРАЩЕНИЯ КУБИКА = ОПЕРАЦИИ НА МАТРИЦЕ:
+- Поворот грани F = матричное умножение на R_F
+- Поворот грани B = матричное умножение на R_B
+- И т.д. для U, D, L, R
+
+РЕШЕНИЕ КУБИКА = НАЙТИ ПОСЛЕДОВАТЕЛЬНОСТЬ ОПЕРАЦИЙ:
+Начальное состояние → [поворот_1, поворот_2, ..., поворот_N] → Идеальное состояние
+det = 1, entropy = 0
+
+ИНТЕГРАЦИЯ С V9:
+- Consensus: согласуются ли все ячейки кубика?
+- Learning Guard: не переучиваемся ли мы слишком быстро?
+- Game Engine: выполняем операции переходов
+- Hyperbolic Graph: отслеживаем траекторию в L-пространстве
+- Lomonosov: анализируем gain (приближение к решению) vs loss (запутывание)
+================================================================================
+"""
+
+import math
+import time
+import json
+from typing import List, Dict, Any, Tuple, Optional
+from dataclasses import dataclass, field
+from enum import Enum
+from itertools import permutations
+
+
+# ============================================================
+# 1. КОДИРОВАНИЕ КУБИКА РУБИКА В L3
+# ============================================================
+
+class CubePosition(Enum):
+    """Позиции 27 кубиков (включая центры, рёбра, углы, ядро)"""
+    # 8 углов
+    ULF = (0, 0, 0)  # верхний-левый-передний
+    URF = (0, 0, 2)
+    ULB = (0, 2, 0)
+    URB = (0, 2, 2)
+    DLF = (2, 0, 0)  # нижний-левый-передний
+    DRF = (2, 0, 2)
+    DLB = (2, 2, 0)
+    DRB = (2, 2, 2)
+    
+    # 12 рёбер
+    UF = (0, 1, 0)
+    UB = (0, 1, 2)
+    UL = (0, 0, 1)
+    UR = (0, 2, 1)
+    DF = (2, 1, 0)
+    DB = (2, 1, 2)
+    DL = (2, 0, 1)
+    DR = (2, 2, 1)
+    LF = (1, 0, 0)
+    LB = (1, 2, 0)
+    RF = (1, 0, 2)
+    RB = (1, 2, 2)
+    
+    # 6 центров
+    U = (0, 1, 1)
+    D = (2, 1, 1)
+    L = (1, 0, 1)
+    R = (1, 2, 1)
+    F = (1, 1, 0)
+    B = (1, 1, 2)
+    
+    # 1 ядро
+    CENTER = (1, 1, 1)
+
+
+class CubeState(Enum):
+    """Состояния ячейки кубика в L3"""
+    CORRECT = 1      # на месте, правильная ориентация
+    UNDEFINED = 0    # переходное состояние
+    WRONG = -1       # не на месте или неправильная ориентация
+
+
+# ============================================================
+# 2. ОБЪЕМНАЯ ТРОИЧНАЯ МАТРИЦА 3×3×3
+# ============================================================
+
+class RubiksCubeMatrix:
+    """
+    Куба Рубика как объемная троичная матрица 3×3×3
+    
+    КОДИРОВАНИЕ:
+    [[[a000, a001, a002],
+      [a010, a011, a012],
+      [a020, a021, a022]],
+     
+     [[a100, a101, a102],
+      [a110, a111, a112],
+      [a120, a121, a122]],
+     
+     [[a200, a201, a202],
+      [a210, a211, a212],
+      [a220, a221, a222]]]
+    
+    где каждый элемент a_ijk ∈ {-1, 0, 1}
+    """
+    
+    def __init__(self, data: Optional[List[List[List[int]]]] = None):
+        if data is None:
+            # Инициализация идеального кубика
+            data = [[[1 for _ in range(3)] for _ in range(3)] for _ in range(3)]
+        
+        self.data = data  # 3D массив [i][j][k]
+        self._validate()
+    
+    def _validate(self):
+        """Проверка корректности матрицы"""
+        if len(self.data) != 3 or not all(len(row) == 3 for layer in self.data for row in layer):
+            raise ValueError("Матрица должна быть 3×3×3")
+        
+        for i in range(3):
+            for j in range(3):
+                for k in range(3):
+                    if self.data[i][j][k] not in [-1, 0, 1]:
+                        raise ValueError(f"Недопустимое значение в [{i}][{j}][{k}]")
+    
+    def copy(self) -> 'RubiksCubeMatrix':
+        """Создать копию"""
+        import copy
+        return RubiksCubeMatrix(copy.deepcopy(self.data))
+    
+    def get_cell(self, pos: CubePosition) -> int:
+        """Получить значение ячейки"""
+        i, j, k = pos.value
+        return self.data[i][j][k]
+    
+    def set_cell(self, pos: CubePosition, val: int):
+        """Установить значение ячейки"""
+        i, j, k = pos.value
+        self.data[i][j][k] = val
+    
+    def is_solved(self) -> bool:
+        """Проверить, собран ли кубик (все 1)"""
+        for i in range(3):
+            for j in range(3):
+                for k in range(3):
+                    if self.data[i][j][k] != 1:
+                        return False
+        return True
+    
+    def get_unsolved_count(self) -> int:
+        """Количество неправильных ячеек"""
+        count = 0
+        for i in range(3):
+            for j in range(3):
+                for k in range(3):
+                    if self.data[i][j][k] != 1:
+                        count += 1
+        return count
+    
+    def get_conflict_count(self) -> int:
+        """Количество конфликтов (ячейки = -1)"""
+        count = 0
+        for i in range(3):
+            for j in range(3):
+                for k in range(3):
+                    if self.data[i][j][k] == -1:
+                        count += 1
+        return count
+    
+    def determinant_3d(self) -> int:
+        """
+        Детерминант 3D матрицы (норм форма, нормализованно в L3)
+        
+        det > 0  → система стремится к порядку
+        det = 0  → система в переходе
+        det < 0  → система в конфликте
+        
+        Результат нормализуется в {-1, 0, 1}
+        """
+        # Суммируем все элементы (упрощённо)
+        total = 0
+        for i in range(3):
+            for j in range(3):
+                for k in range(3):
+                    total += self.data[i][j][k]
+        
+        # Нормализация: всего 27 ячеек
+        # max sum = 27 (все 1)
+        # min sum = -27 (все -1)
+        if total > 0:
+            return 1
+        elif total < 0:
+            return -1
+        else:
+            return 0
+    
+    def entropy_3d(self) -> float:
+        """
+        Энтропия 3D матрицы (мера беспорядка)
+        
+        entropy = 0   → всё на месте (собран)
+        entropy = 1.0 → всё перемешано (максимум хаоса)
+        """
+        ones = sum(1 for i in range(3) for j in range(3) for k in range(3) 
+                   if self.data[i][j][k] == 1)
+        zeros = sum(1 for i in range(3) for j in range(3) for k in range(3)
+                    if self.data[i][j][k] == 0)
+        negs = sum(1 for i in range(3) for j in range(3) for k in range(3)
+                   if self.data[i][j][k] == -1)
+        
+        total = 27
+        p1 = ones / total
+        p0 = zeros / total
+        pn = negs / total
+        
+        entropy = 0.0
+        for p in [p1, p0, pn]:
+            if p > 0:
+                entropy -= p * math.log2(p) / math.log2(3)  # нормализуем на log2(3)
+        
+        return entropy
+    
+    def stability_index(self) -> float:
+        """
+        Индекс стабильности (0-1)
+        
+        0.0  → максимум конфликтов (все -1)
+        0.5  → переходное состояние (смесь)
+        1.0  → идеально собран (все 1)
+        """
+        conflicts = self.get_conflict_count()
+        return 1.0 - (conflicts / 27.0)
+    
+    def to_dict(self) -> Dict:
+        return {
+            'data': self.data,
+            'unsolved': self.get_unsolved_count(),
+            'conflicts': self.get_conflict_count(),
+            'determinant': self.determinant_3d(),
+            'entropy': round(self.entropy_3d(), 3),
+            'stability': round(self.stability_index(), 3),
+            'is_solved': self.is_solved()
+        }
+    
+    def __repr__(self):
+        unsolved = self.get_unsolved_count()
+        return f"RubiksCubeMatrix(unsolved={unsolved}, stability={self.stability_index():.2f})"
+
+
+# ============================================================
+# 3. ОПЕРАЦИИ ВРАЩЕНИЯ КУБИКА
+# ============================================================
+
+class CubeRotation:
+    """Вращения граней кубика Рубика"""
+    
+    @staticmethod
+    def rotate_face_clockwise(cube: RubiksCubeMatrix, axis: str) -> RubiksCubeMatrix:
+        """
+        Вращение грани по часовой стрелке
+        
+        axis: 'U', 'D', 'L', 'R', 'F', 'B'
+        
+        СМЫСЛ В L3:
+        - Ячейки на грани циклически смещаются
+        - Некоторые ячейки меняют ориентацию → переходят в 0
+        - При правильном вращении → возвращаются в 1
+        """
+        result = cube.copy()
+        
+        if axis == 'U':  # верх (i=0)
+            # Циклический сдвиг верхнего слоя
+            temp = [
+                [result.data[0][0][0], result.data[0][0][1], result.data[0][0][2]],
+                [result.data[0][1][0], result.data[0][1][1], result.data[0][1][2]],
+                [result.data[0][2][0], result.data[0][2][1], result.data[0][2][2]]
+            ]
+            
+            # Поворот верхнего слоя по часовой
+            rotated = [
+                [temp[2][0], temp[1][0], temp[0][0]],
+                [temp[2][1], temp[1][1], temp[0][1]],
+                [temp[2][2], temp[1][2], temp[0][2]]
+            ]
+            
+            for j in range(3):
+                for k in range(3):
+                    result.data[0][j][k] = rotated[j][k]
+        
+        elif axis == 'D':  # низ (i=2)
+            temp = [
+                [result.data[2][0][0], result.data[2][0][1], result.data[2][0][2]],
+                [result.data[2][1][0], result.data[2][1][1], result.data[2][1][2]],
+                [result.data[2][2][0], result.data[2][2][1], result.data[2][2][2]]
+            ]
+            
+            rotated = [
+                [temp[0][2], temp[1][2], temp[2][2]],
+                [temp[0][1], temp[1][1], temp[2][1]],
+                [temp[0][0], temp[1][0], temp[2][0]]
+            ]
+            
+            for j in range(3):
+                for k in range(3):
+                    result.data[2][j][k] = rotated[j][k]
+        
+        elif axis == 'F':  # передняя (k=0)
+            temp = [
+                [result.data[0][0][0], result.data[0][1][0], result.data[0][2][0]],
+                [result.data[1][0][0], result.data[1][1][0], result.data[1][2][0]],
+                [result.data[2][0][0], result.data[2][1][0], result.data[2][2][0]]
+            ]
+            
+            rotated = [
+                [temp[2][0], temp[1][0], temp[0][0]],
+                [temp[2][1], temp[1][1], temp[0][1]],
+                [temp[2][2], temp[1][2], temp[0][2]]
+            ]
+            
+            for i in range(3):
+                for j in range(3):
+                    result.data[i][j][0] = rotated[i][j]
+        
+        elif axis == 'B':  # задняя (k=2)
+            temp = [
+                [result.data[0][0][2], result.data[0][1][2], result.data[0][2][2]],
+                [result.data[1][0][2], result.data[1][1][2], result.data[1][2][2]],
+                [result.data[2][0][2], result.data[2][1][2], result.data[2][2][2]]
+            ]
+            
+            rotated = [
+                [temp[0][2], temp[1][2], temp[2][2]],
+                [temp[0][1], temp[1][1], temp[2][1]],
+                [temp[0][0], temp[1][0], temp[2][0]]
+            ]
+            
+            for i in range(3):
+                for j in range(3):
+                    result.data[i][j][2] = rotated[i][j]
+        
+        elif axis == 'L':  # левая (j=0)
+            temp = [
+                [result.data[0][0][0], result.data[0][0][1], result.data[0][0][2]],
+                [result.data[1][0][0], result.data[1][0][1], result.data[1][0][2]],
+                [result.data[2][0][0], result.data[2][0][1], result.data[2][0][2]]
+            ]
+            
+            rotated = [
+                [temp[2][0], temp[1][0], temp[0][0]],
+                [temp[2][1], temp[1][1], temp[0][1]],
+                [temp[2][2], temp[1][2], temp[0][2]]
+            ]
+            
+            for i in range(3):
+                for k in range(3):
+                    result.data[i][0][k] = rotated[i][k]
+        
+        elif axis == 'R':  # правая (j=2)
+            temp = [
+                [result.data[0][2][0], result.data[0][2][1], result.data[0][2][2]],
+                [result.data[1][2][0], result.data[1][2][1], result.data[1][2][2]],
+                [result.data[2][2][0], result.data[2][2][1], result.data[2][2][2]]
+            ]
+            
+            rotated = [
+                [temp[0][2], temp[1][2], temp[2][2]],
+                [temp[0][1], temp[1][1], temp[2][1]],
+                [temp[0][0], temp[1][0], temp[2][0]]
+            ]
+            
+            for i in range(3):
+                for k in range(3):
+                    result.data[i][2][k] = rotated[i][k]
+        
+        return result
+    
+    @staticmethod
+    def rotate_face_counterclockwise(cube: RubiksCubeMatrix, axis: str) -> RubiksCubeMatrix:
+        """Вращение против часовой стрелки (3 раза по часовой)"""
+        result = cube.copy()
+        for _ in range(3):
+            result = CubeRotation.rotate_face_clockwise(result, axis)
+        return result
+    
+    @staticmethod
+    def all_rotations() -> List[str]:
+        """Все возможные вращения"""
+        return ['U', 'D', 'L', 'R', 'F', 'B']
+
+
+# ============================================================
+# 4. РЕШАТЕЛЬ КУБИКА
+# ============================================================
+
+@dataclass
+class SolveStep:
+    """Один шаг решения"""
+    rotation: str
+    before_state: RubiksCubeMatrix
+    after_state: RubiksCubeMatrix
+    progress: float  # как далеко мы от решения (0-1)
+    gain: float      # насколько улучшилось
+    loss: float      # насколько ухудшилось
+
+
+class RubiksCubeSolver:
+    """Решатель кубика Рубика на основе V9"""
+    
+    def __init__(self, max_depth: int = 20):
+        self.max_depth = max_depth
+        self.solution_path: List[str] = []
+        self.history: List[SolveStep] = []
+    
+    def estimate_distance(self, cube: RubiksCubeMatrix) -> int:
+        """
+        Эвристика: оценка расстояния до решения
+        
+        На основе:
+        - Количества неправильных ячеек
+        - Количества конфликтов
+        - Энтропии
+        """
+        unsolved = cube.get_unsolved_count()
+        conflicts = cube.get_conflict_count() * 2  # конфликты важнее
+        entropy = cube.entropy_3d() * 5
+        
+        return unsolved + conflicts + int(entropy)
+    
+    def solve_greedy(self, cube: RubiksCubeMatrix, max_iterations: int = 100) -> bool:
+        """
+        Жадный алгоритм: на каждом шаге выбрать поворот, который уменьшает расстояние
+        
+        СМЫСЛ:
+        - На каждом шаге пробуем все 6 вращений
+        - Выбираем то, которое ближайшее к решению
+        - Повторяем, пока не соберём или не достигнем макс итераций
+        """
+        current = cube.copy()
+        
+        for iteration in range(max_iterations):
+            if current.is_solved():
+                return True
+            
+            current_distance = self.estimate_distance(current)
+            best_rotation = None
+            best_next_state = None
+            best_distance = current_distance
+            
+            # Пробуем все вращения
+            for axis in CubeRotation.all_rotations():
+                next_state = CubeRotation.rotate_face_clockwise(current, axis)
+                next_distance = self.estimate_distance(next_state)
+                
+                if next_distance < best_distance:
+                    best_distance = next_distance
+                    best_rotation = axis
+                    best_next_state = next_state
+            
+            # Если ничего не улучшилось — пробуем случайное вращение
+            if best_rotation is None:
+                import random
+                best_rotation = random.choice(CubeRotation.all_rotations())
+                best_next_state = CubeRotation.rotate_face_clockwise(current, best_rotation)
+            
+            # Записываем шаг
+            gain = current_distance - best_distance
+            loss = 0 if gain > 0 else -gain
+            progress = 1.0 - (best_distance / 81.0)  # максимум 81 ячейка неправильно
+            
+            step = SolveStep(
+                rotation=best_rotation,
+                before_state=current.copy(),
+                after_state=best_next_state.copy(),
+                progress=min(1.0, progress),
+                gain=gain,
+                loss=loss
+            )
+            
+            self.history.append(step)
+            self.solution_path.append(best_rotation)
+            current = best_next_state
+        
+        return current.is_solved()
+    
+    def get_solution(self) -> List[str]:
+        """Получить последовательность вращений для решения"""
+        return self.solution_path
+    
+    def get_analysis(self) -> Dict[str, Any]:
+        """Полный анализ процесса решения"""
+        if not self.history:
+            return {'error': 'Нет истории'}
+        
+        total_gain = sum(step.gain for step in self.history)
+        total_loss = sum(step.loss for step in self.history)
+        avg_progress = sum(step.progress for step in self.history) / len(self.history)
+        
+        return {
+            'steps': len(self.history),
+            'solution': self.solution_path,
+            'total_gain': total_gain,
+            'total_loss': total_loss,
+            'average_progress': round(avg_progress, 3),
+            'solved': self.history[-1].after_state.is_solved() if self.history else False,
+            'final_stability': round(self.history[-1].after_state.stability_index(), 3),
+            'final_entropy': round(self.history[-1].after_state.entropy_3d(), 3),
+            'steps_detail': [
+                {
+                    'rotation': step.rotation,
+                    'progress': round(step.progress, 3),
+                    'gain': round(step.gain, 1),
+                    'loss': round(step.loss, 1)
+                }
+                for step in self.history[-10:]  # последние 10 шагов
+            ]
+        }
+
+
+# ============================================================
+# 5. ДЕМОНСТРАЦИЯ
+# ============================================================
+
+if __name__ == "__main__":
+    print("\n" + "=" * 70)
+    print("🧩 КУБИК РУБИКА КАК АЛГОРИТМ НА ТРОИЧНЫХ МАТРИЦАХ V9")
+    print("=" * 70)
+    
+    # Создаём идеальный кубик
+    cube_perfect = RubiksCubeMatrix()
+    print("\n✅ ИДЕАЛЬНЫЙ КУБИК (СОБРАН):")
+    print(cube_perfect.to_dict())
+    
+    # Создаём перемешанный кубик
+    print("\n🔀 ПЕРЕМЕШИВАЕМ КУБИК (случайные вращения)...")
+    cube_mixed = RubiksCubeMatrix()
+    import random
+    for _ in range(10):
+        axis = random.choice(CubeRotation.all_rotations())
+        cube_mixed = CubeRotation.rotate_face_clockwise(cube_mixed, axis)
+    
+    print(cube_mixed)
+    print(f"Перемешано ячеек: {cube_mixed.get_unsolved_count()}/27")
+    print(f"Конфликтов: {cube_mixed.get_conflict_count()}/27")
+    print(f"Энтропия: {cube_mixed.entropy_3d():.3f}")
+    print(f"Стабильность: {cube_mixed.stability_index():.2f}")
+    
+    # Решаем кубик
+    print("\n🔧 РЕШАЕМ КУБИК (жадный алгоритм)...")
+    solver = RubiksCubeSolver(max_depth=50)
+    solved = solver.solve_greedy(cube_mixed, max_iterations=50)
+    
+    print("\n📊 РЕЗУЛЬТАТЫ РЕШЕНИЯ:")
+    analysis = solver.get_analysis()
+    print(json.dumps(analysis, indent=2, ensure_ascii=False))
+    
+    if solved:
+        print("\n✅ КУБИК СОБРАН!")
+        print(f"Потребовалось шагов: {len(solver.get_solution())}")
+        print(f"Последовательность: {' → '.join(solver.get_solution())}")
+    else:
+        print("\n⏳ Кубик не собран (достигнут лимит итераций)")
+    
+    print("\n" + "=" * 70)
+    
