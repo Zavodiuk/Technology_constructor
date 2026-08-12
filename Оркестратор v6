@@ -1,0 +1,757 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+ORCHESTRATOR V6 IMPROVED — ГЛАВНЫЙ МАРШРУТИЗАТОР
+================================================================================
+АРХИТЕКТУРА:
+
+REQUEST (с троичной логикой)
+    ↓
+[ORCHESTRATOR V6]
+├─ Анализ L3 (-1, 0, 1)
+├─ История успехов: какой компонент лучше?
+├─ API маршрутизация к выбранному компоненту
+└─ Сохранение состояния в Block X
+    ↓
+[V9 COMPONENTS] (через REST API)
+├─ Game Engine API
+├─ Byzantine Consensus API
+├─ Learning Guard API
+├─ Hyperbolic Graph API
+└─ Lomonosov Spiral API
+    ↓
+[BLOCK X] (хранит состояния + историю)
+
+ОПТИМИЗАЦИЯ V6:
+- Скорость обработки (минимум latency)
+- Кэширование часто используемых маршрутов
+- Батчинг запросов
+- Предсказание следующего компонента
+- Параллельная обработка (если возможно)
+================================================================================
+"""
+
+import json
+import time
+import hashlib
+import threading
+from typing import Dict, Any, List, Optional, Tuple
+from dataclasses import dataclass, field
+from enum import Enum
+from collections import defaultdict, deque
+import requests
+from functools import lru_cache
+
+
+# ============================================================
+# 1. ENUM И ТИПЫ ДАННЫХ
+# ============================================================
+
+class ComponentType(Enum):
+    """Типы компонентов V9"""
+    GAME_ENGINE = "game_engine"
+    CONSENSUS = "consensus"
+    LEARNING_GUARD = "learning_guard"
+    HYPERBOLIC_GRAPH = "hyperbolic_graph"
+    LOMONOSOV_SPIRAL = "lomonosov_spiral"
+    INTEGRATION = "integration"
+
+
+class RequestType(Enum):
+    """Типы запросов (для маршрутизации)"""
+    DECISION = "decision"           # требуется выбор
+    CONSENSUS = "consensus"         # требуется согласие
+    LEARNING = "learning"           # требуется защита
+    TRAJECTORY = "trajectory"       # отслеживание траектории
+    ANALYSIS = "analysis"           # анализ динамики
+    COMBINED = "combined"           # все компоненты
+
+
+class TernaryValue(Enum):
+    """Троичная логика L3"""
+    FALSE = -1
+    UNDEFINED = 0
+    TRUE = 1
+
+
+# ============================================================
+# 2. ИСТОРИЯ УСПЕХОВ
+# ============================================================
+
+@dataclass
+class SuccessMetrics:
+    """Метрики успеха для компонента"""
+    component: ComponentType
+    request_type: RequestType
+    total_calls: int = 0
+    successful_calls: int = 0
+    avg_latency_ms: float = 0.0
+    avg_quality_score: float = 0.5
+    last_used: float = field(default_factory=time.time)
+    
+    @property
+    def success_rate(self) -> float:
+        """Процент успешных вызовов"""
+        if self.total_calls == 0:
+            return 0.5  # нейтральный по умолчанию
+        return self.successful_calls / self.total_calls
+    
+    @property
+    def priority_score(self) -> float:
+        """Приоритет использования (0-1)"""
+        # Факторы:
+        # - success_rate (40%)
+        # - speed (30%, меньше latency = выше)
+        # - quality (20%)
+        # - recency (10%, недавно использованные предпочтительнее)
+        
+        now = time.time()
+        time_factor = 1.0 / (1.0 + (now - self.last_used) / 3600.0)  # экспоненциально затухает за часы
+        
+        score = (
+            0.40 * self.success_rate +
+            0.30 * (1.0 / (1.0 + self.avg_latency_ms / 100.0)) +  # быстрее = выше
+            0.20 * self.avg_quality_score +
+            0.10 * time_factor
+        )
+        return min(1.0, max(0.0, score))
+    
+    def to_dict(self) -> Dict:
+        return {
+            'component': self.component.value,
+            'request_type': self.request_type.value,
+            'total_calls': self.total_calls,
+            'successful': self.successful_calls,
+            'success_rate': round(self.success_rate, 3),
+            'avg_latency_ms': round(self.avg_latency_ms, 1),
+            'quality_score': round(self.avg_quality_score, 3),
+            'priority_score': round(self.priority_score, 3)
+        }
+
+
+class SuccessHistory:
+    """Умная история успехов для выбора компонентов"""
+    
+    def __init__(self, max_history: int = 10000):
+        self.metrics: Dict[Tuple[ComponentType, RequestType], SuccessMetrics] = {}
+        self.history_queue: deque = deque(maxlen=max_history)
+        self.lock = threading.Lock()
+    
+    def record_call(self, 
+                   component: ComponentType,
+                   request_type: RequestType,
+                   success: bool,
+                   latency_ms: float,
+                   quality_score: float = 0.5):
+        """Записать результат вызова компонента"""
+        with self.lock:
+            key = (component, request_type)
+            
+            if key not in self.metrics:
+                self.metrics[key] = SuccessMetrics(component, request_type)
+            
+            metrics = self.metrics[key]
+            metrics.total_calls += 1
+            if success:
+                metrics.successful_calls += 1
+            
+            # Скользящее среднее для latency
+            old_latency = metrics.avg_latency_ms
+            metrics.avg_latency_ms = (old_latency * 0.7 + latency_ms * 0.3)
+            
+            # Скользящее среднее для качества
+            old_quality = metrics.avg_quality_score
+            metrics.avg_quality_score = (old_quality * 0.7 + quality_score * 0.3)
+            
+            metrics.last_used = time.time()
+            
+            # Добавляем в очередь истории
+            self.history_queue.append({
+                'component': component.value,
+                'request_type': request_type.value,
+                'success': success,
+                'latency_ms': latency_ms,
+                'quality': quality_score,
+                'timestamp': time.time()
+            })
+    
+    def get_best_component(self, request_type: RequestType) -> Optional[ComponentType]:
+        """Найти компонент с наивысшим приоритетом для типа запроса"""
+        with self.lock:
+            candidates = [
+                (metrics, metrics.priority_score)
+                for (comp, req), metrics in self.metrics.items()
+                if req == request_type
+            ]
+            
+            if not candidates:
+                return None
+            
+            best_metrics, _ = max(candidates, key=lambda x: x[1])
+            return best_metrics.component
+    
+    def get_metrics(self, component: ComponentType, request_type: RequestType) -> Optional[SuccessMetrics]:
+        """Получить метрики компонента"""
+        return self.metrics.get((component, request_type))
+    
+    def to_dict(self) -> Dict:
+        """Сохранить историю"""
+        with self.lock:
+            return {
+                'metrics': {
+                    f"{k[0].value}:{k[1].value}": v.to_dict()
+                    for k, v in self.metrics.items()
+                },
+                'recent_history': list(self.history_queue)[-100:]  # последние 100
+            }
+
+
+# ============================================================
+# 3. РЕЕСТР КОМПОНЕНТОВ (API ENDPOINTS)
+# ============================================================
+
+@dataclass
+class ComponentEndpoint:
+    """Описание API endpoint компонента"""
+    component_type: ComponentType
+    base_url: str
+    port: int
+    endpoints: Dict[str, str] = field(default_factory=dict)
+    
+    @property
+    def url(self) -> str:
+        return f"http://{self.base_url}:{self.port}"
+    
+    def call_endpoint(self, endpoint_name: str, payload: Dict) -> Tuple[bool, Dict, float]:
+        """
+        Вызвать endpoint компонента
+        
+        Returns:
+            (success, response, latency_ms)
+        """
+        if endpoint_name not in self.endpoints:
+            return (False, {'error': f'Unknown endpoint: {endpoint_name}'}, 0.0)
+        
+        endpoint_path = self.endpoints[endpoint_name]
+        full_url = f"{self.url}/{endpoint_path}"
+        
+        try:
+            start_time = time.time()
+            response = requests.post(full_url, json=payload, timeout=5.0)
+            latency_ms = (time.time() - start_time) * 1000
+            
+            if response.status_code == 200:
+                return (True, response.json(), latency_ms)
+            else:
+                return (False, {'error': f'HTTP {response.status_code}'}, latency_ms)
+        
+        except requests.exceptions.RequestException as e:
+            return (False, {'error': str(e)}, 0.0)
+
+
+class ComponentRegistry:
+    """Реестр всех компонентов V9"""
+    
+    def __init__(self):
+        self.endpoints: Dict[ComponentType, ComponentEndpoint] = {}
+    
+    def register(self, endpoint: ComponentEndpoint):
+        """Зарегистрировать компонент"""
+        self.endpoints[endpoint.component_type] = endpoint
+    
+    def get_endpoint(self, component_type: ComponentType) -> Optional[ComponentEndpoint]:
+        """Получить endpoint компонента"""
+        return self.endpoints.get(component_type)
+    
+    def is_available(self, component_type: ComponentType) -> bool:
+        """Проверить доступность компонента"""
+        endpoint = self.get_endpoint(component_type)
+        if not endpoint:
+            return False
+        
+        # Проверяем health endpoint
+        try:
+            response = requests.get(f"{endpoint.url}/health", timeout=2.0)
+            return response.status_code == 200
+        except:
+            return False
+
+
+# ============================================================
+# 4. FAST PROCESSOR (ОПТИМИЗАЦИЯ СКОРОСТИ)
+# ============================================================
+
+class FastProcessor:
+    """Оптимизация обработки: кэширование, батчинг,预测"""
+    
+    def __init__(self, cache_size: int = 1000, batch_size: int = 10):
+        self.cache: Dict[str, Tuple[Dict, float]] = {}  # {request_hash: (response, timestamp)}
+        self.cache_size = cache_size
+        self.batch_queue: List[Dict] = []
+        self.batch_size = batch_size
+        self.lock = threading.Lock()
+    
+    def _hash_request(self, request: Dict) -> str:
+        """Хеш запроса для кэширования"""
+        content = json.dumps(request, sort_keys=True)
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
+    
+    def get_cached(self, request: Dict, ttl_seconds: float = 60.0) -> Optional[Dict]:
+        """Получить результат из кэша (если есть и не устарел)"""
+        request_hash = self._hash_request(request)
+        
+        with self.lock:
+            if request_hash in self.cache:
+                response, timestamp = self.cache[request_hash]
+                if (time.time() - timestamp) < ttl_seconds:
+                    return response
+                else:
+                    del self.cache[request_hash]
+        
+        return None
+    
+    def cache_response(self, request: Dict, response: Dict):
+        """Кэшировать ответ"""
+        request_hash = self._hash_request(request)
+        
+        with self.lock:
+            self.cache[request_hash] = (response, time.time())
+            
+            # Ограничиваем размер кэша
+            if len(self.cache) > self.cache_size:
+                # Удаляем самый старый
+                oldest_key = min(self.cache.keys(), 
+                                key=lambda k: self.cache[k][1])
+                del self.cache[oldest_key]
+    
+    def add_to_batch(self, request: Dict) -> bool:
+        """Добавить запрос в батч"""
+        with self.lock:
+            self.batch_queue.append(request)
+            if len(self.batch_queue) >= self.batch_size:
+                return True  # батч полный
+        return False
+    
+    def get_batch(self) -> Optional[List[Dict]]:
+        """Получить батч запросов"""
+        with self.lock:
+            if self.batch_queue:
+                batch = self.batch_queue[:]
+                self.batch_queue = []
+                return batch
+        return None
+
+
+# ============================================================
+# 5. BLOCK X INTEGRATION
+# ============================================================
+
+@dataclass
+class StateBlock:
+    """Блок состояния компонента"""
+    index: int
+    timestamp: float
+    component: ComponentType
+    state: Dict[str, Any]
+    request_hash: str
+    prev_hash: str
+    
+    @property
+    def hash(self) -> str:
+        content = f"{self.index}{self.timestamp}{self.component.value}{json.dumps(self.state, sort_keys=True)}{self.prev_hash}"
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
+    
+    def to_dict(self) -> Dict:
+        return {
+            'index': self.index,
+            'timestamp': self.timestamp,
+            'component': self.component.value,
+            'state': self.state,
+            'hash': self.hash[:8] + '...'
+        }
+
+
+class StateBlockchain:
+    """Блокчейн состояний компонентов"""
+    
+    def __init__(self):
+        self.blocks: List[StateBlock] = []
+    
+    def add_state(self, component: ComponentType, state: Dict, request_hash: str) -> StateBlock:
+        """Добавить состояние компонента в блокчейн"""
+        prev_hash = self.blocks[-1].hash if self.blocks else 'GENESIS'
+        
+        block = StateBlock(
+            index=len(self.blocks),
+            timestamp=time.time(),
+            component=component,
+            state=state,
+            request_hash=request_hash,
+            prev_hash=prev_hash
+        )
+        
+        self.blocks.append(block)
+        return block
+    
+    def get_latest_state(self, component: ComponentType) -> Optional[Dict]:
+        """Получить последнее состояние компонента"""
+        for block in reversed(self.blocks):
+            if block.component == component:
+                return block.state
+        return None
+    
+    def verify_chain(self) -> bool:
+        """Проверить целостность цепи"""
+        for i in range(1, len(self.blocks)):
+            if self.blocks[i].prev_hash != self.blocks[i-1].hash:
+                return False
+        return True
+    
+    def to_dict(self) -> Dict:
+        return {
+            'length': len(self.blocks),
+            'verified': self.verify_chain(),
+            'blocks': [b.to_dict() for b in self.blocks[-10:]]  # последние 10
+        }
+
+
+# ============================================================
+# 6. ORCHESTRATOR V6 — ГЛАВНАЯ СИСТЕМА
+# ============================================================
+
+@dataclass
+class OrchestratorRequest:
+    """Запрос к оркестратору"""
+    query: str
+    request_type: RequestType
+    interpretations: Dict[str, float]  # {name: confidence}
+    priority: int = 0  # 0 = normal, 1+ = urgent
+
+
+@dataclass
+class OrchestratorResponse:
+    """Ответ от оркестратора"""
+    success: bool
+    request_type: RequestType
+    selected_component: ComponentType
+    component_response: Dict[str, Any]
+    latency_ms: float
+    quality_score: float
+    cached: bool = False
+
+
+class OrchestratorV6:
+    """
+    Главный маршрутизатор V6
+    
+    ФУНКЦИИ:
+    1. L3-анализ запроса (-1, 0, 1)
+    2. Выбор компонента по истории успехов
+    3. API маршрутизация
+    4. Оптимизация скорости (кэширование, батчинг)
+    5. Сохранение состояний в Block X
+    """
+    
+    def __init__(self):
+        self.registry = ComponentRegistry()
+        self.history = SuccessHistory()
+        self.processor = FastProcessor(cache_size=10000, batch_size=20)
+        self.blockchain = StateBlockchain()
+        
+        self.request_counter = 0
+        self.start_time = time.time()
+        self.lock = threading.Lock()
+    
+    def _log(self, msg: str):
+        """Логирование"""
+        elapsed = time.time() - self.start_time
+        print(f"[OrchestratorV6 {elapsed:.1f}s] {msg}")
+    
+    # ---- МАРШРУТИЗАЦИЯ ----
+    
+    def _map_request_type(self, query: str, interpretations: Dict[str, float]) -> RequestType:
+        """
+        Определить тип запроса на основе L3 логики
+        
+        Анализируем avg confidence:
+        > 0.7  → TRUE   → DECISION/COMBINED
+        0.3-0.7 → UNDEFINED → CONSENSUS/LEARNING
+        < 0.3  → FALSE  → ANALYSIS
+        """
+        if not interpretations:
+            return RequestType.ANALYSIS
+        
+        avg_confidence = sum(interpretations.values()) / len(interpretations)
+        
+        if avg_confidence > 0.7:
+            return RequestType.DECISION  # уверены в выборе
+        elif avg_confidence > 0.5:
+            return RequestType.CONSENSUS  # нужно согласие
+        elif avg_confidence > 0.3:
+            return RequestType.LEARNING  # нужна защита
+        else:
+            return RequestType.ANALYSIS  # неуверены, анализируем
+    
+    def _select_component(self, request_type: RequestType) -> ComponentType:
+        """
+        Выбрать компонент по типу запроса и истории успехов
+        
+        Маппинг:
+        DECISION → Game Engine (выбор лучше всего делает)
+        CONSENSUS → Byzantine Consensus
+        LEARNING → Learning Guard
+        TRAJECTORY → Hyperbolic Graph
+        ANALYSIS → Lomonosov Spiral
+        """
+        type_to_component = {
+            RequestType.DECISION: ComponentType.GAME_ENGINE,
+            RequestType.CONSENSUS: ComponentType.CONSENSUS,
+            RequestType.LEARNING: ComponentType.LEARNING_GUARD,
+            RequestType.TRAJECTORY: ComponentType.HYPERBOLIC_GRAPH,
+            RequestType.ANALYSIS: ComponentType.LOMONOSOV_SPIRAL,
+            RequestType.COMBINED: ComponentType.INTEGRATION,
+        }
+        
+        default_component = type_to_component[request_type]
+        
+        # Проверяем историю успехов
+        best_component = self.history.get_best_component(request_type)
+        
+        if best_component and self.registry.is_available(best_component):
+            self._log(f"✅ Выбран компонент по истории: {best_component.value}")
+            return best_component
+        
+        # Резервный вариант
+        self._log(f"📌 Выбран компонент по умолчанию: {default_component.value}")
+        return default_component
+    
+    # ---- ОБРАБОТКА ЗАПРОСА ----
+    
+    def route_request(self, orchestrator_request: OrchestratorRequest) -> Optional[OrchestratorResponse]:
+        """
+        Главный метод маршрутизации
+        
+        Архитектура:
+        1. Определить тип запроса (L3-анализ)
+        2. Выбрать компонент (по истории)
+        3. Проверить кэш
+        4. Вызвать API компонента
+        5. Сохранить результат в Block X
+        6. Записать метрики
+        """
+        with self.lock:
+            self.request_counter += 1
+            request_id = self.request_counter
+        
+        start_time = time.time()
+        self._log(f"\n{'='*60}")
+        self._log(f"REQUEST #{request_id}: {orchestrator_request.query}")
+        self._log(f"{'='*60}")
+        
+        try:
+            # 1. ОПРЕДЕЛИТЬ ТИП ЗАПРОСА
+            request_type = self._map_request_type(
+                orchestrator_request.query,
+                orchestrator_request.interpretations
+            )
+            self._log(f"📍 Тип запроса: {request_type.value}")
+            
+            # 2. ВЫБРАТЬ КОМПОНЕНТ
+            component = self._select_component(request_type)
+            endpoint = self.registry.get_endpoint(component)
+            
+            if not endpoint:
+                self._log(f"❌ Компонент не зарегистрирован: {component.value}")
+                return None
+            
+            # 3. ПРОВЕРИТЬ КЭШ (оптимизация скорости)
+            request_payload = {
+                'query': orchestrator_request.query,
+                'interpretations': orchestrator_request.interpretations
+            }
+            
+            cached_response = self.processor.get_cached(request_payload, ttl_seconds=300.0)
+            if cached_response:
+                self._log(f"⚡ Результат найден в кэше!")
+                latency_ms = 0.1
+                
+                return OrchestratorResponse(
+                    success=True,
+                    request_type=request_type,
+                    selected_component=component,
+                    component_response=cached_response,
+                    latency_ms=latency_ms,
+                    quality_score=0.9,
+                    cached=True
+                )
+            
+            # 4. ВЫЗВАТЬ API КОМПОНЕНТА
+            self._log(f"🔗 Вызываем API: {component.value}")
+            success, response, latency_ms = endpoint.call_endpoint('process', request_payload)
+            
+            if not success:
+                self._log(f"❌ API ошибка: {response.get('error')}")
+                self.history.record_call(component, request_type, False, latency_ms, quality_score=0.0)
+                return None
+            
+            quality_score = response.get('quality_score', 0.5)
+            
+            # 5. СОХРАНИТЬ В BLOCK X
+            request_hash = hashlib.sha256(
+                json.dumps(request_payload, sort_keys=True).encode()
+            ).hexdigest()[:16]
+            
+            state_block = self.blockchain.add_state(
+                component=component,
+                state={
+                    'response': response,
+                    'latency_ms': latency_ms,
+                    'quality_score': quality_score
+                },
+                request_hash=request_hash
+            )
+            
+            self._log(f"📦 Состояние сохранено в Block X #{state_block.index}")
+            
+            # 6. ЗАПИСАТЬ МЕТРИКИ
+            self.history.record_call(
+                component=component,
+                request_type=request_type,
+                success=True,
+                latency_ms=latency_ms,
+                quality_score=quality_score
+            )
+            
+            self._log(f"✅ Обработка завершена (latency: {latency_ms:.1f}ms, quality: {quality_score:.2f})")
+            
+            # КЭШИРОВАТЬ РЕЗУЛЬТАТ
+            self.processor.cache_response(request_payload, response)
+            
+            # ВОЗВРАЩАЕМ РЕЗУЛЬТАТ
+            latency = (time.time() - start_time) * 1000
+            
+            return OrchestratorResponse(
+                success=True,
+                request_type=request_type,
+                selected_component=component,
+                component_response=response,
+                latency_ms=latency,
+                quality_score=quality_score,
+                cached=False
+            )
+        
+        except Exception as e:
+            self._log(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
+            return None
+    
+    # ---- АДМИНИСТРИРОВАНИЕ ----
+    
+    def register_component(self, component_type: ComponentType, 
+                          base_url: str, port: int,
+                          endpoints: Dict[str, str]):
+        """Зарегистрировать компонент V9"""
+        endpoint = ComponentEndpoint(
+            component_type=component_type,
+            base_url=base_url,
+            port=port,
+            endpoints=endpoints
+        )
+        self.registry.register(endpoint)
+        self._log(f"✅ Компонент зарегистрирован: {component_type.value} ({base_url}:{port})")
+    
+    def get_status(self) -> Dict[str, Any]:
+        """Статус оркестратора"""
+        return {
+            'version': 'V6.0',
+            'uptime_seconds': time.time() - self.start_time,
+            'requests_processed': self.request_counter,
+            'components_registered': len(self.registry.endpoints),
+            'blockchain': self.blockchain.to_dict(),
+            'history': self.history.to_dict(),
+            'cache_size': len(self.processor.cache),
+        }
+    
+    def get_metrics(self) -> Dict[str, Any]:
+        """Детальные метрики"""
+        return {
+            'history': self.history.to_dict(),
+            'blockchain_verified': self.blockchain.verify_chain(),
+            'cache': {
+                'size': len(self.processor.cache),
+                'max_size': self.processor.cache_size
+            }
+        }
+
+
+# ============================================================
+# 7. ДЕМОНСТРАЦИЯ
+# ============================================================
+
+if __name__ == "__main__":
+    print("\n" + "=" * 70)
+    print("🎼 ORCHESTRATOR V6 IMPROVED — ГЛАВНЫЙ МАРШРУТИЗАТОР")
+    print("=" * 70)
+    
+    # Инициализируем оркестратор
+    orchestrator = OrchestratorV6()
+    
+    # Регистрируем компоненты (примеры)
+    orchestrator.register_component(
+        ComponentType.GAME_ENGINE,
+        "localhost", 8001,
+        {'process': 'api/v9/game/process'}
+    )
+    
+    orchestrator.register_component(
+        ComponentType.CONSENSUS,
+        "localhost", 8002,
+        {'process': 'api/v9/consensus/decide'}
+    )
+    
+    orchestrator.register_component(
+        ComponentType.LEARNING_GUARD,
+        "localhost", 8003,
+        {'process': 'api/v9/learning/check'}
+    )
+    
+    # Примеры запросов
+    requests_to_process = [
+        OrchestratorRequest(
+            query="Принять архитектуру V9?",
+            request_type=RequestType.DECISION,
+            interpretations={"технолог": 0.9, "юрист": 0.7, "маркетинг": 0.6}
+        ),
+        OrchestratorRequest(
+            query="Согласны ли узлы с решением?",
+            request_type=RequestType.CONSENSUS,
+            interpretations={"узел_1": 0.8, "узел_2": 0.6, "узел_3": 0.5}
+        ),
+        OrchestratorRequest(
+            query="Не переучиваем ли слишком быстро?",
+            request_type=RequestType.LEARNING,
+            interpretations={"система": 0.4}
+        ),
+    ]
+    
+    # Обработка запросов
+    for req in requests_to_process:
+        response = orchestrator.route_request(req)
+        
+        if response:
+            print(f"\n✅ ОТВЕТ:")
+            print(f"   Компонент: {response.selected_component.value}")
+            print(f"   Тип: {response.request_type.value}")
+            print(f"   Latency: {response.latency_ms:.1f}ms")
+            print(f"   Quality: {response.quality_score:.2f}")
+            print(f"   Кэширован: {response.cached}")
+        else:
+            print(f"\n❌ ОШИБКА обработки запроса")
+    
+    # Статус
+    print("\n" + "=" * 70)
+    print("📊 СТАТУС ОРКЕСТРАТОРА:")
+    print(json.dumps(orchestrator.get_status(), indent=2, ensure_ascii=False))
+    
+    print("\n" + "=" * 70)
