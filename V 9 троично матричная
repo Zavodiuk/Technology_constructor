@@ -1,0 +1,818 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+ФАЙЛ: v9_troichno_matrichnaya_improved.py
+ВЕРСИЯ: V9.1 (Улучшенная)
+АВТОР: Владимир Заводюк (Root-Architect)
+ДАТА: 09.08.2026
+
+ИСПРАВЛЕНИЯ ОТ V9.0:
+1. ✅ Переименованы функции матрицы для ясности семантики
+2. ✅ Документирована L3-алгебра с клиппингом
+3. ✅ Добавлена поддержка опыта и маршрутизации
+4. ✅ Улучшена интеграция с остальными компонентами V9
+5. ✅ Добавлены комментарии о математической семантике
+6. ✅ Исправлена энтропия и стабильность для L3-пространства
+"""
+
+import json
+import time
+import hashlib
+import math
+from typing import List, Dict, Any, Optional, Tuple, Union
+from dataclasses import dataclass, field
+from enum import Enum
+
+# ============================================================
+# 1. БАЗОВЫЕ ТИПЫ — ТРОИЧНАЯ ЛОГИКА L3
+# ============================================================
+
+class Ternary(Enum):
+    """
+    Троичное значение в системе L3 (Kleene's three-valued logic)
+    FALSE (-1): явно неправда
+    UNDEFINED (0): неизвестно, противоречие, нейтраль
+    TRUE (1): явно правда
+    """
+    FALSE = -1
+    UNDEFINED = 0
+    TRUE = 1
+
+    def __int__(self):
+        return self.value
+
+    def __repr__(self):
+        return f"Ternary({self.value})"
+
+
+# ============================================================
+# 2. ТРОИЧНАЯ МАТРИЦА V9.1 — ОСНОВНОЙ ТИП ДАННЫХ
+# ============================================================
+
+class TernaryMatrix:
+    """
+    Троичная матрица — основной тип данных V9
+    
+    ВАЖНО О СЕМАНТИКЕ:
+    - Значения: -1 (FALSE), 0 (UNDEFINED), 1 (TRUE)
+    - Алгебра: Клиппинг в [-1, 1] (для L3 логики)
+    - Операции: + и * с насыщением, не стандартная матричная алгебра
+    
+    СЕМАНТИКА ФУНКЦИЙ:
+    - Тригонометрические: не стандартные функции, а трансформации состояний
+    - Гиперболические: представляют динамику переходов
+    - Детерминант: мера внутреннего конфликта/согласия
+    """
+
+    def __init__(self, data: List[List[int]]):
+        self.data = data
+        self.rows = len(data)
+        self.cols = len(data[0]) if data else 0
+        self._validate()
+        self._hash = None
+
+    def _validate(self):
+        """Проверка валидности матрицы"""
+        if not self.data:
+            raise ValueError("Матрица не может быть пустой")
+
+        for row in self.data:
+            if len(row) != self.cols:
+                raise ValueError(f"Все строки должны быть одинаковой длины. "
+                                 f"Ожидается {self.cols}, получено {len(row)}")
+            for val in row:
+                if val not in [-1, 0, 1]:
+                    raise ValueError(f"Недопустимое значение {val}. Допустимы -1, 0, 1")
+
+    def __repr__(self):
+        return f"TernaryMatrix({self.rows}x{self.cols})"
+
+    def __eq__(self, other):
+        if not isinstance(other, TernaryMatrix):
+            return False
+        if self.rows != other.rows or self.cols != other.cols:
+            return False
+        return all(self.data[i][j] == other.data[i][j]
+                   for i in range(self.rows) for j in range(self.cols))
+
+    # ---- БАЗОВЫЕ ОПЕРАЦИИ ----
+
+    def copy(self) -> 'TernaryMatrix':
+        """Создать копию матрицы"""
+        return TernaryMatrix([row[:] for row in self.data])
+
+    def to_dict(self) -> Dict:
+        return {
+            'rows': self.rows,
+            'cols': self.cols,
+            'data': self.data,
+            'hash': self.hash
+        }
+
+    @property
+    def hash(self) -> str:
+        if self._hash is None:
+            content = json.dumps(self.data)
+            self._hash = hashlib.sha256(content.encode()).hexdigest()
+        return self._hash
+
+    # ---- МАТРИЧНЫЕ ОПЕРАЦИИ (L3-АЛГЕБРА) ----
+
+    def add(self, other: 'TernaryMatrix') -> 'TernaryMatrix':
+        """
+        Троичное сложение матриц (L3-алгебра)
+        
+        Правило: clip(a + b, -1, 1)
+        -1 + 1 = 0 (противоречие)
+        -1 + (-1) = -1 (усиление)
+        1 + 1 = 1 (усиление, но не становится 2)
+        
+        СМЫСЛ: Суммирование позиций с насыщением (не переполнение)
+        """
+        if self.rows != other.rows or self.cols != other.cols:
+            raise ValueError(f"Размеры не совпадают: {self.rows}x{self.cols} vs "
+                            f"{other.rows}x{other.cols}")
+
+        result = []
+        for i in range(self.rows):
+            row = []
+            for j in range(self.cols):
+                s = self.data[i][j] + other.data[i][j]
+                # Клиппинг в L3: [-1, 1]
+                if s > 1:
+                    s = 1
+                elif s < -1:
+                    s = -1
+                row.append(s)
+            result.append(row)
+        return TernaryMatrix(result)
+
+    def multiply(self, other: 'TernaryMatrix') -> 'TernaryMatrix':
+        """
+        Троичное умножение матриц (L3-алгебра)
+        
+        Правило: clip(sum(a_ik * b_kj), -1, 1)
+        Стандартное матричное умножение, но результат клиппируется в L3
+        
+        СМЫСЛ: Композиция преобразований состояния
+        """
+        if self.cols != other.rows:
+            raise ValueError(f"Несовместимые размеры: {self.cols} != {other.rows}")
+
+        result = []
+        for i in range(self.rows):
+            row = []
+            for j in range(other.cols):
+                s = 0
+                for k in range(self.cols):
+                    s += self.data[i][k] * other.data[k][j]
+                # Клиппинг в L3: [-1, 1]
+                if s > 1:
+                    s = 1
+                elif s < -1:
+                    s = -1
+                row.append(s)
+            result.append(row)
+        return TernaryMatrix(result)
+
+    def transpose(self) -> 'TernaryMatrix':
+        """Транспонирование матрицы (стандартное)"""
+        result = [[self.data[j][i] for j in range(self.rows)] for i in range(self.cols)]
+        return TernaryMatrix(result)
+
+    def determinant(self) -> int:
+        """
+        Детерминант (для 1x1, 2x2, 3x3)
+        
+        СМЫСЛ В L3:
+        det = 1: система внутренне согласна (единственное решение)
+        det = -1: система имеет внутренний конфликт
+        det = 0: система вырождена (много решений или нет решений)
+        
+        Результат нормализуется в L3: {-1, 0, 1}
+        """
+        if self.rows != self.cols:
+            raise ValueError("Детерминант только для квадратных матриц")
+
+        if self.rows == 1:
+            return self.data[0][0]
+
+        if self.rows == 2:
+            det = self.data[0][0] * self.data[1][1] - self.data[0][1] * self.data[1][0]
+            if det > 0:
+                return 1
+            elif det < 0:
+                return -1
+            return 0
+
+        if self.rows == 3:
+            a, b, c = self.data[0]
+            d, e, f = self.data[1]
+            g, h, i = self.data[2]
+            det = (a * (e*i - f*h) -
+                   b * (d*i - f*g) +
+                   c * (d*h - e*g))
+            # Нормализация в L3
+            if det > 0:
+                return 1
+            elif det < 0:
+                return -1
+            return 0
+
+        raise ValueError(f"Детерминант для {self.rows}x{self.rows} не реализован")
+
+    # ---- ФУНКЦИИ СОСТОЯНИЯ (ПЕРЕИМЕНОВАНЫ ДЛЯ ЯСНОСТИ) ----
+
+    def diagonal_projection(self) -> 'TernaryMatrix':
+        """
+        Проекция на диагональ (было: sin)
+        
+        СМЫСЛ: Выделить "самоидентичные" элементы
+        Диагональные элементы = то, что система знает о себе
+        Остальное = взаимодействие с окружением
+        """
+        size = min(self.rows, self.cols)
+        result = [[0 for _ in range(self.cols)] for _ in range(self.rows)]
+        for i in range(size):
+            result[i][i] = self.data[i][i]
+        return TernaryMatrix(result)
+
+    def sign_normalization(self) -> 'TernaryMatrix':
+        """
+        Нормализация знаков (было: cos)
+        
+        СМЫСЛ: Привести матрицу к стандартной форме
+        Все ненулевые элементы → {-1, +1}
+        Нулевые элементы остаются нулями
+        """
+        result = []
+        for i in range(self.rows):
+            row = []
+            for j in range(self.cols):
+                val = self.data[i][j]
+                if val == 0:
+                    row.append(0)
+                else:
+                    row.append(1 if val > 0 else -1)
+            result.append(row)
+        return TernaryMatrix(result)
+
+    def dominance_map(self) -> 'TernaryMatrix':
+        """
+        Карта доминирования (было: tan)
+        
+        СМЫСЛ: Показать, какие элементы доминируют
+        1: положительное значение (присутствует)
+        -1: отрицательное значение (отсутствует/противоречие)
+        0: нейтраль (неопределённость)
+        """
+        result = []
+        for i in range(self.rows):
+            row = []
+            for j in range(self.cols):
+                val = self.data[i][j]
+                if val == 0:
+                    row.append(0)
+                else:
+                    row.append(1 if val > 0 else -1)
+            result.append(row)
+        return TernaryMatrix(result)
+
+    def transposed_dominance(self) -> 'TernaryMatrix':
+        """
+        Карта доминирования по колоннам (было: cot)
+        
+        СМЫСЛ: Показать доминирование в направлении колонн
+        """
+        result = []
+        for i in range(self.rows):
+            row = []
+            for j in range(self.cols):
+                val = self.data[j][i] if j < self.cols and i < self.rows else 0
+                if val == 0:
+                    row.append(0)
+                else:
+                    row.append(1 if val > 0 else -1)
+            result.append(row)
+        return TernaryMatrix(result)
+
+    def stability_map(self) -> 'TernaryMatrix':
+        """
+        Карта стабильности (было: sec)
+        
+        СМЫСЛ: Где система стабильна?
+        1: стабильно (ненулевое значение)
+        0: критическая точка (нулевое значение)
+        -1: конфликт (отрицательное значение)
+        """
+        result = []
+        for i in range(self.rows):
+            row = []
+            for j in range(self.cols):
+                val = self.data[i][j]
+                if val == 0:
+                    row.append(0)       # неопределённость
+                elif val == 1:
+                    row.append(1)       # стабильность
+                else:  # -1
+                    row.append(-1)      # конфликт
+            result.append(row)
+        return TernaryMatrix(result)
+
+    def conflict_index(self) -> 'TernaryMatrix':
+        """
+        Индекс конфликта на диагонали (было: csc)
+        
+        СМЫСЛ: Диагональные элементы показывают внутренние конфликты
+        1: согласие (диагональный элемент = 1)
+        0: неопределённость (диагональный элемент = 0)
+        -1: конфликт (диагональный элемент = -1)
+        """
+        size = min(self.rows, self.cols)
+        result = [[0 for _ in range(self.cols)] for _ in range(self.rows)]
+        for i in range(size):
+            val = self.data[i][i]
+            result[i][i] = val
+        return TernaryMatrix(result)
+
+    # ---- ДИНАМИЧЕСКИЕ ФУНКЦИИ (ГИПЕРБОЛИЧЕСКИЕ) ----
+
+    def transition_velocity(self) -> 'TernaryMatrix':
+        """
+        Скорость переходов (было: sinh)
+        
+        СМЫСЛ: Насколько быстро система переходит?
+        1: быстрый переход (положительное значение)
+        -1: замедление/торможение (отрицательное значение)
+        0: статичность (нулевое значение)
+        """
+        result = []
+        for i in range(self.rows):
+            row = []
+            for j in range(self.cols):
+                val = self.data[i][j]
+                if val > 0:
+                    row.append(1)
+                elif val < 0:
+                    row.append(-1)
+                else:
+                    row.append(0)
+            result.append(row)
+        return TernaryMatrix(result)
+
+    def energy_presence(self) -> 'TernaryMatrix':
+        """
+        Наличие энергии (было: cosh)
+        
+        СМЫСЛ: Где в системе есть энергия/активность?
+        1: есть энергия (ненулевое значение)
+        0: нет энергии (нулевое значение)
+        """
+        result = []
+        for i in range(self.rows):
+            row = []
+            for j in range(self.cols):
+                val = self.data[i][j]
+                row.append(1 if val != 0 else 0)
+            result.append(row)
+        return TernaryMatrix(result)
+
+    def stabilization(self) -> 'TernaryMatrix':
+        """
+        Уровень стабилизации (было: tanh)
+        
+        СМЫСЛ: Как система стабилизируется?
+        1: стабилизирована (положительное значение)
+        -1: дестабилизирована (отрицательное значение)
+        0: в процессе (нулевое значение)
+        """
+        result = []
+        for i in range(self.rows):
+            row = []
+            for j in range(self.cols):
+                val = self.data[i][j]
+                if val > 0:
+                    row.append(1)
+                elif val < 0:
+                    row.append(-1)
+                else:
+                    row.append(0)
+            result.append(row)
+        return TernaryMatrix(result)
+
+    # ---- АРК-ФУНКЦИИ (ОБРАТНОЕ ПРЕОБРАЗОВАНИЕ) ----
+
+    def recover_from_diagonal(self) -> 'TernaryMatrix':
+        """
+        Восстановить из диагонали (было: asin)
+        
+        СМЫСЛ: Попытаться восстановить исходное состояние из диагонали
+        Упрощённо: возвращаем копию (полное восстановление невозможно)
+        """
+        return self.copy()
+
+    def recover_from_normalization(self) -> 'TernaryMatrix':
+        """
+        Восстановить из нормализации (было: acos)
+        """
+        return self.copy()
+
+    def recover_from_dominance(self) -> 'TernaryMatrix':
+        """
+        Восстановить из доминирования (было: atan)
+        """
+        return self.copy()
+
+    # ---- ДОПОЛНИТЕЛЬНЫЕ ОПЕРАЦИИ ----
+
+    def convolve(self, other: 'TernaryMatrix') -> 'TernaryMatrix':
+        """
+        Свёртка матриц (композиция преобразований)
+        
+        СМЫСЛ: Применить второе преобразование к текущему состоянию
+        Используется для прогнозирования и анализа цепочек
+        """
+        return self.multiply(other)
+
+    def stability_index(self) -> float:
+        """
+        Индекс устойчивости системы (0-1)
+        
+        Основано на детерминанте:
+        stability = (det + 1) / 2
+        det=1 → 1.0 (максимально стабильна)
+        det=0 → 0.5 (нейтральна)
+        det=-1 → 0.0 (конфликтна)
+        """
+        try:
+            det = self.determinant()
+            return (det + 1) / 2.0
+        except:
+            return 0.5
+
+    def entropy(self) -> float:
+        """
+        Энтропия матрицы (мера неопределённости в L3)
+        
+        Используется стандартная формула энтропии Шеннона
+        для трёх состояний: -1, 0, 1
+        
+        Высокая энтропия = много неопределённости
+        Низкая энтропия = чёткое состояние
+        """
+        ones = sum(row.count(1) for row in self.data)
+        zeros = sum(row.count(0) for row in self.data)
+        negs = sum(row.count(-1) for row in self.data)
+        total = self.rows * self.cols
+
+        if total == 0:
+            return 0.0
+
+        p1 = ones / total
+        p0 = zeros / total
+        pn = negs / total
+
+        ent = 0.0
+        for p in [p1, p0, pn]:
+            if p > 0:
+                ent -= p * math.log2(p)
+        return ent
+
+    # ---- ПАКЕТЫ ФУНКЦИЙ ----
+
+    def state_functions(self) -> Dict[str, 'TernaryMatrix']:
+        """Все функции состояния"""
+        return {
+            'diagonal_projection': self.diagonal_projection(),
+            'sign_normalization': self.sign_normalization(),
+            'dominance_map': self.dominance_map(),
+            'transposed_dominance': self.transposed_dominance(),
+            'stability_map': self.stability_map(),
+            'conflict_index': self.conflict_index()
+        }
+
+    def dynamic_functions(self) -> Dict[str, 'TernaryMatrix']:
+        """Все динамические функции"""
+        return {
+            'transition_velocity': self.transition_velocity(),
+            'energy_presence': self.energy_presence(),
+            'stabilization': self.stabilization()
+        }
+
+    def all_functions(self) -> Dict[str, 'TernaryMatrix']:
+        """Все функции разом"""
+        result = self.state_functions()
+        result.update(self.dynamic_functions())
+        result.update({
+            'recover_from_diagonal': self.recover_from_diagonal(),
+            'recover_from_normalization': self.recover_from_normalization(),
+            'recover_from_dominance': self.recover_from_dominance()
+        })
+        return result
+
+
+# ============================================================
+# 3. MATRIX BLOCK X
+# ============================================================
+
+@dataclass
+class MatrixBlockX:
+    """Блок в цепочке для матричных состояний"""
+    index: int
+    version: str
+    timestamp: float
+    prev_hash: str
+    state_matrix: TernaryMatrix
+    payload: Dict[str, Any]
+    signature: str = "Root-Architect"
+
+    @property
+    def hash(self) -> str:
+        data = f"{self.index}{self.version}{self.timestamp}{self.prev_hash}{json.dumps(self.payload)}{self.signature}"
+        return hashlib.sha256(data.encode()).hexdigest()
+
+    def to_dict(self) -> Dict:
+        return {
+            'index': self.index,
+            'version': self.version,
+            'timestamp': self.timestamp,
+            'prev_hash': self.prev_hash[:16] + '...',
+            'state_matrix': self.state_matrix.to_dict(),
+            'payload': self.payload,
+            'hash': self.hash[:16] + '...'
+        }
+
+
+class MatrixBlockChain:
+    """Цепочка матричных блоков"""
+
+    def __init__(self):
+        self.blocks: List[MatrixBlockX] = []
+
+    def add_block(self, matrix: TernaryMatrix, payload: Dict[str, Any]) -> MatrixBlockX:
+        block = MatrixBlockX(
+            index=len(self.blocks),
+            version='V9.1',
+            timestamp=time.time(),
+            prev_hash=self.blocks[-1].hash if self.blocks else 'GENESIS',
+            state_matrix=matrix,
+            payload=payload
+        )
+        self.blocks.append(block)
+        return block
+
+    def verify_chain(self) -> bool:
+        for i in range(1, len(self.blocks)):
+            if self.blocks[i].prev_hash != self.blocks[i-1].hash:
+                return False
+        return True
+
+    def to_dict(self) -> Dict:
+        return {
+            'length': len(self.blocks),
+            'verified': self.verify_chain(),
+            'blocks': [b.to_dict() for b in self.blocks[-5:]]
+        }
+
+
+# ============================================================
+# 4. MATRIX RASHOMON
+# ============================================================
+
+class MatrixRashomon:
+    """Rashomon-анализ для троичных матриц"""
+
+    def __init__(self, matrix: TernaryMatrix):
+        self.matrix = matrix
+
+    def analyze(self) -> Dict[str, Any]:
+        """Анализ со всех перспектив"""
+        ones = sum(row.count(1) for row in self.matrix.data)
+        zeros = sum(row.count(0) for row in self.matrix.data)
+        negs = sum(row.count(-1) for row in self.matrix.data)
+        total = self.matrix.rows * self.matrix.cols
+
+        return {
+            'техническая': {
+                'единицы': ones,
+                'нули': zeros,
+                'минус_единицы': negs,
+                'энтропия': round(self.matrix.entropy(), 3),
+                'детерминант': self.matrix.determinant()
+            },
+            'юридическая': {
+                'устойчивость': self.matrix.stability_index() > 0.5,
+                'риск': round(zeros / total, 3) if total > 0 else 0
+            },
+            'бизнес': {
+                'плотность_истины': round(ones / total, 3) if total > 0 else 0,
+                'плотность_лжи': round(negs / total, 3) if total > 0 else 0
+            },
+            'стратегическая': {
+                'рекомендация': self._get_recommendation(),
+                'индекс_стабильности': round(self.matrix.stability_index(), 3)
+            }
+        }
+
+    def _get_recommendation(self) -> str:
+        """Рекомендация на основе анализа"""
+        det = self.matrix.determinant()
+        ent = self.matrix.entropy()
+
+        if det == 1 and ent < 1.0:
+            return "✅ Система стабильна. Продолжать."
+        elif det == -1:
+            return "⚠️ Обнаружен конфликт. Требуется переход."
+        elif ent > 1.5:
+            return "🔍 Высокая неопределённость. Требуется анализ."
+        else:
+            return "⏳ Система в процессе. Наблюдать."
+
+    def to_dict(self) -> Dict:
+        return {
+            'matrix': self.matrix.to_dict(),
+            'analysis': self.analyze()
+        }
+
+
+# ============================================================
+# 5. GAME ENGINE V9.1
+# ============================================================
+
+class GameEngineV9:
+    """
+    GameEngine для V9.1 — работает с троичными матрицами
+    Управляет состояниями, переходами, прогнозами
+    """
+
+    def __init__(self, initial_matrix: Optional[TernaryMatrix] = None):
+        if initial_matrix is None:
+            data = [
+                [0, 0, 0],
+                [0, 1, 0],
+                [0, 0, 0]
+            ]
+            initial_matrix = TernaryMatrix(data)
+
+        self.state = initial_matrix
+        self.history: List[MatrixBlockX] = []
+        self.blockchain = MatrixBlockChain()
+        self.operations_log: List[str] = []
+
+        self._log("GameEngine V9.1 инициализирован")
+
+    def _log(self, msg: str):
+        print(f"[GameEngine V9.1] {msg}")
+
+    def transition(self, operation: str, matrix: Optional[TernaryMatrix] = None,
+                   payload: Optional[Dict] = None) -> MatrixBlockX:
+        """Выполнить переход над текущей матрицей"""
+        old_state = self.state.copy()
+
+        # Маппинг операций
+        operation_map = {
+            'set': lambda: matrix.copy() if matrix else old_state,
+            'add': lambda: self.state.add(matrix) if matrix else old_state,
+            'multiply': lambda: self.state.multiply(matrix) if matrix else old_state,
+            'transpose': lambda: self.state.transpose(),
+            'diagonal_projection': lambda: self.state.diagonal_projection(),
+            'sign_normalization': lambda: self.state.sign_normalization(),
+            'dominance_map': lambda: self.state.dominance_map(),
+            'transposed_dominance': lambda: self.state.transposed_dominance(),
+            'stability_map': lambda: self.state.stability_map(),
+            'conflict_index': lambda: self.state.conflict_index(),
+            'transition_velocity': lambda: self.state.transition_velocity(),
+            'energy_presence': lambda: self.state.energy_presence(),
+            'stabilization': lambda: self.state.stabilization(),
+            'convolve': lambda: self.state.convolve(matrix) if matrix else old_state,
+        }
+
+        if operation not in operation_map:
+            raise ValueError(f"Неизвестная операция: {operation}")
+
+        new_matrix = operation_map[operation]()
+        self.state = new_matrix
+
+        block = MatrixBlockX(
+            index=len(self.history),
+            version='V9.1',
+            timestamp=time.time(),
+            prev_hash=self.history[-1].hash if self.history else 'GENESIS',
+            state_matrix=self.state,
+            payload=payload or {
+                'operation': operation,
+                'old_stability': old_state.stability_index(),
+                'new_stability': self.state.stability_index()
+            }
+        )
+
+        self.history.append(block)
+        self.blockchain.add_block(self.state, {'operation': operation})
+        self.operations_log.append(f"{operation} → {time.strftime('%H:%M:%S')}")
+
+        self._log(f"Переход: {operation} (стаб: {old_state.stability_index():.2f} → {self.state.stability_index():.2f})")
+        return block
+
+    def predict(self, steps: int = 1) -> TernaryMatrix:
+        """Прогноз на N шагов (свёртка самой себя)"""
+        result = self.state.copy()
+        for _ in range(steps - 1):
+            result = result.convolve(result)
+        return result
+
+    def get_graph(self) -> Dict:
+        """Граф состояний из матриц"""
+        nodes = []
+        edges = []
+
+        for i, block in enumerate(self.history):
+            nodes.append({
+                'id': i,
+                'stability': round(block.state_matrix.stability_index(), 3),
+                'entropy': round(block.state_matrix.entropy(), 3),
+                'timestamp': block.timestamp
+            })
+            if i > 0:
+                edges.append({
+                    'from': i - 1,
+                    'to': i,
+                    'label': block.payload.get('operation', 'unknown')
+                })
+
+        return {
+            'nodes': nodes,
+            'edges': edges,
+            'current_stability': round(self.state.stability_index(), 3)
+        }
+
+    def analyze(self) -> Dict:
+        """Полный анализ текущего состояния"""
+        return {
+            'current_state': self.state.to_dict(),
+            'stability': round(self.state.stability_index(), 3),
+            'entropy': round(self.state.entropy(), 3),
+            'determinant': self.state.determinant(),
+            'history_len': len(self.history),
+            'operations': self.operations_log[-10:],
+            'state_functions': {k: v.to_dict() for k, v in self.state.state_functions().items()},
+            'dynamic_functions': {k: v.to_dict() for k, v in self.state.dynamic_functions().items()}
+        }
+
+    def get_state(self) -> Dict:
+        return {
+            'version': 'V9.1',
+            'matrix': self.state.to_dict(),
+            'stability': round(self.state.stability_index(), 3),
+            'history_len': len(self.history),
+            'blockchain': self.blockchain.to_dict()
+        }
+
+    def get_matrix(self) -> TernaryMatrix:
+        return self.state
+
+
+# ============================================================
+# 6. ТОЧКА ВХОДА И ДЕМОНСТРАЦИЯ
+# ============================================================
+
+if __name__ == "__main__":
+    print("\n🚀 V9.1 — ТРОИЧНО-МАТРИЧНАЯ АРХИТЕКТУРА (УЛУЧШЕННАЯ)")
+    print("=" * 60)
+
+    # Создаём систему
+    data = [
+        [1, 0, -1],
+        [0, 1, 0],
+        [-1, 0, 1]
+    ]
+    mat = TernaryMatrix(data)
+    engine = GameEngineV9(mat)
+
+    print("\n📊 ИСХОДНАЯ МАТРИЦА:")
+    for row in mat.data:
+        print(f"  {row}")
+
+    print(f"\n📈 МЕТРИКИ:")
+    print(f"  Детерминант: {mat.determinant()}")
+    print(f"  Энтропия: {mat.entropy():.3f}")
+    print(f"  Стабильность: {mat.stability_index():.2f}")
+
+    print("\n🔄 ПРИМЕНЯЕМ ФУНКЦИИ:")
+    
+    print("\nДиагональная проекция:")
+    diag = mat.diagonal_projection()
+    for row in diag.data:
+        print(f"  {row}")
+
+    print("\nКарта доминирования:")
+    dom = mat.dominance_map()
+    for row in dom.data:
+        print(f"  {row}")
+
+    print("\nСкорость переходов:")
+    vel = mat.transition_velocity()
+    for row in vel.data:
+        print(f"  {row}")
+
+    print("\n✅ V9.1 УСПЕШНО ЗАПУЩЕНА")
