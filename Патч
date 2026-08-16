@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+МАЙНИНГ-МЕНЕДЖЕР — ЛЁГКИЙ ПАТЧ НА ЧИСТОМ PYTHON
+Автор: Владимир Заводюк (Root-Architect)
+Дата: 16.08.2026
+Версия: 1.0 (Standalone)
+
+Работает без V9, только стандартный Python 3.8+
+"""
+
+import time
+import json
+import requests
+from collections import Counter
+from typing import Dict, List, Optional, Tuple
+
+# ============================================================
+# 1. ЛЁГКАЯ ТРОИЧНАЯ ЛОГИКА (Аналог V6)
+# ============================================================
+
+def quantize(value: float) -> int:
+    if value > 0.75: return 2
+    elif value > 0.25: return 1
+    elif value >= -0.25: return 0
+    elif value >= -0.75: return -1
+    else: return -2
+
+def consensus(values: list) -> int:
+    if not values:
+        return 0
+    return quantize(sum(values) / len(values))
+
+# ============================================================
+# 2. ВЫБОР ПУЛА (Аналог V6 + Rashomon)
+# ============================================================
+
+class PoolSelector:
+    """
+    Анализирует пулы и выбирает лучший.
+    Оценивает: комиссия, задержка, стабильность, история.
+    """
+    
+    def __init__(self):
+        self.history = []
+    
+    def analyze_pool(self, pool_data: Dict) -> float:
+        """
+        Оценивает пул по нескольким параметрам.
+        pool_data: {
+            'fee': 0.02,
+            'latency': 50,  # мс
+            'stability': 0.95,  # 0-1
+            'hashrate': 100  # TH/s
+        }
+        """
+        fee_score = 1.0 - pool_data.get('fee', 0.05) * 10
+        latency_score = 1.0 - (pool_data.get('latency', 100) / 200)
+        stability_score = pool_data.get('stability', 0.9)
+        hashrate_score = min(1.0, pool_data.get('hashrate', 0) / 200)
+        
+        total = (fee_score * 0.3 + latency_score * 0.2 + 
+                 stability_score * 0.3 + hashrate_score * 0.2)
+        return max(0.0, min(1.0, total))
+    
+    def select_best(self, pools: List[Dict]) -> str:
+        """
+        Выбирает лучший пул из списка.
+        """
+        scores = {}
+        for pool in pools:
+            name = pool.get('name', 'unknown')
+            scores[name] = self.analyze_pool(pool)
+            self.history.append({'name': name, 'score': scores[name], 'time': time.time()})
+        
+        best = max(scores.items(), key=lambda x: x[1])
+        return best[0]
+
+# ============================================================
+# 3. РАСПРЕДЕЛЕНИЕ НАГРУЗКИ (Аналог V9 + консенсус)
+# ============================================================
+
+class LoadBalancer:
+    """
+    Распределяет нагрузку между ASIC-устройствами.
+    Учитывает: мощность, температуру, энергопотребление.
+    """
+    
+    def __init__(self):
+        self.asics = {}
+    
+    def register_asic(self, asic_id: str, capacity: float, power: float):
+        """
+        Регистрирует ASIC в системе.
+        capacity: TH/s
+        power: Вт
+        """
+        self.asics[asic_id] = {
+            'capacity': capacity,
+            'power': power,
+            'load': 0.0,
+            'temp': 40.0,
+            'status': 'active'
+        }
+    
+    def balance(self) -> Dict[str, float]:
+        """
+        Распределяет нагрузку пропорционально мощности.
+        Возвращает {asic_id: load_percent}
+        """
+        total_capacity = sum(a['capacity'] for a in self.asics.values())
+        if total_capacity == 0:
+            return {asic_id: 0.0 for asic_id in self.asics}
+        
+        result = {}
+        for asic_id, data in self.asics.items():
+            load = data['capacity'] / total_capacity
+            # Ограничиваем нагрузку 90% для безопасности
+            load = min(0.9, load)
+            result[asic_id] = load
+            data['load'] = load
+        
+        return result
+    
+    def check_health(self) -> List[str]:
+        """
+        Проверяет состояние ASIC.
+        Возвращает список проблемных.
+        """
+        issues = []
+        for asic_id, data in self.asics.items():
+            if data['temp'] > 75:
+                issues.append(f"{asic_id}: перегрев ({data['temp']}°C)")
+            if data['load'] > 0.95:
+                issues.append(f"{asic_id}: перегрузка ({data['load']*100:.0f}%)")
+        return issues
+
+# ============================================================
+# 4. ПРОГНОЗИРОВАНИЕ (Лёгкая версия Ломоносова)
+# ============================================================
+
+class Predictor:
+    """
+    Прогнозирует сложность майнинга и прибыльность.
+    Использует простую линейную регрессию на основе истории.
+    """
+    
+    def __init__(self):
+        self.history = []
+    
+    def add_record(self, difficulty: float, price: float):
+        self.history.append({
+            'difficulty': difficulty,
+            'price': price,
+            'time': time.time()
+        })
+        if len(self.history) > 1000:
+            self.history.pop(0)
+    
+    def predict_difficulty(self, days: int = 7) -> float:
+        """
+        Прогнозирует сложность через N дней.
+        """
+        if len(self.history) < 10:
+            return 1.0
+        
+        # Простая экстраполяция по последним 10 точкам
+        recent = self.history[-10:]
+        diffs = [r['difficulty'] for r in recent]
+        avg_change = sum(diffs[i] - diffs[i-1] for i in range(1, len(diffs))) / len(diffs)
+        future = diffs[-1] + avg_change * days * 2  # ~2 изменения в день
+        return max(0.5, future)
+    
+    def predict_profit(self, hashrate: float, days: int = 7) -> float:
+        """
+        Прогнозирует прибыль через N дней.
+        """
+        predicted_difficulty = self.predict_difficulty(days)
+        current_price = self.history[-1]['price'] if self.history else 30000
+        
+        # Простая модель: прибыль ~ hashrate / difficulty
+        profit = hashrate / predicted_difficulty * current_price * days * 0.0001
+        return profit
+
+# ============================================================
+# 5. ЭНЕРГОМЕНЕДЖМЕНТ
+# ============================================================
+
+class EnergyManager:
+    """
+    Управляет энергопотреблением фермы.
+    Оптимизирует затраты на электричество.
+    """
+    
+    def __init__(self, electricity_cost: float = 0.10):
+        """
+        electricity_cost: $/кВт·ч
+        """
+        self.cost = electricity_cost
+        self.history = []
+    
+    def calculate_consumption(self, power: float, hours: float) -> float:
+        """
+        Рассчитывает потребление в кВт·ч.
+        power: Вт
+        hours: часы
+        """
+        return (power * hours) / 1000
+    
+    def calculate_cost(self, power: float, hours: float) -> float:
+        """
+        Рассчитывает стоимость электроэнергии.
+        """
+        consumption = self.calculate_consumption(power, hours)
+        return consumption * self.cost
+    
+    def optimize_power(self, asics: Dict) -> Dict:
+        """
+        Оптимизирует мощность в зависимости от цены электроэнергии.
+        """
+        optimized = {}
+        for asic_id, data in asics.items():
+            # Если цена высокая — снижаем мощность
+            if self.cost > 0.15:
+                optimized[asic_id] = data['capacity'] * 0.7
+            else:
+                optimized[asic_id] = data['capacity']
+        return optimized
+
+# ============================================================
+# 6. ГЛАВНЫЙ МЕНЕДЖЕР
+# ============================================================
+
+class MiningManager:
+    """
+    Главный менеджер майнинг-фермы.
+    Объединяет все модули.
+    """
+    
+    def __init__(self):
+        self.pool_selector = PoolSelector()
+        self.load_balancer = LoadBalancer()
+        self.predictor = Predictor()
+        self.energy_manager = EnergyManager()
+        self.pools = []
+        self.running = False
+    
+    def add_pool(self, name: str, data: Dict):
+        data['name'] = name
+        self.pools.append(data)
+    
+    def register_asic(self, asic_id: str, capacity: float, power: float):
+        self.load_balancer.register_asic(asic_id, capacity, power)
+    
+    def add_difficulty_record(self, difficulty: float, price: float):
+        self.predictor.add_record(difficulty, price)
+    
+    def run_cycle(self):
+        """
+        Один цикл управления фермой.
+        """
+        print("\n" + "=" * 60)
+        print("🔄 ЦИКЛ УПРАВЛЕНИЯ ФЕРМОЙ")
+        print("=" * 60)
+        
+        # 1. Выбор пула
+        if self.pools:
+            best_pool = self.pool_selector.select_best(self.pools)
+            print(f"✅ Лучший пул: {best_pool}")
+        
+        # 2. Балансировка нагрузки
+        loads = self.load_balancer.balance()
+        print(f"⚡ Распределение нагрузки: {loads}")
+        
+        # 3. Проверка здоровья
+        issues = self.load_balancer.check_health()
+        if issues:
+            print(f"⚠️ Проблемы: {issues}")
+        else:
+            print("✅ Все ASIC в норме")
+        
+        # 4. Прогнозирование
+        if len(self.predictor.history) > 0:
+            profit = self.predictor.predict_profit(100)  # 100 TH/s
+            print(f"📈 Прогноз прибыли (7 дней): ${profit:.2f}")
+        
+        # 5. Энергоменеджмент
+        cost = self.energy_manager.calculate_cost(5000, 24)
+        print(f"💡 Затраты на электроэнергию (сутки): ${cost:.2f}")
+        
+        return {
+            'best_pool': best_pool if self.pools else None,
+            'loads': loads,
+            'issues': issues,
+            'profit_forecast': profit if len(self.predictor.history) > 0 else 0,
+            'energy_cost': cost
+        }
+
+# ============================================================
+# 7. ДЕМОНСТРАЦИЯ
+# ============================================================
+
+if __name__ == "__main__":
+    print("\n" + "=" * 70)
+    print("🚀 МАЙНИНГ-МЕНЕДЖЕР — ЛЁГКИЙ ПАТЧ (ЧИСТЫЙ PYTHON)")
+    print("=" * 70)
+    
+    # Создаём менеджер
+    manager = MiningManager()
+    
+    # Добавляем пулы
+    manager.add_pool("Pool_A", {'fee': 0.02, 'latency': 40, 'stability': 0.95, 'hashrate': 150})
+    manager.add_pool("Pool_B", {'fee': 0.01, 'latency': 60, 'stability': 0.90, 'hashrate': 100})
+    manager.add_pool("Pool_C", {'fee': 0.03, 'latency': 30, 'stability': 0.98, 'hashrate': 200})
+    
+    # Регистрируем ASIC
+    manager.register_asic("ASIC_01", 50, 1500)
+    manager.register_asic("ASIC_02", 40, 1200)
+    manager.register_asic("ASIC_03", 30, 900)
+    
+    # Добавляем историю сложности
+    for diff in [1.0, 1.05, 1.08, 1.12, 1.15, 1.18, 1.20]:
+        manager.add_difficulty_record(diff, 30000 + diff * 5000)
+    
+    # Запускаем цикл
+    result = manager.run_cycle()
+    
+    print("\n" + "=" * 70)
+    print("✅ МАЙНИНГ-МЕНЕДЖЕР УСПЕШНО ЗАВЕРШИЛ ЦИКЛ")
+    print("=" * 70)
