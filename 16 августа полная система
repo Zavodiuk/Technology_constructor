@@ -1,0 +1,1833 @@
+   1	# Copyright metadata: Vladimir Zavodiuk
+   2	# Автор / Author: Владимир Зааодюк / Vladimir Zavodiuk
+   3	# Date / Дата: 2026-08-16
+   4	# Email: glovesandfactories@gmail.com
+   5	# License / Лицензия: All Rights Reserved
+   6	"""Future AI Unified System v0.7+.
+   7	
+   8	Single-file integration branch assembled from independently tested blocks.
+   9	The preserved source versions remain unchanged elsewhere in the workspace.
+  10	
+  11	Architecture layers:
+  12	- L3/L5 logic modules (ternary/pentary vectors and matrices)
+  13	- Decimal shift transforms with explicit quantization tracking
+  14	- Dynamic risk engine with veto capability
+  15	- Rashomon alternatives comparison
+  16	- Fairness scheduler with starvation prevention
+  17	- Plugin boundary with isolation and evidence aggregation
+  18	- Operational OS with process management and audit chain
+  19	- Stateful BXOS with resource quotas
+  20	- Persistent state store with atomic writes
+  21	- Unified organism façade joining all layers
+  22	- Guarded execution boundary (only path to BXOS)
+  23	- Evidence lifecycle management with TTL and expiry
+  24	- Tensor field experiments (advisory only)
+  25	"""
+  26	from dataclasses import dataclass, field, asdict
+  27	from enum import Enum
+  28	from decimal import Decimal, ROUND_HALF_EVEN, InvalidOperation
+  29	from math import isfinite, sin, pi
+  30	from pathlib import Path
+  31	from typing import (Any, Callable, Dict, Iterable, List, Optional, Protocol,
+  32	                    Sequence, Tuple, Union)
+  33	import hashlib
+  34	import itertools
+  35	import json
+  36	import os
+  37	import tempfile
+  38	import time
+  39	
+  40	Number = Union[int, float, Decimal]
+  41	
+  42	# ===========================================================================
+  43	# Core enums
+  44	# ===========================================================================
+  45	
+  46	class LogicType(str, Enum):
+  47	    TERNARY = 'ternary'
+  48	    TERNARY_MATRIX = 'ternary_matrix'
+  49	    PENTARY = 'pentary'
+  50	    PENTARY_MATRIX = 'pentary_matrix'
+  51	
+  52	class Action(str, Enum):
+  53	    PASS = 'PASS'
+  54	    CLARIFY = 'CLARIFY'
+  55	    REJECT = 'REJECT'
+  56	    VETO = 'VETO'
+  57	
+  58	class TernaryValue(int, Enum):
+  59	    FALSE = -1
+  60	    UNDEFINED = 0
+  61	    TRUE = 1
+  62	
+  63	class PentaryValue(int, Enum):
+  64	    EXTREME_FALSE = -2
+  65	    FALSE = -1
+  66	    NEUTRAL = 0
+  67	    TRUE = 1
+  68	    EXTREME_TRUE = 2
+  69	
+  70	class RiskLevel(str, Enum):
+  71	    LOW = 'LOW'
+  72	    MEDIUM = 'MEDIUM'
+  73	    HIGH = 'HIGH'
+  74	    CRITICAL = 'CRITICAL'
+  75	
+  76	class PluginStatus(str, Enum):
+  77	    OK = 'OK'
+  78	    FALLBACK = 'FALLBACK'
+  79	    FAILED = 'FAILED'
+  80	
+  81	class ProcessState(str, Enum):
+  82	    READY = 'READY'
+  83	    RUNNING = 'RUNNING'
+  84	    BLOCKED = 'BLOCKED'
+  85	    TERMINATED = 'TERMINATED'
+  86	
+  87	class RoutingMode(str, Enum):
+  88	    AUTO = 'AUTO'
+  89	
+  90	class EvidenceLifecycleState(str, Enum):
+  91	    REQUESTED = 'REQUESTED'
+  92	    VALIDATED = 'VALIDATED'
+  93	    ANALYZED = 'ANALYZED'
+  94	    AGGREGATED = 'AGGREGATED'
+  95	    RISK_REVIEWED = 'RISK_REVIEWED'
+  96	    FAILED = 'FAILED'
+  97	    FALLBACK = 'FALLBACK'
+  98	    EXPIRED = 'EXPIRED'
+  99	
+ 100	# ===========================================================================
+ 101	# Validation helpers
+ 102	# ===========================================================================
+ 103	
+ 104	def _finite_number(value: Any, name: str) -> float:
+ 105	    if isinstance(value, bool) or not isinstance(value, (int, float)):
+ 106	        raise ValueError(f'{name} must be numeric')
+ 107	    result = float(value)
+ 108	    if result != result or result in (float('inf'), float('-inf')):
+ 109	        raise ValueError(f'{name} must be finite')
+ 110	    return result
+ 111	
+ 112	def quantize_ternary(value: float, low: float = 0.3, high: float = 0.7) -> int:
+ 113	    value = _finite_number(value, 'value')
+ 114	    if not 0 <= low < high <= 1:
+ 115	        raise ValueError('ternary thresholds must satisfy 0 <= low < high <= 1')
+ 116	    return 1 if value >= high else -1 if value <= low else 0
+ 117	
+ 118	def quantize_pentary(value: float) -> int:
+ 119	    value = _finite_number(value, 'value')
+ 120	    if not 0 <= value <= 1:
+ 121	        raise ValueError('pentary confidence must be in [0, 1]')
+ 122	    if value < 0.2:
+ 123	        return -2
+ 124	    if value < 0.4:
+ 125	        return -1
+ 126	    if value < 0.6:
+ 127	        return 0
+ 128	    if value < 0.8:
+ 129	        return 1
+ 130	    return 2
+ 131	
+ 132	def _validate_vector(values: Sequence[int], allowed: set[int]) -> List[int]:
+ 133	    result = [int(v) for v in values]
+ 134	    if not result:
+ 135	        raise ValueError('vector cannot be empty')
+ 136	    if any((v not in allowed for v in result)):
+ 137	        raise ValueError(f'values must belong to {sorted(allowed)}')
+ 138	    return result
+ 139	
+ 140	# ===========================================================================
+ 141	# Matrix operations
+ 142	# ===========================================================================
+ 143	
+ 144	class SaturatedMatrix:
+ 145	    """Small immutable-by-convention matrix with explicit finite alphabet."""
+ 146	
+ 147	    def __init__(self, data: Sequence[Sequence[int]], limit: int):
+ 148	        rows = [list(row) for row in data]
+ 149	        if not rows or not rows[0]:
+ 150	            raise ValueError('matrix cannot be empty')
+ 151	        width = len(rows[0])
+ 152	        if any((len(row) != width for row in rows)):
+ 153	            raise ValueError('matrix rows must have equal length')
+ 154	        if any((isinstance(v, bool) or not isinstance(v, int) or abs(v) > limit
+ 155	                for row in rows for v in row)):
+ 156	            raise ValueError(f'matrix values must be integers in [-{limit}, {limit}]')
+ 157	        self.data = tuple((tuple(row) for row in rows))
+ 158	        self.limit = limit
+ 159	
+ 160	    @property
+ 161	    def shape(self) -> Tuple[int, int]:
+ 162	        return (len(self.data), len(self.data[0]))
+ 163	
+ 164	    def _new(self, data: Sequence[Sequence[int]]) -> 'SaturatedMatrix':
+ 165	        return SaturatedMatrix(data, self.limit)
+ 166	
+ 167	    def add(self, other: 'SaturatedMatrix') -> 'SaturatedMatrix':
+ 168	        if self.shape != other.shape or self.limit != other.limit:
+ 169	            raise ValueError('matrix shape or alphabet mismatch')
+ 170	        return self._new([[
+ 171	            max(-self.limit, min(self.limit, a + b))
+ 172	            for a, b in zip(row_a, row_b)
+ 173	        ] for row_a, row_b in zip(self.data, other.data)])
+ 174	
+ 175	    def multiply(self, other: 'SaturatedMatrix') -> 'SaturatedMatrix':
+ 176	        if self.shape[1] != other.shape[0] or self.limit != other.limit:
+ 177	            raise ValueError('matrix dimensions or alphabet mismatch')
+ 178	        rows, inner, cols = (self.shape[0], self.shape[1], other.shape[1])
+ 179	        data = []
+ 180	        for i in range(rows):
+ 181	            row = []
+ 182	            for j in range(cols):
+ 183	                raw = sum((self.data[i][k] * other.data[k][j]
+ 184	                           for k in range(inner)))
+ 185	                row.append(max(-self.limit, min(self.limit, raw)))
+ 186	            data.append(row)
+ 187	        return self._new(data)
+ 188	
+ 189	    def transpose(self) -> 'SaturatedMatrix':
+ 190	        return self._new(list(map(list, zip(*self.data))))
+ 191	
+ 192	    def score(self) -> float:
+ 193	        total = self.shape[0] * self.shape[1] * self.limit
+ 194	        return sum((sum(row) for row in self.data)) / total
+ 195	
+ 196	    def uncertainty(self) -> float:
+ 197	        total = self.shape[0] * self.shape[1]
+ 198	        return sum((v == 0 for row in self.data for v in row)) / total
+ 199	
+ 200	    def to_dict(self) -> Dict[str, Any]:
+ 201	        return {
+ 202	            'data': [list(row) for row in self.data],
+ 203	            'shape': self.shape,
+ 204	            'limit': self.limit,
+ 205	            'score': round(self.score(), 4),
+ 206	            'uncertainty': round(self.uncertainty(), 4)
+ 207	        }
+ 208	
+ 209	# ===========================================================================
+ 210	# Module results
+ 211	# ===========================================================================
+ 212	
+ 213	@dataclass
+ 214	class ModuleResult:
+ 215	    module: str
+ 216	    logic_type: LogicType
+ 217	    state: Any
+ 218	    score: float
+ 219	    confidence: float
+ 220	    uncertainty: float
+ 221	    evidence: Dict[str, Any] = field(default_factory=dict)
+ 222	    explanation: str = ''
+ 223	    projection_loss: float = 0.0
+ 224	
+ 225	    def to_dict(self) -> Dict[str, Any]:
+ 226	        state = self.state.to_dict() if hasattr(self.state, 'to_dict') else self.state
+ 227	        return {
+ 228	            'module': self.module,
+ 229	            'logic_type': self.logic_type.value,
+ 230	            'state': state,
+ 231	            'score': round(self.score, 4),
+ 232	            'confidence': round(self.confidence, 4),
+ 233	            'uncertainty': round(self.uncertainty, 4),
+ 234	            'evidence': self.evidence,
+ 235	            'explanation': self.explanation,
+ 236	            'projection_loss': round(self.projection_loss, 4)
+ 237	        }
+ 238	
+ 239	@dataclass
+ 240	class OrchestratorRequest:
+ 241	    query: str
+ 242	    payload: Any
+ 243	    preferred_logic: Optional[LogicType] = None
+ 244	    priority: int = 0
+ 245	    allow_action: bool = False
+ 246	    request_id: str = field(default_factory=lambda: f'req-{int(time.time_ns())}')
+ 247	
+ 248	@dataclass
+ 249	class OrchestratorResponse:
+ 250	    request_id: str
+ 251	    action: Action
+ 252	    selected_module: str
+ 253	    result: Optional[ModuleResult]
+ 254	    risk: float
+ 255	    route_reason: str
+ 256	    audit_id: Optional[str] = None
+ 257	    error: Optional[str] = None
+ 258	
+ 259	    def to_dict(self) -> Dict[str, Any]:
+ 260	        return {
+ 261	            'request_id': self.request_id,
+ 262	            'action': self.action.value,
+ 263	            'selected_module': self.selected_module,
+ 264	            'result': self.result.to_dict() if self.result else None,
+ 265	            'risk': round(self.risk, 4),
+ 266	            'route_reason': self.route_reason,
+ 267	            'audit_id': self.audit_id,
+ 268	            'error': self.error
+ 269	        }
+ 270	
+ 271	# ===========================================================================
+ 272	# Logic modules
+ 273	# ===========================================================================
+ 274	
+ 275	class LogicModule:
+ 276	    name: str
+ 277	    logic_type: LogicType
+ 278	
+ 279	    def evaluate(self, payload: Any) -> ModuleResult:
+ 280	        raise NotImplementedError
+ 281	
+ 282	class TernaryLogicModule(LogicModule):
+ 283	    name, logic_type = ('ternary_logic', LogicType.TERNARY)
+ 284	
+ 285	    def evaluate(self, payload: Any) -> ModuleResult:
+ 286	        values = _validate_vector(payload, {-1, 0, 1})
+ 287	        score = sum(values) / len(values)
+ 288	        uncertainty = values.count(0) / len(values)
+ 289	        confidence = 1.0 - uncertainty
+ 290	        return ModuleResult(
+ 291	            self.name, self.logic_type, values, score, confidence, uncertainty,
+ 292	            {'counts': {str(v): values.count(v) for v in (-1, 0, 1)}},
+ 293	            'L3 vector evaluated without changing its native alphabet.')
+ 294	
+ 295	class PentaryLogicModule(LogicModule):
+ 296	    name, logic_type = ('pentary_logic', LogicType.PENTARY)
+ 297	
+ 298	    def evaluate(self, payload: Any) -> ModuleResult:
+ 299	        values = _validate_vector(payload, {-2, -1, 0, 1, 2})
+ 300	        score = sum(values) / (len(values) * 2)
+ 301	        uncertainty = values.count(0) / len(values)
+ 302	        confidence = 1.0 - uncertainty
+ 303	        return ModuleResult(
+ 304	            self.name, self.logic_type, values, score, confidence, uncertainty,
+ 305	            {'counts': {str(v): values.count(v) for v in (-2, -1, 0, 1, 2)}},
+ 306	            'L5 vector evaluated without collapsing extreme states.')
+ 307	
+ 308	class TernaryMatrixModule(LogicModule):
+ 309	    name, logic_type = ('ternary_matrix', LogicType.TERNARY_MATRIX)
+ 310	
+ 311	    def evaluate(self, payload: Any) -> ModuleResult:
+ 312	        matrix = SaturatedMatrix(payload, 1)
+ 313	        return ModuleResult(
+ 314	            self.name, self.logic_type, matrix, matrix.score(),
+ 315	            1.0 - matrix.uncertainty(), matrix.uncertainty(),
+ 316	            {'shape': matrix.shape},
+ 317	            'L3 matrix evaluated with saturated arithmetic.')
+ 318	
+ 319	class PentaryMatrixModule(LogicModule):
+ 320	    name, logic_type = ('pentary_matrix', LogicType.PENTARY_MATRIX)
+ 321	
+ 322	    def evaluate(self, payload: Any) -> ModuleResult:
+ 323	        matrix = SaturatedMatrix(payload, 2)
+ 324	        return ModuleResult(
+ 325	            self.name, self.logic_type, matrix, matrix.score(),
+ 326	            1.0 - matrix.uncertainty(), matrix.uncertainty(),
+ 327	            {'shape': matrix.shape},
+ 328	            'L5 matrix evaluated with saturated arithmetic.')
+ 329	
+ 330	# ===========================================================================
+ 331	# Audit and execution
+ 332	# ===========================================================================
+ 333	
+ 334	@dataclass
+ 335	class AuditRecord:
+ 336	    request_id: str
+ 337	    action: Action
+ 338	    payload: Dict[str, Any]
+ 339	    previous_hash: str
+ 340	    timestamp: float = field(default_factory=time.time)
+ 341	
+ 342	    @property
+ 343	    def hash(self) -> str:
+ 344	        body = json.dumps({
+ 345	            'request_id': self.request_id,
+ 346	            'action': self.action.value,
+ 347	            'payload': self.payload,
+ 348	            'previous_hash': self.previous_hash,
+ 349	            'timestamp': self.timestamp
+ 350	        }, sort_keys=True, default=str)
+ 351	        return hashlib.sha256(body.encode()).hexdigest()
+ 352	
+ 353	class ExecutionOS:
+ 354	    """Minimal audited execution boundary; no external side effects by default."""
+ 355	
+ 356	    def __init__(self):
+ 357	        self.records: List[AuditRecord] = []
+ 358	
+ 359	    def execute(self, request: OrchestratorRequest,
+ 360	                response: OrchestratorResponse) -> Optional[str]:
+ 361	        if response.action is not Action.PASS or not request.allow_action:
+ 362	            return None
+ 363	        previous = self.records[-1].hash if self.records else 'GENESIS'
+ 364	        record = AuditRecord(request.request_id, response.action,
+ 365	                             response.to_dict(), previous)
+ 366	        self.records.append(record)
+ 367	        return record.hash
+ 368	
+ 369	    def verify(self) -> bool:
+ 370	        previous = 'GENESIS'
+ 371	        for record in self.records:
+ 372	            if record.previous_hash != previous:
+ 373	                return False
+ 374	            previous = record.hash
+ 375	        return True
+ 376	
+ 377	# ===========================================================================
+ 378	# Decimal shift transforms
+ 379	# ===========================================================================
+ 380	
+ 381	@dataclass(frozen=True)
+ 382	class DecimalShiftResult:
+ 383	    source_value: Decimal
+ 384	    source_scale: int
+ 385	    target_scale: int
+ 386	    transformed_value: Decimal
+ 387	    quantization_error: Decimal
+ 388	    clipped: bool
+ 389	    reversible: bool
+ 390	    rounding_mode: str = 'ROUND_HALF_EVEN'
+ 391	
+ 392	    def to_dict(self):
+ 393	        return {
+ 394	            'source_value': str(self.source_value),
+ 395	            'source_scale': self.source_scale,
+ 396	            'target_scale': self.target_scale,
+ 397	            'transformed_value': str(self.transformed_value),
+ 398	            'quantization_error': str(self.quantization_error),
+ 399	            'clipped': self.clipped,
+ 400	            'reversible': self.reversible,
+ 401	            'rounding_mode': self.rounding_mode
+ 402	        }
+ 403	
+ 404	def _decimal(value: Number) -> Decimal:
+ 405	    if isinstance(value, bool):
+ 406	        raise ValueError('boolean is not a numeric state')
+ 407	    try:
+ 408	        result = Decimal(str(value))
+ 409	    except (InvalidOperation, ValueError) as exc:
+ 410	        raise ValueError('value must be a finite numeric value') from exc
+ 411	    if not result.is_finite():
+ 412	        raise ValueError('value must be finite')
+ 413	    return result
+ 414	
+ 415	def shift_decimal(value: Number, source_scale: int, target_scale: int, *,
+ 416	                  min_value: Number | None = None,
+ 417	                  max_value: Number | None = None) -> DecimalShiftResult:
+ 418	    """Move decimal precision while preserving an auditable loss estimate."""
+ 419	    if not isinstance(source_scale, int) or not isinstance(target_scale, int):
+ 420	        raise ValueError('scales must be integers')
+ 421	    if source_scale < 0 or target_scale < 0:
+ 422	        raise ValueError('scales cannot be negative')
+ 423	    source = _decimal(value).quantize(Decimal(1).scaleb(-source_scale),
+ 424	                                      rounding=ROUND_HALF_EVEN)
+ 425	    quantum = Decimal(1).scaleb(-target_scale)
+ 426	    transformed = source.quantize(quantum, rounding=ROUND_HALF_EVEN)
+ 427	    clipped = False
+ 428	    if min_value is not None:
+ 429	        lower = _decimal(min_value)
+ 430	        if transformed < lower:
+ 431	            transformed, clipped = (lower, True)
+ 432	    if max_value is not None:
+ 433	        upper = _decimal(max_value)
+ 434	        if transformed > upper:
+ 435	            transformed, clipped = (upper, True)
+ 436	    error = transformed - source
+ 437	    reversible = not clipped and target_scale >= source_scale
+ 438	    return DecimalShiftResult(source, source_scale, target_scale,
+ 439	                              transformed, error, clipped, reversible)
+ 440	
+ 441	def project_pentary(value: Number, *, scale: int = 2) -> DecimalShiftResult:
+ 442	    """Project a numeric value to the bounded pentary representation [-2, 2]."""
+ 443	    return shift_decimal(value, source_scale=scale, target_scale=0,
+ 444	                         min_value=-2, max_value=2)
+ 445	
+ 446	# ===========================================================================
+ 447	# Risk engine
+ 448	# ===========================================================================
+ 449	
+ 450	@dataclass(frozen=True)
+ 451	class RiskAssessment:
+ 452	    score: float
+ 453	    level: RiskLevel
+ 454	    factors: Dict[str, float]
+ 455	    explanation: str
+ 456	    veto: bool
+ 457	
+ 458	    def to_dict(self) -> Dict[str, Any]:
+ 459	        return {
+ 460	            'score': round(self.score, 4),
+ 461	            'level': self.level.value,
+ 462	            'factors': {k: round(v, 4) for k, v in self.factors.items()},
+ 463	            'explanation': self.explanation,
+ 464	            'veto': self.veto
+ 465	        }
+ 466	
+ 467	class DynamicRiskEngine:
+ 468	    """Conservative risk model kept separate from module scoring."""
+ 469	
+ 470	    def assess(self, result: ModuleResult, *, projection_loss: float = 0.0,
+ 471	               conflict_density: float = 0.0,
+ 472	               execution_cost: float = 0.0) -> RiskAssessment:
+ 473	        factors = {
+ 474	            'uncertainty': max(0.0, min(1.0, result.uncertainty)),
+ 475	            'low_confidence': max(0.0, min(1.0, 1.0 - result.confidence)),
+ 476	            'projection_loss': max(0.0, min(1.0, projection_loss)),
+ 477	            'conflict_density': max(0.0, min(1.0, conflict_density)),
+ 478	            'execution_cost': max(0.0, min(1.0, execution_cost))
+ 479	        }
+ 480	        score = min(1.0, 0.3 * factors['uncertainty'] +
+ 481	                    0.25 * factors['low_confidence'] +
+ 482	                    0.2 * factors['projection_loss'] +
+ 483	                    0.2 * factors['conflict_density'] +
+ 484	                    0.05 * factors['execution_cost'])
+ 485	        if score >= 0.8:
+ 486	            level, veto = (RiskLevel.CRITICAL, True)
+ 487	        elif score >= 0.55:
+ 488	            level, veto = (RiskLevel.HIGH, False)
+ 489	        elif score >= 0.3:
+ 490	            level, veto = (RiskLevel.MEDIUM, False)
+ 491	        else:
+ 492	            level, veto = (RiskLevel.LOW, False)
+ 493	        explanation = ('risk is driven by ' + ', '.join(
+ 494	            name for name, value in factors.items() if value >= 0.3)
+ 495            or 'all monitored factors are low')
+ 496	        return RiskAssessment(score, level, factors, explanation, veto)
+ 497	
+ 498	# ===========================================================================
+ 499	# Rashomon alternatives
+ 500	# ===========================================================================
+ 501	
+ 502	@dataclass(frozen=True)
+ 503	class RashomonAlternative:
+ 504	    module: str
+ 505	    score: float
+ 506	    confidence: float
+ 507	    uncertainty: float
+ 508	    rank: int
+ 509	
+ 510	class RashomonSet:
+ 511	
+ 512	    def compare(self, results: Iterable[ModuleResult]) -> List[RashomonAlternative]:
+ 513	        ordered = sorted(results, key=lambda item: (item.score, item.confidence),
+ 514	                        reverse=True)
+ 515	        return [RashomonAlternative(r.module, r.score, r.confidence,
+ 516	                                   r.uncertainty, i + 1)
+ 517	                for i, r in enumerate(ordered)]
+ 518	
+ 519	# ===========================================================================
+ 520	# Fairness scheduler
+ 521	# ===========================================================================
+ 522	
+ 523	@dataclass
+ 524	class ScheduledTask:
+ 525	    task_id: str
+ 526	    priority: int
+ 527	    submitted_at: float = field(default_factory=time.time)
+ 528	    waiting_ticks: int = 0
+ 529	    runs: int = 0
+ 530	
+ 531	    @property
+ 532	    def effective_priority(self) -> int:
+ 533	        return self.priority + self.waiting_ticks
+ 534	
+ 535	class FairnessScheduler:
+ 536	    """Deterministic priority scheduler with aging and starvation prevention."""
+ 537	
+ 538	    def __init__(self, starvation_limit: int = 5):
+ 539	        if starvation_limit < 1:
+ 540	            raise ValueError('starvation_limit must be positive')
+ 541	        self.starvation_limit = starvation_limit
+ 542	        self.tasks: Dict[str, ScheduledTask] = {}
+ 543	        self.history: List[str] = []
+ 544	
+ 545	    def submit(self, task_id: str, priority: int = 0) -> None:
+ 546	        if task_id in self.tasks:
+ 547	            raise ValueError(f'task already exists: {task_id}')
+ 548	        if priority < 0:
+ 549	            raise ValueError('priority cannot be negative')
+ 550	        self.tasks[task_id] = ScheduledTask(task_id, priority)
+ 551	
+ 552	    def dispatch(self) -> Optional[ScheduledTask]:
+ 553	        if not self.tasks:
+ 554	            return None
+ 555	        starved = [t for t in self.tasks.values()
+ 556	                  if t.waiting_ticks >= self.starvation_limit]
+ 557	        pool = starved if starved else list(self.tasks.values())
+ 558	        selected = max(pool, key=lambda t: (t.effective_priority, -t.submitted_at))
+ 559	        selected.waiting_ticks = 0
+ 560	        selected.runs += 1
+ 561	        self.history.append(selected.task_id)
+ 562	        for task in self.tasks.values():
+ 563	            if task.task_id != selected.task_id:
+ 564	                task.waiting_ticks += 1
+ 565	        return selected
+ 566	
+ 567	    def complete(self, task_id: str) -> None:
+ 568	        self.tasks.pop(task_id, None)
+ 569	
+ 570	    def snapshot(self) -> Dict[str, Any]:
+ 571	        return {
+ 572	            task_id: {
+ 573	                'priority': task.priority,
+ 574	                'waiting_ticks': task.waiting_ticks,
+ 575	                'effective_priority': task.effective_priority,
+ 576	                'runs': task.runs
+ 577	            }
+ 578	            for task_id, task in self.tasks.items()
+ 579	        }
+ 580	
+ 581	# ===========================================================================
+ 582	# Plugin system
+ 583	# ===========================================================================
+ 584	
+ 585	@dataclass(frozen=True)
+ 586	class Evidence:
+ 587	    plugin: str
+ 588	    version: str
+ 589	    status: PluginStatus
+ 590	    score: float
+ 591	    confidence: float
+ 592	    uncertainty: float
+ 593	    claims: Dict[str, Any]
+ 594	    provenance: Dict[str, Any]
+ 595	    warning: Optional[str] = None
+ 596	
+ 597	    def to_dict(self) -> Dict[str, Any]:
+ 598	        return {
+ 599	            'plugin': self.plugin,
+ 600	            'version': self.version,
+ 601	            'status': self.status.value,
+ 602	            'score': round(self.score, 4),
+ 603	            'confidence': round(self.confidence, 4),
+ 604	            'uncertainty': round(self.uncertainty, 4),
+ 605	            'claims': self.claims,
+ 606	            'provenance': self.provenance,
+ 607	            'warning': self.warning
+ 608	        }
+ 609	
+ 610	class AnalyticalPlugin(Protocol):
+ 611	    name: str
+ 612	    version: str
+ 613	
+ 614	    def analyze(self, query: str, payload: Any) -> Evidence:
+ 615	        ...
+ 616	
+ 617	class PluginAdapter:
+ 618	    """Runs optional evidence plugins with bounded authority."""
+ 619	
+ 620	    def __init__(self, timeout_seconds: float = 1.0):
+ 621	        if timeout_seconds <= 0:
+ 622	            raise ValueError('timeout_seconds must be positive')
+ 623	        self.timeout_seconds = timeout_seconds
+ 624	        self.plugins: Dict[str, AnalyticalPlugin] = {}
+ 625	
+ 626	    def register(self, plugin: AnalyticalPlugin) -> None:
+ 627	        if not getattr(plugin, 'name', None) or not getattr(plugin, 'version', None):
+ 628	            raise ValueError('plugin must expose name and version')
+ 629	        self.plugins[plugin.name] = plugin
+ 630	
+ 631	    def analyze(self, plugin_name: str, query: str, payload: Any) -> Evidence:
+ 632	        started = time.monotonic()
+ 633	        plugin = self.plugins.get(plugin_name)
+ 634	        if plugin is None:
+ 635	            return Evidence(plugin_name, 'unknown', PluginStatus.FALLBACK,
+ 636                           0.0, 0.0, 1.0, {}, {'query': query, 'elapsed_ms': 0},
+ 637                           'plugin not registered')
+ 638	        try:
+ 639	            evidence = plugin.analyze(query, payload)
+ 640	            elapsed = time.monotonic() - started
+ 641	            if elapsed > self.timeout_seconds:
+ 642	                return Evidence(plugin.name, plugin.version, PluginStatus.FALLBACK,
+ 643	                               0.0, 0.0, 1.0, {},
+ 644	                               {'query': query,
+ 645	                                'elapsed_ms': round(elapsed * 1000, 3)},
+ 646	                               'plugin exceeded timeout')
+ 647	            if not 0 <= evidence.score <= 1 or not 0 <= evidence.confidence <= 1:
+ 648	                raise ValueError('plugin returned score/confidence outside [0, 1]')
+ 649	            return Evidence(evidence.plugin, evidence.version, PluginStatus.OK,
+ 650	                           evidence.score, evidence.confidence,
+ 651	                           evidence.uncertainty, evidence.claims,
+ 652	                           {**evidence.provenance, 'query': query,
+ 653	                            'elapsed_ms': round(elapsed * 1000, 3)})
+ 654	        except Exception as exc:
+ 655	            elapsed = time.monotonic() - started
+ 656	            return Evidence(plugin.name, plugin.version, PluginStatus.FAILED,
+ 657	                           0.0, 0.0, 1.0, {},
+ 658	                           {'query': query,
+ 659	                            'elapsed_ms': round(elapsed * 1000, 3)},
+ 660	                           f'isolated plugin failure: {type(exc).__name__}')
+ 661	
+ 662	class SimpleV9EvidencePlugin:
+ 663	    name = 'v9_evidence'
+ 664	    version = 'concept-adapter-0.1'
+ 665	
+ 666	    def analyze(self, query: str, payload: Any) -> Evidence:
+ 667	        values = payload if isinstance(payload, (list, tuple)) else []
+ 668	        numeric = [float(v) for v in values if isinstance(v, (int, float))]
+ 669	        uncertainty = numeric.count(0) / len(numeric) if numeric else 1.0
+ 670	        score = 0.5 + (sum(numeric) / (2 * len(numeric)) if numeric else 0.0)
+ 671	        score = max(0.0, min(1.0, score))
+ 672	        return Evidence(self.name, self.version, PluginStatus.OK, score,
+ 673	                       1.0 - uncertainty, uncertainty,
+ 674	                       {'numeric_count': len(numeric),
+ 675	                        'query_length': len(query)},
+ 676	                       {'mode': 'bounded evidence adapter'})
+ 677	
+ 678	class V9WaveEvidencePlugin:
+ 679	    name = 'v9_wave_mask'
+ 680	    version = 'adapter-0.1'
+ 681	
+ 682	    def analyze(self, query: str, payload: Any) -> Evidence:
+ 683	        if not isinstance(payload, (list, tuple)) or not payload:
+ 684	            raise ValueError('V9 wave adapter requires a non-empty numeric vector')
+ 685	        values = [float(value) for value in payload]
+ 686	        if any((not isfinite(value) for value in values)):
+ 687	            raise ValueError('payload contains non-finite values')
+ 688	        bounded = [max(-2.0, min(2.0, value)) for value in values]
+ 689	        phase = sum(bounded) / (2.0 * len(bounded))
+ 690	        wave = 0.5 + 0.5 * sin(pi * phase)
+ 691	        mask_balance = 1.0 - min(1.0, abs(sum(bounded)) / (2.0 * len(bounded)))
+ 692	        score = max(0.0, min(1.0, 0.7 * wave + 0.3 * mask_balance))
+ 693	        uncertainty = min(1.0, sum((abs(v) < 0.25 for v in bounded)) / len(bounded))
+ 694	        confidence = 1.0 - uncertainty
+ 695	        return Evidence(self.name, self.version, PluginStatus.OK, score,
+ 696	                       confidence, uncertainty,
+ 697	                       {'wave_score': wave, 'mask_balance': mask_balance,
+ 698	                        'bounded_values': bounded,
+ 699	                        'query_length': len(query)},
+ 700	                       {'model': 'bounded sinusoidal evidence',
+ 701	                        'scientific_status': 'experimental'})
+ 702	
+ 703	# ===========================================================================
+ 704	# Plugin risk gate
+ 705	# ===========================================================================
+ 706	
+ 707	@dataclass(frozen=True)
+ 708	class PluginGateResult:
+ 709	    evidence: Evidence
+ 710	    risk: RiskAssessment
+ 711	    execution_authorized: bool
+ 712	
+ 713	class PluginRiskGate:
+ 714	
+ 715	    def __init__(self, adapter: PluginAdapter | None = None,
+ 716	                 risk_engine: DynamicRiskEngine | None = None):
+ 717	        self.adapter = adapter or PluginAdapter()
+ 718	        self.risk_engine = risk_engine or DynamicRiskEngine()
+ 719	
+ 720	    def analyze(self, plugin_name: str, query: str, payload: Any) -> PluginGateResult:
+ 721	        evidence = self.adapter.analyze(plugin_name, query, payload)
+ 722	        module_result = ModuleResult(
+ 723	            module=f'plugin:{evidence.plugin}',
+ 724	            logic_type=getattr(TernaryLogicModule, 'logic_type'),
+ 725	            state=evidence.claims, score=evidence.score,
+ 726	            confidence=evidence.confidence, uncertainty=evidence.uncertainty,
+ 727	            evidence=evidence.provenance,
+ 728	            explanation=evidence.warning or 'plugin evidence accepted')
+ 729	        risk = self.risk_engine.assess(
+ 730	            module_result,
+ 731	            projection_loss=1.0 if evidence.status is not PluginStatus.OK else 0.0,
+ 732	            conflict_density=1.0 if evidence.status is not PluginStatus.OK else 0.0)
+ 733	        authorized = (evidence.status is PluginStatus.OK and
+ 734	                     (not risk.veto) and (risk.score < 0.5))
+ 735	        return PluginGateResult(evidence, risk, authorized)
+ 736	
+ 737	# ===========================================================================
+ 738	# Evidence aggregation
+ 739	# ===========================================================================
+ 740	
+ 741	@dataclass(frozen=True)
+ 742	class EvidenceAggregate:
+ 743	    evidences: List[Evidence]
+ 744	    mean_score: float
+ 745	    mean_confidence: float
+ 746	    conflict_density: float
+ 747	    uncertainty: float
+ 748	    selected_plugin: str
+ 749	    explanation: str
+ 750	
+ 751	    def to_dict(self) -> Dict[str, Any]:
+ 752	        return {
+ 753	            'plugins': [e.plugin for e in self.evidences],
+ 754	            'mean_score': round(self.mean_score, 4),
+ 755	            'mean_confidence': round(self.mean_confidence, 4),
+ 756	            'conflict_density': round(self.conflict_density, 4),
+ 757	            'uncertainty': round(self.uncertainty, 4),
+ 758	            'selected_plugin': self.selected_plugin,
+ 759	            'explanation': self.explanation
+ 760	        }
+ 761	
+ 762	class EvidenceRashomon:
+ 763	    """Compare plugin outputs without treating disagreement as a failure."""
+ 764	
+ 765	    def aggregate(self, evidences: Iterable[Evidence]) -> EvidenceAggregate:
+ 766	        values = list(evidences)
+ 767	        if not values:
+ 768	            raise ValueError('at least one evidence result is required')
+ 769	        scores = [max(0.0, min(1.0, e.score)) for e in values]
+ 770	        confidences = [max(0.0, min(1.0, e.confidence)) for e in values]
+ 771	        statuses = [e.status is not PluginStatus.OK for e in values]
+ 772	        conflict = max(scores) - min(scores) if len(scores) > 1 else 0.0
+ 773	        conflict = max(conflict, sum(statuses) / len(statuses))
+ 774	        uncertainty = min(1.0, 1.0 - sum(confidences) / len(confidences) +
+ 775                         0.5 * conflict)
+ 776	        selected = max(values, key=lambda e: (e.confidence, e.score, -e.uncertainty))
+ 777	        explanation = ('plugin evidence agrees within tolerance'
+ 778	                      if conflict < 0.25
+ 779	                      else 'plugin evidence diverges; risk gate must review alternatives')
+ 780	        return EvidenceAggregate(values, sum(scores) / len(scores),
+ 781	                                sum(confidences) / len(confidences),
+ 782	                                conflict, uncertainty, selected.plugin, explanation)
+ 783	
+ 784	@dataclass(frozen=True)
+ 785	class ConflictRisk:
+ 786	    score: float
+ 787	    level: RiskLevel
+ 788	    factors: Dict[str, float]
+ 789	    action: str
+ 790	    explanation: str
+ 791	
+ 792	    def to_dict(self) -> Dict[str, Any]:
+ 793	        return {
+ 794	            'score': round(self.score, 4),
+ 795	            'level': self.level.value,
+ 796	            'factors': {k: round(v, 4) for k, v in self.factors.items()},
+ 797	            'action': self.action,
+ 798	            'explanation': self.explanation
+ 799	        }
+ 800	
+ 801	class ConflictRiskEngine:
+ 802	
+ 803	    def assess(self, aggregate: EvidenceAggregate, *,
+ 804	               projection_loss: float = 0.0, execution_cost: float = 0.0,
+ 805	               allow_action: bool = False) -> ConflictRisk:
+ 806	        fallback_rate = sum((e.status.value != 'OK'
+ 807	                            for e in aggregate.evidences)) / len(aggregate.evidences)
+ 808	        factors = {
+ 809	            'conflict_density': max(0.0, min(1.0, aggregate.conflict_density)),
+ 810	            'aggregate_uncertainty': max(0.0, min(1.0, aggregate.uncertainty)),
+ 811	            'fallback_rate': max(0.0, min(1.0, fallback_rate)),
+ 812	            'projection_loss': max(0.0, min(1.0, projection_loss)),
+ 813	            'execution_cost': max(0.0, min(1.0, execution_cost))
+ 814	        }
+ 815	        score = min(1.0, 0.45 * factors['conflict_density'] +
+ 816	                    0.25 * factors['aggregate_uncertainty'] +
+ 817	                    0.1 * factors['fallback_rate'] +
+ 818	                    0.1 * factors['projection_loss'] +
+ 819	                    0.1 * factors['execution_cost'])
+ 820	        if score >= 0.8:
+ 821	            level, action = (RiskLevel.CRITICAL, 'VETO')
+ 822	        elif score >= 0.55:
+ 823	            level, action = (RiskLevel.HIGH, 'CLARIFY')
+ 824	        elif allow_action:
+ 825	            level, action = (RiskLevel.LOW if score < 0.3
+ 826	                           else RiskLevel.MEDIUM, 'PASS')
+ 827	        else:
+ 828	            level, action = (RiskLevel.LOW if score < 0.3
+ 829	                           else RiskLevel.MEDIUM, 'CLARIFY')
+ 830	        largest = sorted(factors.items(), key=lambda item: item[1], reverse=True)
+ 831	        explanation = '; '.join((f'{name}={value:.3f}'
+ 832	                                for name, value in largest[:2]))
+ 833	        return ConflictRisk(score, level, factors, action, explanation)
+ 834	
+ 835	# ===========================================================================
+ 836	# Conflict-aware orchestrator
+ 837	# ===========================================================================
+ 838	
+ 839	@dataclass(frozen=True)
+ 840	class ConflictAwareResponse:
+ 841	    request_id: str
+ 842	    action: Action
+ 843	    aggregate: EvidenceAggregate
+ 844	    risk: ConflictRisk
+ 845	    execution_authorized: bool
+ 846	    explanation: str
+ 847	
+ 848	    def to_dict(self):
+ 849	        return {
+ 850	            'request_id': self.request_id,
+ 851	            'action': self.action.value,
+ 852	            'aggregate': self.aggregate.to_dict(),
+ 853	            'risk': self.risk.to_dict(),
+ 854	            'execution_authorized': self.execution_authorized,
+ 855	            'explanation': self.explanation
+ 856	        }
+ 857	
+ 858	class ConflictAwareOrchestrator:
+ 859	
+ 860	    def __init__(self, base: Optional[V6Orchestrator] = None):
+ 861	        self.base = base or V6Orchestrator()
+ 862	        self.rashomon = EvidenceRashomon()
+ 863	        self.risk_engine = ConflictRiskEngine()
+ 864	
+ 865	    def adjudicate(self, request: OrchestratorRequest,
+ 866	                   evidences: Iterable[Evidence], *,
+ 867	                   projection_loss: float = 0.0,
+ 868	                   execution_cost: float = 0.0) -> ConflictAwareResponse:
+ 869	        aggregate = self.rashomon.aggregate(evidences)
+ 870	        risk = self.risk_engine.assess(aggregate, projection_loss=projection_loss,
+ 871	                                      execution_cost=execution_cost,
+ 872	                                      allow_action=request.allow_action)
+ 873	        action = Action(risk.action)
+ 874	        authorized = action is Action.PASS and request.allow_action
+ 875	        explanation = f'{aggregate.explanation}; risk={risk.explanation}'
+ 876	        return ConflictAwareResponse(request.request_id, action, aggregate,
+ 877	                                    risk, authorized, explanation)
+ 878	
+ 879	# ===========================================================================
+ 880	# V6 Orchestrator
+ 881	# ===========================================================================
+ 882	
+ 883	class V6Orchestrator:
+ 884	
+ 885	    def __init__(self, execution_os: Optional[ExecutionOS] = None):
+ 886	        self.modules: Dict[LogicType, LogicModule] = {
+ 887	            LogicType.TERNARY: TernaryLogicModule(),
+ 888	            LogicType.TERNARY_MATRIX: TernaryMatrixModule(),
+ 889	            LogicType.PENTARY: PentaryLogicModule(),
+ 890	            LogicType.PENTARY_MATRIX: PentaryMatrixModule()
+ 891	        }
+ 892	        self.execution_os = execution_os or ExecutionOS()
+ 893	
+ 894	    def _route(self, request: OrchestratorRequest) -> Tuple[LogicType, str]:
+ 895	        if request.preferred_logic is not None:
+ 896	            return (request.preferred_logic, 'explicit preferred logic')
+ 897	        if (isinstance(request.payload, list) and request.payload and
+ 898	                isinstance(request.payload[0], list)):
+ 899	            values = [v for row in request.payload for v in row]
+ 900	            return (LogicType.PENTARY_MATRIX
+ 901	                    if any((abs(v) == 2 for v in values))
+ 902	                    else LogicType.TERNARY_MATRIX,
+ 903	                    'matrix shape inferred from payload')
+ 904	        values = list(request.payload) if isinstance(request.payload, (list, tuple)) else []
+ 905	        return (LogicType.PENTARY
+ 906	                if any((abs(int(v)) == 2 for v in values))
+ 907	                else LogicType.TERNARY,
+ 908	                'vector alphabet inferred from payload')
+ 909	
+ 910	    def process(self, request: OrchestratorRequest) -> OrchestratorResponse:
+ 911	        try:
+ 912	            logic_type, reason = self._route(request)
+ 913	            module = self.modules[logic_type]
+ 914	            result = module.evaluate(request.payload)
+ 915	            risk = min(1.0, 0.55 * result.uncertainty +
+ 916	                      0.25 * (1.0 - result.confidence) +
+ 917	                      (0.2 if abs(result.score) < 0.1 else 0.0))
+ 918	            if risk >= 0.8:
+ 919	                action = Action.VETO
+ 920	            elif risk >= 0.5:
+ 921	                action = Action.CLARIFY
+ 922	            elif not request.allow_action:
+ 923	                action = Action.CLARIFY
+ 924	            else:
+ 925	                action = Action.PASS
+ 926	            response = OrchestratorResponse(request.request_id, action,
+ 927	                                           module.name, result, risk, reason)
+ 928	            response.audit_id = self.execution_os.execute(request, response)
+ 929	            return response
+ 930	        except (ValueError, KeyError, TypeError) as exc:
+ 931	            return OrchestratorResponse(request.request_id, Action.REJECT,
+ 932	                                       'none', None, 1.0,
+ 933	                                       'validation failure', error=str(exc))
+ 934	
+ 935	# ===========================================================================
+ 936	# Operational OS
+ 937	# ===========================================================================
+ 938	
+ 939	@dataclass
+ 940	class Process:
+ 941	    process_id: str
+ 942	    priority: int = 0
+ 943	    state: ProcessState = ProcessState.READY
+ 944	    ticks: int = 0
+ 945	    waiting_ticks: int = 0
+ 946	    metadata: Dict[str, Any] = field(default_factory=dict)
+ 947	
+ 948	@dataclass(frozen=True)
+ 949	class ExecutionRecord:
+ 950	    process_id: str
+ 951	    action: Action
+ 952	    result: Any
+ 953	    previous_hash: str
+ 954	    timestamp: float = field(default_factory=time.time)
+ 955	
+ 956	    @property
+ 957	    def hash(self) -> str:
+ 958	        payload = json.dumps({
+ 959	            'process_id': self.process_id,
+ 960	            'action': self.action.value,
+ 961	            'result': self.result,
+ 962	            'previous_hash': self.previous_hash,
+ 963	            'timestamp': self.timestamp
+ 964	        }, sort_keys=True, default=str)
+ 965	        return hashlib.sha256(payload.encode()).hexdigest()
+ 966	
+ 967	class OperationalOS:
+ 968	    """Guarded in-memory execution boundary."""
+ 969	
+ 970	    def __init__(self, starvation_limit: int = 5):
+ 971	        if starvation_limit < 1:
+ 972	            raise ValueError('starvation_limit must be positive')
+ 973	        self.starvation_limit = starvation_limit
+ 974	        self.processes: Dict[str, Process] = {}
+ 975	        self.actions: Dict[str, Callable[[Any], Any]] = {}
+ 976	        self.records: List[ExecutionRecord] = []
+ 977	
+ 978	    def register_action(self, name: str, handler: Callable[[Any], Any]) -> None:
+ 979	        if not name or not callable(handler):
+ 980	            raise ValueError('action name and callable handler are required')
+ 981	        self.actions[name] = handler
+ 982	
+ 983	    def create_process(self, process_id: str, priority: int = 0) -> Process:
+ 984	        if process_id in self.processes:
+ 985	            raise ValueError(f'process already exists: {process_id}')
+ 986	        if priority < 0:
+ 987	            raise ValueError('priority cannot be negative')
+ 988	        process = Process(process_id, priority)
+ 989	        self.processes[process_id] = process
+ 990	        return process
+ 991	
+ 992	    def _next_process(self) -> Optional[Process]:
+ 993	        ready = [p for p in self.processes.values()
+ 994	                if p.state is ProcessState.READY]
+ 995	        if not ready:
+ 996	            return None
+ 997	        starved = [p for p in ready if p.waiting_ticks >= self.starvation_limit]
+ 998	        pool = starved or ready
+ 999	        selected = max(pool, key=lambda p: (p.priority + p.waiting_ticks,
+1000	                                           -p.waiting_ticks))
+1001	        for process in ready:
+1002	            if process.process_id == selected.process_id:
+1003	                process.waiting_ticks = 0
+1004	            else:
+1005	                process.waiting_ticks += 1
+1006	        return selected
+1007	
+1008	    def execute(self, process_id: str, action: Action, action_name: str,
+1009	               payload: Any = None, *, risk_score: float = 0.0) -> Any:
+1010	        if process_id not in self.processes:
+1011	            raise ValueError('unknown process')
+1012	        if action is not Action.PASS:
+1013	            raise PermissionError(f'execution denied by action {action.value}')
+1014	        if not 0 <= risk_score < 0.5:
+1015	            raise PermissionError('risk score is outside the execution budget')
+1016	        if action_name not in self.actions:
+1017	            raise ValueError('unregistered action')
+1018	        process = self.processes[process_id]
+1019	        if process.state is ProcessState.TERMINATED:
+1020	            raise RuntimeError('terminated process cannot execute')
+1021	        previous = self.records[-1].hash if self.records else 'GENESIS'
+1022	        process.state = ProcessState.RUNNING
+1023	        result = self.actions[action_name](payload)
+1024	        process.ticks += 1
+1025	        process.state = ProcessState.READY
+1026	        record = ExecutionRecord(process_id, action, result, previous)
+1027	        self.records.append(record)
+1028	        return result
+1029	
+1030	    def dispatch_one(self) -> Optional[str]:
+1031	        process = self._next_process()
+1032	        return process.process_id if process else None
+1033	
+1034	    def terminate(self, process_id: str) -> None:
+1035	        if process_id not in self.processes:
+1036	            raise ValueError('unknown process')
+1037	        self.processes[process_id].state = ProcessState.TERMINATED
+1038	
+1039	    def verify_audit(self) -> bool:
+1040	        previous = 'GENESIS'
+1041	        for record in self.records:
+1042	            if record.previous_hash != previous:
+1043	                return False
+1044	            previous = record.hash
+1045	        return True
+1046	
+1047	    def snapshot(self) -> Dict[str, Any]:
+1048	        return {
+1049	            'processes': {
+1050	                pid: {
+1051	                    'state': p.state.value,
+1052	                    'priority': p.priority,
+1053	                    'ticks': p.ticks,
+1054	                    'waiting_ticks': p.waiting_ticks
+1055	                }
+1056	                for pid, p in self.processes.items()
+1057	            },
+1058	            'records': len(self.records),
+1059	            'audit_verified': self.verify_audit()
+1060	        }
+1061	
+1062	# ===========================================================================
+1063	# Resource quotas
+1064	# ===========================================================================
+1065	
+1066	@dataclass
+1067	class ResourceQuota:
+1068	    max_ticks: int = 10
+1069	    used_ticks: int = 0
+1070	    max_payload_bytes: int = 4096
+1071	
+1072	    def consume(self, payload: Any) -> None:
+1073	        if self.used_ticks >= self.max_ticks:
+1074	            raise PermissionError('process tick quota exceeded')
+1075	        encoded = json.dumps(payload, default=str).encode()
+1076	        if len(encoded) > self.max_payload_bytes:
+1077	            raise PermissionError('payload quota exceeded')
+1078	        self.used_ticks += 1
+1079	
+1080	class StatefulBXOS(OperationalOS):
+1081	
+1082	    def __init__(self, starvation_limit: int = 5):
+1083	        super().__init__(starvation_limit)
+1084	        self.quotas: Dict[str, ResourceQuota] = {}
+1085	
+1086	    def create_process(self, process_id: str, priority: int = 0,
+1087	                      quota: ResourceQuota | None = None):
+1088	        process = super().create_process(process_id, priority)
+1089	        self.quotas[process_id] = quota or ResourceQuota()
+1090	        return process
+1091	
+1092	    def execute(self, process_id, action, action_name, payload=None, *,
+1093	               risk_score=0.0):
+1094	        if process_id not in self.quotas:
+1095	            raise ValueError('process quota is missing')
+1096	        self.quotas[process_id].consume(payload)
+1097	        try:
+1098	            return super().execute(process_id, action, action_name, payload,
+1099	                                  risk_score=risk_score)
+1100	        except Exception:
+1101	            self.quotas[process_id].used_ticks = max(
+1102	                0, self.quotas[process_id].used_ticks - 1)
+1103	            raise
+1104	
+1105	    def snapshot_state(self) -> Dict[str, Any]:
+1106	        state = {
+1107	            'processes': {
+1108	                pid: {
+1109	                    'process_id': p.process_id,
+1110	                    'priority': p.priority,
+1111	                    'state': p.state.value,
+1112	                    'ticks': p.ticks,
+1113	                    'waiting_ticks': p.waiting_ticks,
+1114	                    'metadata': p.metadata
+1115	                }
+1116	                for pid, p in self.processes.items()
+1117	            },
+1118	            'quotas': {pid: asdict(q) for pid, q in self.quotas.items()},
+1119	            'records': len(self.records)
+1120	        }
+1121	        body = json.dumps(state, sort_keys=True, default=str)
+1122	        return {'state': state,
+1123	                'digest': hashlib.sha256(body.encode()).hexdigest()}
+1124	
+1125	    def restore_state(self, snapshot: Dict[str, Any]) -> None:
+1126	        state = snapshot.get('state')
+1127	        if not isinstance(state, dict):
+1128	            raise ValueError('invalid snapshot')
+1129	        body = json.dumps(state, sort_keys=True, default=str)
+1130	        expected = hashlib.sha256(body.encode()).hexdigest()
+1131	        if snapshot.get('digest') != expected:
+1132	            raise ValueError('snapshot digest mismatch')
+1133	        for pid, raw in state.get('processes', {}).items():
+1134	            if pid not in self.processes:
+1135	                self.create_process(pid, int(raw['priority']), ResourceQuota())
+1136	            process = self.processes[pid]
+1137	            process.state = ProcessState(raw['state'])
+1138	            process.ticks = int(raw['ticks'])
+1139	            process.waiting_ticks = int(raw['waiting_ticks'])
+1140	            process.metadata = dict(raw.get('metadata', {}))
+1141	        for pid, raw in state.get('quotas', {}).items():
+1142	            self.quotas[pid] = ResourceQuota(**raw)
+1143	
+1144	# ===========================================================================
+1145	# Tamper-evident BXOS
+1146	# ===========================================================================
+1147	
+1148	class TamperEvidentBXOS(StatefulBXOS):
+1149	    """BXOS variant that seals the audit hashes in process memory."""
+1150	
+1151	    def __init__(self, starvation_limit: int = 5):
+1152	        super().__init__(starvation_limit)
+1153	        self._sealed_audit_hashes: List[str] = []
+1154	
+1155	    def execute(self, process_id, action, action_name, payload=None, *,
+1156	               risk_score=0.0):
+1157	        result = super().execute(process_id, action, action_name, payload,
+1158	                                risk_score=risk_score)
+1159	        self._sealed_audit_hashes.append(self.records[-1].hash)
+1160	        return result
+1161	
+1162	    def verify_audit(self) -> bool:
+1163	        if len(self.records) != len(self._sealed_audit_hashes):
+1164	            return False
+1165	        if any(record.hash != sealed
+1166	               for record, sealed in zip(self.records, self._sealed_audit_hashes)):
+1167	            return False
+1168	        return super().verify_audit()
+1169	
+1170	# ===========================================================================
+1171	# State store
+1172	# ===========================================================================
+1173	
+1174	class StateStore:
+1175	
+1176	    def __init__(self, path: str | Path):
+1177	        self.path = Path(path)
+1178	        self.path.parent.mkdir(parents=True, exist_ok=True)
+1179	
+1180	    @staticmethod
+1181	    def _digest(state: Dict[str, Any]) -> str:
+1182	        body = json.dumps(state, sort_keys=True, ensure_ascii=False, default=str)
+1183	        return hashlib.sha256(body.encode('utf-8')).hexdigest()
+1184	
+1185	    def save(self, state: Dict[str, Any]) -> str:
+1186	        if not isinstance(state, dict):
+1187	            raise ValueError('state must be a dictionary')
+1188	        envelope = {'state': state, 'digest': self._digest(state), 'format': 1}
+1189	        encoded = json.dumps(envelope, sort_keys=True, ensure_ascii=False,
+1190                            indent=2, default=str).encode('utf-8')
+1191	        fd, temp_name = tempfile.mkstemp(prefix=f'.{self.path.name}.',
+1192                                         dir=str(self.path.parent))
+1193	        try:
+1194	            with os.fdopen(fd, 'wb') as handle:
+1195	                handle.write(encoded)
+1196	                handle.flush()
+1197	                os.fsync(handle.fileno())
+1198	            os.replace(temp_name, self.path)
+1199	        finally:
+1200	            if os.path.exists(temp_name):
+1201	                os.unlink(temp_name)
+1202	        return envelope['digest']
+1203	
+1204	    def load(self) -> Dict[str, Any]:
+1205	        if not self.path.exists():
+1206	            raise FileNotFoundError(self.path)
+1207	        envelope = json.loads(self.path.read_text(encoding='utf-8'))
+1208	        if envelope.get('format') != 1 or not isinstance(envelope.get('state'), dict):
+1209	            raise ValueError('invalid state envelope')
+1210	        expected = self._digest(envelope['state'])
+1211	        if envelope.get('digest') != expected:
+1212	            raise ValueError('state digest mismatch')
+1213	        return envelope['state']
+1214	
+1215	class PersistentBXOS(StatefulBXOS):
+1216	
+1217	    def __init__(self, store_path: str | Path, starvation_limit: int = 5):
+1218	        super().__init__(starvation_limit)
+1219	        self.store = StateStore(store_path)
+1220	
+1221	    def save_to_disk(self) -> str:
+1222	        return self.store.save(self.snapshot_state())
+1223	
+1224	    def restore_from_disk(self) -> None:
+1225	        snapshot = self.store.load()
+1226	        self.restore_state(snapshot)
+1227	
+1228	    def durable_snapshot(self) -> dict[str, Any]:
+1229	        snapshot = self.snapshot_state()
+1230	        snapshot['store_path'] = str(self.store.path)
+1231	        return snapshot
+1232	
+1233	# ===========================================================================
+1234	# Unified organism layer
+1235	# ===========================================================================
+1236	
+1237	@dataclass
+1238	class UnifiedRequest:
+1239	    query: str
+1240	    payload: Any
+1241	    preferred_logic: Any = RoutingMode.AUTO
+1242	    priority: int = 0
+1243	    deadline: Optional[float] = None
+1244	    allow_action: bool = False
+1245	    risk_budget: float = 0.5
+1246	    request_id: str = field(default_factory=lambda: f'unified-{int(time.time_ns())}')
+1247	
+1248	    def validate(self) -> None:
+1249	        if not isinstance(self.query, str) or not self.query.strip():
+1250	            raise ValueError('query must be a non-empty string')
+1251	        if self.priority < 0:
+1252	            raise ValueError('priority cannot be negative')
+1253	        if not 0.0 <= self.risk_budget <= 1.0:
+1254	            raise ValueError('risk_budget must be in [0, 1]')
+1255	        if self.deadline is not None and self.deadline <= time.time():
+1256	            raise ValueError('deadline has expired')
+1257	
+1258	@dataclass(frozen=True)
+1259	class ExecutionPlan:
+1260	    request_id: str
+1261	    action: Action
+1262	    selected_module: str
+1263	    risk: Dict[str, Any]
+1264	    fairness: Dict[str, Any]
+1265	    deadline: Optional[float]
+1266	    audit_required: bool
+1267	    provenance: Dict[str, Any]
+1268	
+1269	    def to_dict(self) -> Dict[str, Any]:
+1270	        return {
+1271	            'request_id': self.request_id,
+1272	            'action': self.action.value,
+1273	            'selected_module': self.selected_module,
+1274	            'risk': self.risk,
+1275	            'fairness': self.fairness,
+1276	            'deadline': self.deadline,
+1277	            'audit_required': self.audit_required,
+1278	            'provenance': self.provenance
+1279	        }
+1280	
+1281	class UnifiedOrganism:
+1282	    """One façade joining V6 control, analysis, risk, fairness and BXOS."""
+1283	
+1284	    def __init__(self, bxos: Optional[Any] = None):
+1285	        self.orchestrator = V6Orchestrator()
+1286	        self.risk_engine = DynamicRiskEngine()
+1287	        self.scheduler = FairnessScheduler()
+1288	        self.bxos = bxos or TamperEvidentBXOS()
+1289	        self.audit: List[Dict[str, Any]] = []
+1290	
+1291	    def _logic_type(self, requested: Any) -> Optional[LogicType]:
+1292	        if requested is None or requested == RoutingMode.AUTO or requested == 'AUTO':
+1293	            return None
+1294	        if isinstance(requested, LogicType):
+1295	            return requested
+1296	        aliases = {'L3': LogicType.TERNARY,
+1297	                  'L3_MATRIX': LogicType.TERNARY_MATRIX,
+1298	                  'L5': LogicType.PENTARY,
+1299	                  'L5_MATRIX': LogicType.PENTARY_MATRIX}
+1300	        if requested in aliases:
+1301	            return aliases[requested]
+1302	        raise ValueError(f'unknown preferred_logic: {requested}')
+1303	
+1304	    def evaluate(self, request: UnifiedRequest) -> ExecutionPlan:
+1305	        request.validate()
+1306	        preferred = self._logic_type(request.preferred_logic)
+1307	        base = OrchestratorRequest(request.query, request.payload, preferred,
+1308	                                  request.priority, False, request.request_id)
+1309	        response = self.orchestrator.process(base)
+1310	        fairness = self.scheduler.snapshot()
+1311	        if request.request_id not in self.scheduler.tasks:
+1312	            self.scheduler.submit(request.request_id, request.priority)
+1313	            fairness = self.scheduler.snapshot()
+1314	        if response.result is None:
+1315	            risk = {'score': 1.0, 'level': RiskLevel.CRITICAL.value,
+1316	                   'veto': True,
+1317	                   'explanation': response.error or 'module rejected input'}
+1318	            action, selected = Action.REJECT, 'none'
+1319	        else:
+1320	            assessment = self.risk_engine.assess(
+1321	                response.result,
+1322	                projection_loss=response.result.projection_loss)
+1323	            risk = assessment.to_dict()
+1324	            risk['budget_exceeded'] = assessment.score > request.risk_budget
+1325	            selected = response.result.module
+1326	            action = (Action.VETO if assessment.veto
+1327	                     else Action.CLARIFY
+1328	                     if assessment.score > request.risk_budget
+1329	                     or not request.allow_action
+1330	                     else Action.PASS)
+1331	        provenance = {'control_plane': 'V6',
+1332	                     'preferred_logic': str(request.preferred_logic),
+1333	                     'selected_module': selected}
+1334	        plan = ExecutionPlan(request.request_id, action, selected, risk,
+1335	                            fairness, request.deadline, True, provenance)
+1336	        self.audit.append({'plan': plan.to_dict(), 'timestamp': time.time()})
+1337	        return plan
+1338	
+1339	    def snapshot(self) -> Dict[str, Any]:
+1340	        return {'audit_count': len(self.audit), 'audit': list(self.audit),
+1341	               'bxos': self.bxos.snapshot_state()}
+1342	
+1343	# ===========================================================================
+1344	# Guarded execution boundary
+1345	# ===========================================================================
+1346	
+1347	@dataclass(frozen=True)
+1348	class ExecutionReceipt:
+1349	    request_id: str
+1350	    process_id: str
+1351	    action_name: str
+1352	    executed: bool
+1353	    reason: str
+1354	    result_digest: Optional[str] = None
+1355	
+1356	    def to_dict(self) -> Dict[str, Any]:
+1357	        return {'request_id': self.request_id, 'process_id': self.process_id,
+1358	               'action_name': self.action_name, 'executed': self.executed,
+1359	               'reason': self.reason, 'result_digest': self.result_digest}
+1360	
+1361	class GuardedExecutionBoundary:
+1362	    """The only v0.7 path from an ExecutionPlan to BXOS execution."""
+1363	
+1364	    def __init__(self, organism: UnifiedOrganism):
+1365	        self.organism = organism
+1366	
+1367	    def execute(self, request: UnifiedRequest, action_name: str,
+1368	               process_id: str) -> Tuple[ExecutionPlan, ExecutionReceipt]:
+1369	        plan = self.organism.evaluate(request)
+1370	        risk_score = float(plan.risk.get('score', 1.0))
+1371	        if plan.action is not Action.PASS:
+1372	            return plan, ExecutionReceipt(request.request_id, process_id,
+1373	                                        action_name, False,
+1374	                                        f'plan action is {plan.action.value}')
+1375	        if not request.allow_action:
+1376	            return plan, ExecutionReceipt(request.request_id, process_id,
+1377	                                        action_name, False,
+1378	                                        'request does not allow action')
+1379	        if risk_score > request.risk_budget or risk_score >= 0.5:
+1380	            return plan, ExecutionReceipt(request.request_id, process_id,
+1381	                                        action_name, False,
+1382	                                        'risk is outside execution budget')
+1383	        if process_id not in self.organism.bxos.processes:
+1384	            self.organism.bxos.create_process(process_id, request.priority)
+1385	        try:
+1386	            result = self.organism.bxos.execute(process_id, Action.PASS,
+1387	                                               action_name, request.payload,
+1388	                                               risk_score=risk_score)
+1389	        except Exception as exc:
+1390	            return plan, ExecutionReceipt(request.request_id, process_id,
+1391	                                        action_name, False,
+1392	                                        f'BXOS rejected execution: {type(exc).__name__}')
+1393	        digest = hashlib.sha256(json.dumps(result, sort_keys=True,
+1394	                                          default=str).encode()).hexdigest()
+1395	        return plan, ExecutionReceipt(request.request_id, process_id,
+1396	                                    action_name, True,
+1397	                                    'executed through guarded BXOS boundary',
+1398	                                    digest)
+1399	
+1400	# ===========================================================================
+1401	# Evidence lifecycle
+1402	# ===========================================================================
+1403	
+1404	@dataclass(frozen=True)
+1405	class LifecycleEvidence:
+1406	    evidence_id: str
+1407	    request_id: str
+1408	    state: EvidenceLifecycleState
+1409	    evidence: Evidence
+1410	    created_at: float
+1411	    expires_at: Optional[float]
+1412	    authority: str = 'advisory'
+1413	
+1414	    def to_dict(self) -> Dict[str, Any]:
+1415	        return {'evidence_id': self.evidence_id, 'request_id': self.request_id,
+1416	               'state': self.state.value, 'evidence': self.evidence.to_dict(),
+1417	               'created_at': self.created_at, 'expires_at': self.expires_at,
+1418	               'authority': self.authority}
+1419	
+1420	class EvidenceLifecycleManager:
+1421	    """Adds lifecycle, expiry and authority metadata around existing plugins."""
+1422	
+1423	    def __init__(self, adapter: Optional[PluginAdapter] = None,
+1424	                 ttl_seconds: float = 30.0):
+1425	        if ttl_seconds <= 0:
+1426	            raise ValueError('ttl_seconds must be positive')
+1427	        self.adapter = adapter or PluginAdapter()
+1428	        self.ttl_seconds = ttl_seconds
+1429	        self.records: Dict[str, LifecycleEvidence] = {}
+1430	
+1431	    def analyze(self, request_id: str, plugin_name: str, query: str,
+1432	               payload: Any) -> LifecycleEvidence:
+1433	        if not request_id:
+1434	            raise ValueError('request_id is required')
+1435	        created = time.time()
+1436	        evidence_id = f'evidence-{int(time.time_ns())}'
+1437	        evidence = self.adapter.analyze(plugin_name, query, payload)
+1438	        state = (EvidenceLifecycleState.ANALYZED
+1439	                if evidence.status is PluginStatus.OK
+1440	                else EvidenceLifecycleState.FALLBACK
+1441	                if evidence.status is PluginStatus.FALLBACK
+1442	                else EvidenceLifecycleState.FAILED)
+1443	        record = LifecycleEvidence(evidence_id, request_id, state, evidence,
+1444	                                  created, created + self.ttl_seconds)
+1445	        self.records[evidence_id] = record
+1446	        return record
+1447	
+1448	    def review(self, evidence_id: str,
+1449	               now: Optional[float] = None) -> LifecycleEvidence:
+1450	        if evidence_id not in self.records:
+1451	            raise KeyError('unknown evidence_id')
+1452	        record = self.records[evidence_id]
+1453	        current = time.time() if now is None else now
+1454	        if record.expires_at is not None and current > record.expires_at:
+1455	            expired = LifecycleEvidence(record.evidence_id, record.request_id,
+1456	                                       EvidenceLifecycleState.EXPIRED,
+1457	                                       record.evidence, record.created_at,
+1458	                                       record.expires_at, record.authority)
+1459	            self.records[evidence_id] = expired
+1460	            return expired
+1461	        reviewed = LifecycleEvidence(record.evidence_id, record.request_id,
+1462	                                    EvidenceLifecycleState.RISK_REVIEWED,
+1463	                                    record.evidence, record.created_at,
+1464	                                    record.expires_at, record.authority)
+1465	        self.records[evidence_id] = reviewed
+1466	        return reviewed
+1467	
+1468	# ===========================================================================
+1469	# Evidence integrated decision
+1470	# ===========================================================================
+1471	
+1472	@dataclass(frozen=True)
+1473	class EvidenceIntegratedDecision:
+1474	    plan: Optional[ExecutionPlan]
+1475	    evidence: List[LifecycleEvidence]
+1476	    aggregate: EvidenceAggregate
+1477	    evidence_risk: ConflictRisk
+1478	    final_action: Action
+1479	
+1480	    def to_dict(self) -> Dict[str, Any]:
+1481	        return {'plan': self.plan.to_dict() if self.plan else None,
+1482	               'evidence': [item.to_dict() for item in self.evidence],
+1483	               'aggregate': self.aggregate.to_dict(),
+1484	               'evidence_risk': self.evidence_risk.to_dict(),
+1485	               'final_action': self.final_action.value}
+1486	
+1487	class EvidenceIntegratedOrganism:
+1488	    """Coordinates V6 plan and advisory evidence before the execution gate."""
+1489	
+1490	    def __init__(self, organism: Optional[UnifiedOrganism] = None):
+1491	        self.organism = organism or UnifiedOrganism()
+1492	        adapter = PluginAdapter()
+1493	        adapter.register(SimpleV9EvidencePlugin())
+1494	        adapter.register(V9WaveEvidencePlugin())
+1495	        self.lifecycle = EvidenceLifecycleManager(adapter)
+1496	        self.rashomon = EvidenceRashomon()
+1497	        self.risk = ConflictRiskEngine()
+1498	
+1499	    def evaluate(self, request: UnifiedRequest,
+1500	                plugins: Optional[Sequence[str]] = None) -> EvidenceIntegratedDecision:
+1501	        plan = self.organism.evaluate(request)
+1502	        names = list(plugins or self.lifecycle.adapter.plugins.keys())
+1503	        lifecycle_records = [self.lifecycle.analyze(request.request_id, name,
+1504	                                                    request.query, request.payload)
+1505	                           for name in names]
+1506	        evidences = [item.evidence for item in lifecycle_records]
+1507	        aggregate = self.rashomon.aggregate(evidences)
+1508	        evidence_risk = self.risk.assess(aggregate, allow_action=False)
+1509	        final_action = (Action.VETO
+1510	                       if evidence_risk.action == 'VETO'
+1511	                       or plan.action is Action.VETO
+1512	                       else Action.CLARIFY
+1513	                       if evidence_risk.action != 'PASS'
+1514	                       or plan.action is not Action.PASS
+1515	                       else Action.PASS)
+1516	        return EvidenceIntegratedDecision(plan, lifecycle_records, aggregate,
+1517	                                        evidence_risk, final_action)
+1518	
+1519	# ===========================================================================
+1520	# Auto module orchestrator
+1521	# ===========================================================================
+1522	
+1523	@dataclass(frozen=True)
+1524	class AutoCandidate:
+1525	    module: str
+1526	    logic_type: LogicType
+1527	    score: float
+1528	    confidence: float
+1529	    uncertainty: float
+1530	    risk: float
+1531	
+1532	@dataclass(frozen=True)
+1533	class AutoOrchestrationResult:
+1534	    selected: AutoCandidate
+1535	    candidates: List[AutoCandidate]
+1536	    explanation: str
+1537	
+1538	    def to_dict(self) -> Dict[str, Any]:
+1539	        return {'selected': self.selected.__dict__,
+1540	               'candidates': [c.__dict__ for c in self.candidates],
+1541	               'explanation': self.explanation}
+1542	
+1543	class AutoModuleOrchestrator:
+1544	    """Runs AUTO only; explicit requests remain on the authoritative V6 path."""
+1545	
+1546	    def __init__(self, base: Optional[V6Orchestrator] = None):
+1547	        self.base = base or V6Orchestrator()
+1548	        self.risk_engine = DynamicRiskEngine()
+1549	
+1550	    def evaluate(self, payload: Any) -> AutoOrchestrationResult:
+1551	        candidates: List[AutoCandidate] = []
+1552	        for logic_type, module in self.base.modules.items():
+1553	            try:
+1554	                result = module.evaluate(payload)
+1555	            except (ValueError, TypeError, KeyError):
+1556	                continue
+1557	            assessment = self.risk_engine.assess(result,
+1558	                                                projection_loss=result.projection_loss)
+1559	            candidates.append(AutoCandidate(result.module, logic_type,
+1560	                                          result.score, result.confidence,
+1561	                                          result.uncertainty, assessment.score))
+1562	        if not candidates:
+1563	            raise ValueError('AUTO could not find a compatible logic module')
+1564	        selected = max(candidates,
+1565	                      key=lambda c: (c.confidence - c.risk, c.score, -c.uncertainty))
+1566	        return AutoOrchestrationResult(selected, candidates,
+1567	                                      'AUTO compared native-compatible modules; '
+1568	                                      'no L3/L5 values were converted')
+1569	
+1570	# ===========================================================================
+1571	# Experimental trajectory adapter
+1572	# ===========================================================================
+1573	
+1574	@dataclass(frozen=True)
+1575	class ExperimentalTrajectory:
+1576	    compressed_code: Tuple[int, ...]
+1577	    source_length: int
+1578	    loss_estimate: float
+1579	    collision_indicator: bool
+1580	    provenance: Dict[str, Any]
+1581	
+1582	    def to_dict(self) -> Dict[str, Any]:
+1583	        return {'compressed_code': list(self.compressed_code),
+1584	               'source_length': self.source_length,
+1585	               'loss_estimate': self.loss_estimate,
+1586	               'collision_indicator': self.collision_indicator,
+1587	               'provenance': self.provenance}
+1588	
+1589	class V10V11ExperimentalAdapter:
+1590	    """Non-authoritative L5 research adapter; not a physical or quantum model."""
+1591	
+1592	    name = 'v10_v11_experimental'
+1593	    version = 'contract-0.1'
+1594	
+1595	    def encode_trajectory(self, payload: Any) -> ExperimentalTrajectory:
+1596	        if not isinstance(payload, (list, tuple)) or not payload:
+1597	            raise ValueError('experimental trajectory requires a non-empty L5 sequence')
+1598	        values = [int(value) for value in payload]
+1599	        if any(value not in (-2, -1, 0, 1, 2) for value in values):
+1600	            raise ValueError('trajectory values must belong to L5')
+1601	        folded = tuple(sum(values[i:i + 3]) % 5 for i in range(0, len(values), 3))
+1602	        collision = len(folded) < len(values)
+1603	        loss = 1.0 if collision else 0.0
+1604	        return ExperimentalTrajectory(folded, len(values), loss, collision,
+1605	                                     {'model': 'modulo-5 trajectory fingerprint',
+1606	                                      'reversible': False,
+1607	                                      'scientific_status': 'experimental'})
+1608	
+1609	    def analyze(self, query: str, payload: Any) -> Evidence:
+1610	        trajectory = self.encode_trajectory(payload)
+1611	        score = sum(trajectory.compressed_code) / (5.0 * len(trajectory.compressed_code))
+1612	        score = max(0.0, min(1.0, score))
+1613	        return Evidence(self.name, self.version, PluginStatus.OK, score,
+1614	                       0.0 if trajectory.collision_indicator else 0.5,
+1615	                       1.0 if trajectory.collision_indicator else 0.5,
+1616	                       {'trajectory': trajectory.to_dict(),
+1617	                        'query_length': len(query)},
+1618	                       {'authority': 'advisory evidence only'},
+1619	                       'not eligible for direct execution')
+1620	
+1621	# ===========================================================================
+1622	# Pentary tensor field
+1623	# ===========================================================================
+1624	
+1625	@dataclass(frozen=True)
+1626	class TensorFieldStep:
+1627	    affected_cells: int
+1628	    boundary_loss_count: int
+1629	    saturation_count: int
+1630	    extreme_state_density: float
+1631	    gradient_activity: float
+1632	    state_distribution: Dict[str, int]
+1633	
+1634	    def to_dict(self) -> Dict[str, Any]:
+1635	        return {'affected_cells': self.affected_cells,
+1636	               'boundary_loss_count': self.boundary_loss_count,
+1637	               'saturation_count': self.saturation_count,
+1638	               'extreme_state_density': self.extreme_state_density,
+1639	               'gradient_activity': self.gradient_activity,
+1640	               'state_distribution': self.state_distribution}
+1641	
+1642	class PentaryTensorField:
+1643	    """Bounded discrete L5 field for advisory engineering experiments only."""
+1644	
+1645	    def __init__(self, dimensions: Sequence[int]):
+1646	        dimensions = tuple(int(value) for value in dimensions)
+1647	        if not dimensions or any(value <= 0 for value in dimensions):
+1648	            raise ValueError('dimensions must be positive')
+1649	        self.dimensions = dimensions
+1650	        self.field: Dict[Tuple[int, ...], int] = {
+1651	            coords: 0
+1652	            for coords in itertools.product(*[range(size) for size in dimensions])
+1653	        }
+1654	
+1655	    def _inside(self, coords: Tuple[int, ...]) -> bool:
+1656	        return (len(coords) == len(self.dimensions) and
+1657	               all(0 <= value < self.dimensions[i]
+1658	                   for i, value in enumerate(coords)))
+1659	
+1660	    def _metrics(self, affected_cells: int, boundary_loss: int,
+1661	                saturation: int) -> TensorFieldStep:
+1662	        counts = {str(value): 0 for value in (-2, -1, 0, 1, 2)}
+1663	        for value in self.field.values():
+1664	            counts[str(value)] += 1
+1665	        total = len(self.field)
+1666	        extremes = (counts['-2'] + counts['2']) / total
+1667	        activity = 0.0
+1668	        for coords, value in self.field.items():
+1669	            for axis in range(len(self.dimensions)):
+1670	                if coords[axis] + 1 < self.dimensions[axis]:
+1671	                    neighbor = list(coords)
+1672	                    neighbor[axis] += 1
+1673	                    activity += abs(value - self.field[tuple(neighbor)])
+1674	        activity /= max(1, total)
+1675	        return TensorFieldStep(affected_cells, boundary_loss, saturation,
+1676	                              extremes, activity, counts)
+1677	
+1678	    def step(self, impulses: Sequence[Tuple[Sequence[int], int, int, int]] = ()
+1679	             ) -> TensorFieldStep:
+1680	        delta: Dict[Tuple[int, ...], int] = {}
+1681	        affected, boundary_loss, saturation = 0, 0, 0
+1682	        for origin_raw, magnitude, radius, decay in impulses:
+1683	            origin = tuple(int(value) for value in origin_raw)
+1684	            magnitude, radius, decay = int(magnitude), int(radius), int(decay)
+1685	            if not self._inside(origin):
+1686	                raise ValueError('impulse origin is outside field')
+1687	            if magnitude not in (-2, -1, 0, 1, 2):
+1688	                raise ValueError('impulse magnitude must belong to L5')
+1689	            if radius < 0 or decay < 0:
+1690	                raise ValueError('radius and decay must be non-negative')
+1691	            for offsets in itertools.product(
+1692	                    *[range(-radius, radius + 1) for _ in self.dimensions]):
+1693	                if sum(abs(value) for value in offsets) > radius:
+1694	                    continue
+1695	                target = tuple(origin[i] + offsets[i]
+1696	                              for i in range(len(self.dimensions)))
+1697	                if not self._inside(target):
+1698	                    boundary_loss += 1
+1699	                    continue
+1700	                distance = sum(abs(value) for value in offsets)
+1701	                magnitude_abs = max(0, abs(magnitude) - decay * distance)
+1702	                contribution = (1 if magnitude >= 0 else -1) * magnitude_abs
+1703	                if contribution:
+1704	                    affected += 1
+1705	                    delta[target] = delta.get(target, 0) + contribution
+1706	        for coords, contribution in delta.items():
+1707	            raw = self.field[coords] + contribution
+1708	            clipped = max(-2, min(2, raw))
+1709	            if clipped != raw:
+1710	                saturation += 1
+1711	            self.field[coords] = clipped
+1712	        return self._metrics(affected, boundary_loss, saturation)
+1713	
+1714	    def inject(self, origin: Sequence[int], magnitude: int,
+1715	               radius: int = 0, decay: int = 0) -> TensorFieldStep:
+1716	        return self.step(((origin, magnitude, radius, decay),))
+1717	
+1718	    def snapshot(self) -> Dict[str, Any]:
+1719	        return {'dimensions': self.dimensions,
+1720	               'field': {','.join(map(str, coords)): value
+1721	                        for coords, value in self.field.items()}}
+1722	
+1723	class PentaryTensorFieldPlugin:
+1724	    name = 'v11_tensor_field'
+1725	    version = 'contract-0.1'
+1726	
+1727	    def analyze(self, query: str, payload: Any) -> Evidence:
+1728	        if not isinstance(payload, dict):
+1729	            raise ValueError('tensor-field plugin requires a mapping payload')
+1730	        field = PentaryTensorField(payload.get('dimensions', ()))
+1731	        impulses = payload.get('impulses', ())
+1732	        step = field.step(impulses)
+1733	        uncertainty = min(1.0,
+1734	                         0.5 * step.boundary_loss_count /
+1735	                         max(1, step.affected_cells + step.boundary_loss_count) +
+1736	                         0.5 * (step.saturation_count > 0))
+1737	        score = max(0.0, min(1.0,
+1738	                           0.5 + 0.5 * (step.extreme_state_density - 0.5)))
+1739	        return Evidence(self.name, self.version, PluginStatus.OK, score,
+1740	                       1.0 - uncertainty, uncertainty,
+1741	                       {'metrics': step.to_dict(), 'query_length': len(query)},
+1742	                       {'authority': 'advisory',
+1743	                        'scientific_status': 'engineering experiment',
+1744	                        'boundary_policy': 'absorbing'},
+1745	                       'not eligible for direct execution')
+1746	
+1747	# ===========================================================================
+1748	# Unified evidence planes
+1749	# ===========================================================================
+1750	
+1751	@dataclass(frozen=True)
+1752	class EvidencePlaneResult:
+1753	    aggregate: EvidenceAggregate
+1754	    risk: ConflictRisk
+1755	    execution_authorized: bool
+1756	
+1757	    def to_dict(self) -> Dict[str, Any]:
+1758	        return {'aggregate': self.aggregate.to_dict(),
+1759	               'risk': self.risk.to_dict(),
+1760	               'execution_authorized': self.execution_authorized}
+1761	
+1762	class UnifiedEvidencePlane:
+1763	    """V8/V9-style evidence enters risk analysis but never bypasses BXOS."""
+1764	
+1765	    def __init__(self):
+1766	        self.adapter = PluginAdapter()
+1767	        self.adapter.register(SimpleV9EvidencePlugin())
+1768	        self.adapter.register(V9WaveEvidencePlugin())
+1769	        self.rashomon = EvidenceRashomon()
+1770	        self.risk = ConflictRiskEngine()
+1771	
+1772	    def analyze(self, query: str, payload: Any,
+1773	               plugins: Optional[Sequence[str]] = None,
+1774	               allow_action: bool = False) -> EvidencePlaneResult:
+1775	        names = list(plugins or self.adapter.plugins.keys())
+1776	        evidences = [self.adapter.analyze(name, query, payload) for name in names]
+1777	        aggregate = self.rashomon.aggregate(evidences)
+1778	        assessment = self.risk.assess(aggregate, allow_action=allow_action)
+1779	        authorized = (assessment.action == 'PASS' and allow_action and
+1780	                     not assessment.level is RiskLevel.CRITICAL)
+1781	        return EvidencePlaneResult(aggregate, assessment, authorized)
+1782	
+1783	class UnifiedResearchEvidencePlane:
+1784	    """Optional V8/V9/V10/V11 evidence plane; never an execution path."""
+1785	
+1786	    def __init__(self):
+1787	        adapter = PluginAdapter()
+1788	        adapter.register(SimpleV9EvidencePlugin())
+1789	        adapter.register(V9WaveEvidencePlugin())
+1790	        adapter.register(V10V11ExperimentalAdapter())
+1791	        adapter.register(PentaryTensorFieldPlugin())
+1792	        self.lifecycle = EvidenceLifecycleManager(adapter)
+1793	        self.rashomon = EvidenceRashomon()
+1794	        self.risk = ConflictRiskEngine()
+1795	
+1796	    def analyze(self, request_id: str, query: str,
+1797	               plugin_payloads: Dict[str, Any]) -> EvidenceIntegratedDecision:
+1798	        records = [self.lifecycle.analyze(request_id, name, query, payload)
+1799	                  for name, payload in plugin_payloads.items()]
+1800	        aggregate = self.rashomon.aggregate([record.evidence for record in records])
+1801	        risk = self.risk.assess(aggregate, allow_action=False)
+1802	        return EvidenceIntegratedDecision(None, records, aggregate, risk,
+1803	                                        Action.VETO if risk.action == 'VETO'
+1804	                                        else Action.CLARIFY)
+1805	
+1806	# ===========================================================================
+1807	# Demo functions
+1808	# ===========================================================================
+1809	
+1810	def demo() -> None:
+1811	    orchestrator = V6Orchestrator()
+1812	    cases = [OrchestratorRequest('quick L3', [1, 1, 0], LogicType.TERNARY),
+1813	            OrchestratorRequest('L5 matrix', [[2, 1], [0, -2]],
+1814	                              LogicType.PENTARY_MATRIX),
+1815	            OrchestratorRequest('safe action', [1, 1, 1], LogicType.TERNARY,
+1816	                              allow_action=True)]
+1817	    for case in cases:
+1818	        print(json.dumps(orchestrator.process(case).to_dict(),
+1819	                        ensure_ascii=False, indent=2, default=str))
+1820	    print('AUDIT_VERIFIED', orchestrator.execution_os.verify())
+1821	
+1822	def organism_demo() -> None:
+1823	    organism = UnifiedOrganism()
+1824	    plan = organism.evaluate(UnifiedRequest('unified L5 inspection',
+1825	                                          [2, 1, 0, -1],
+1826	                                          preferred_logic='L5',
+1827	                                          risk_budget=0.8))
+1828	    print(json.dumps(plan.to_dict(), ensure_ascii=False, indent=2,
+1829	                    default=str))
+1830	
+1831	if __name__ == '__main__':
+1832	    demo()
+1833	    organism_demo()
