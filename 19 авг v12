@@ -1,0 +1,2186 @@
+# Автор / Author: Владимир Зааодюк / Vladimir Zavodiuk
+# Date / Дата: 2026-08-17
+# Email: glovesandfactories@gmail.com
+# License / Лицензия: All Rights Reserved
+"""Future AI Unified System V12 — Lomonosov Spiral Experience Layer.
+
+V12 is an independent research/engineering baseline. It does not modify V0.9
+or any preserved source version. The implementation connects:
+
+- L3/L5 state representations;
+- deterministic L5 -> L3 projection with loss and ambiguity masks;
+- provenance-linked experience nodes;
+- spiral/tree memory with hypothesis and validated branches;
+- advisory tensor-field comma-shift operators;
+- conservative decision gates before BXOS authority.
+
+Scientific boundary:
+The memory and projection contracts are engineering mechanisms. They do not
+prove cognitive superiority, generalization, or physical claims about fields.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from enum import Enum
+import hashlib
+import json
+import math
+import time
+from typing import Any, Dict, Iterable, List, Optional, Protocol, Sequence, Tuple
+
+L3 = (-1, 0, 1)
+L5 = (-2, -1, 0, 1, 2)
+Matrix = Tuple[Tuple[int, ...], ...]
+
+
+class FoldStatus(str, Enum):
+    STABLE = "FOLDED_STABLE"
+    LOSSY = "FOLDED_LOSSY"
+    AMBIGUOUS = "FOLDED_AMBIGUOUS"
+    CONFLICTED = "FOLDED_CONFLICTED"
+    FAILED = "FOLD_FAILED"
+
+
+class Decision(str, Enum):
+    PASS = "PASS"
+    CLARIFY = "CLARIFY"
+    VETO = "VETO"
+
+
+def _finite(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be numeric")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite")
+    return result
+
+
+def matrix_tuple(values: Sequence[Sequence[int]], allowed: Iterable[int]) -> Matrix:
+    allowed_set = set(allowed)
+    rows = tuple(tuple(int(x) for x in row) for row in values)
+    if not rows or not rows[0] or any(len(row) != len(rows[0]) for row in rows):
+        raise ValueError("matrix must be non-empty and rectangular")
+    if any(x not in allowed_set for row in rows for x in row):
+        raise ValueError(f"matrix contains values outside {sorted(allowed_set)}")
+    return rows
+
+
+def matrix_digest(matrix: Matrix) -> str:
+    payload = json.dumps(matrix, separators=(",", ":"), ensure_ascii=False).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def matrix_shape(matrix: Matrix) -> Tuple[int, int]:
+    return len(matrix), len(matrix[0])
+
+
+def sign_fold(source: Matrix) -> Tuple[Matrix, Tuple[Tuple[int, ...], ...]]:
+    source = matrix_tuple(source, L5)
+    projected = tuple(tuple(-1 if x < 0 else 1 if x > 0 else 0 for x in row) for row in source)
+    loss = tuple(tuple(1 if abs(x) == 2 else 0 for x in row) for row in source)
+    return projected, loss
+
+
+def threshold_fold(source: Matrix, threshold: int = 2) -> Tuple[Matrix, Tuple[Tuple[int, ...], ...]]:
+    source = matrix_tuple(source, L5)
+    if threshold not in (1, 2):
+        raise ValueError("threshold must be 1 or 2")
+    projected = tuple(
+        tuple(((-1 if x < 0 else 1) if abs(x) >= threshold else 0) for x in row)
+        for row in source
+    )
+    loss = tuple(tuple(1 if 0 < abs(x) < threshold else 0 for x in row) for row in source)
+    return projected, loss
+
+
+def _mask_count(mask: Tuple[Tuple[int, ...], ...]) -> int:
+    return sum(sum(row) for row in mask)
+
+
+@dataclass(frozen=True)
+class Provenance:
+    source_digest: str
+    operator: str
+    operator_version: str
+    operator_path: Tuple[str, ...]
+    parent_ids: Tuple[str, ...] = ()
+    source_versions: Tuple[str, ...] = ("V12",)
+    audit_event_id: str = ""
+    created_at: float = field(default_factory=time.time)
+
+
+@dataclass(frozen=True)
+class FoldResult:
+    source_matrix: Matrix
+    projection_matrix: Matrix
+    loss_mask: Tuple[Tuple[int, ...], ...]
+    ambiguity_mask: Tuple[Tuple[int, ...], ...]
+    conflict_count: int
+    status: FoldStatus
+    provenance: Provenance
+
+    @property
+    def loss_count(self) -> int:
+        return _mask_count(self.loss_mask)
+
+    @property
+    def cell_count(self) -> int:
+        rows, cols = matrix_shape(self.source_matrix)
+        return rows * cols
+
+    @property
+    def loss_ratio(self) -> float:
+        return self.loss_count / self.cell_count
+
+    @property
+    def provenance_reconstructible(self) -> bool:
+        return bool(self.provenance.source_digest and self.source_matrix)
+
+    @property
+    def mathematical_reversible(self) -> bool:
+        return False
+
+    def to_dict(self) -> Dict[str, Any]:
+        data = asdict(self)
+        data["status"] = self.status.value
+        data["provenance"] = asdict(self.provenance)
+        data.update({
+            "loss_count": self.loss_count,
+            "loss_ratio": self.loss_ratio,
+            "provenance_reconstructible": self.provenance_reconstructible,
+            "mathematical_reversible": self.mathematical_reversible,
+        })
+        return data
+
+
+def fold_l5_to_l3(
+    source: Sequence[Sequence[int]],
+    *,
+    mode: str = "sign",
+    parent_ids: Sequence[str] = (),
+    operator_version: str = "fold-v1",
+    audit_event_id: str = "",
+) -> FoldResult:
+    source_matrix = matrix_tuple(source, L5)
+    if mode == "sign":
+        projection, loss = sign_fold(source_matrix)
+    elif mode == "threshold":
+        projection, loss = threshold_fold(source_matrix)
+    else:
+        raise ValueError("mode must be 'sign' or 'threshold'")
+    status = FoldStatus.LOSSY if _mask_count(loss) else FoldStatus.STABLE
+    provenance = Provenance(
+        source_digest=matrix_digest(source_matrix),
+        operator=f"{mode}_projection",
+        operator_version=operator_version,
+        operator_path=("L5", f"{mode}_projection", "L3"),
+        parent_ids=tuple(parent_ids),
+        audit_event_id=audit_event_id,
+    )
+    return FoldResult(source_matrix, projection, loss, tuple(tuple(0 for _ in row) for row in source_matrix), 0, status, provenance)
+
+
+def weighted_vote(values: Sequence[int], weights: Sequence[float], margin: float = 0.20) -> Tuple[int, Dict[int, float], FoldStatus]:
+    if len(values) != len(weights) or not values:
+        raise ValueError("values and weights must be non-empty and have equal length")
+    scores = {state: 0.0 for state in L3}
+    for value, weight in zip(values, weights):
+        if value not in L5:
+            raise ValueError("vote contains non-pentary value")
+        weight = _finite(weight, "weight")
+        if weight < 0:
+            raise ValueError("weight must be non-negative")
+        scores[-1 if value < 0 else 1 if value > 0 else 0] += weight
+    ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    winner, top = ranked[0]
+    runner = ranked[1][1]
+    total = sum(scores.values())
+    relative_margin = (top - runner) / total if total else 0.0
+    if top == 0:
+        return 0, scores, FoldStatus.STABLE
+    if relative_margin < margin:
+        return winner, scores, FoldStatus.AMBIGUOUS
+    if scores[-1] > 0 and scores[1] > 0 and relative_margin < margin * 2:
+        return winner, scores, FoldStatus.CONFLICTED
+    return winner, scores, FoldStatus.STABLE
+
+
+@dataclass
+class ExperienceNode:
+    experience_id: str
+    spiral_turn: int
+    branch_context: str
+    fold: FoldResult
+    parent_experience_id: Optional[str] = None
+    outcome: str = "UNASSESSED"
+    decision: Decision = Decision.CLARIFY
+    confidence: float = 0.0
+    recurrence_count: int = 1
+    validated: bool = False
+    decay_score: float = 1.0
+    children: List[str] = field(default_factory=list)
+
+    def reusable(self) -> bool:
+        return (
+            self.validated
+            and self.fold.status == FoldStatus.STABLE
+            and self.fold.loss_ratio == 0.0
+            and self.fold.provenance_reconstructible
+            and self.decision != Decision.VETO
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "experience_id": self.experience_id,
+            "spiral_turn": self.spiral_turn,
+            "branch_context": self.branch_context,
+            "parent_experience_id": self.parent_experience_id,
+            "fold": self.fold.to_dict(),
+            "outcome": self.outcome,
+            "decision": self.decision.value,
+            "confidence": self.confidence,
+            "recurrence_count": self.recurrence_count,
+            "validated": self.validated,
+            "decay_score": self.decay_score,
+            "children": list(self.children),
+            "reusable": self.reusable(),
+        }
+
+
+class LomonosovSpiralTree:
+    """Append-only experience memory with explicit branches and provenance."""
+
+    def __init__(self) -> None:
+        self.nodes: Dict[str, ExperienceNode] = {}
+        self.roots: List[str] = []
+
+    def add(
+        self,
+        source: Sequence[Sequence[int]],
+        *,
+        context: str,
+        turn: int,
+        parent_id: Optional[str] = None,
+        mode: str = "sign",
+        outcome: str = "UNASSESSED",
+        decision: Decision = Decision.CLARIFY,
+        confidence: float = 0.0,
+        validated: bool = False,
+    ) -> ExperienceNode:
+        fold = fold_l5_to_l3(source, mode=mode, parent_ids=(parent_id,) if parent_id else ())
+        seed = f"{fold.provenance.source_digest}:{context}:{turn}:{len(self.nodes)}"
+        experience_id = "exp-" + hashlib.sha256(seed.encode()).hexdigest()[:16]
+        node = ExperienceNode(
+            experience_id=experience_id,
+            spiral_turn=turn,
+            branch_context=context,
+            fold=fold,
+            parent_experience_id=parent_id,
+            outcome=outcome,
+            decision=decision,
+            confidence=max(0.0, min(1.0, _finite(confidence, "confidence"))),
+            validated=validated,
+        )
+        self.nodes[experience_id] = node
+        if parent_id:
+            if parent_id not in self.nodes:
+                raise KeyError("parent experience does not exist")
+            self.nodes[parent_id].children.append(experience_id)
+        else:
+            self.roots.append(experience_id)
+        return node
+
+    def retrieve(self, context: str, *, include_lossy: bool = True) -> List[ExperienceNode]:
+        candidates = [n for n in self.nodes.values() if n.branch_context == context]
+        if not include_lossy:
+            candidates = [n for n in candidates if n.fold.status == FoldStatus.STABLE]
+        return sorted(candidates, key=lambda n: (n.reusable(), n.confidence, n.recurrence_count), reverse=True)
+
+    def validate(self, experience_id: str, confidence: float) -> None:
+        node = self.nodes[experience_id]
+        node.confidence = max(0.0, min(1.0, _finite(confidence, "confidence")))
+        node.validated = node.fold.status == FoldStatus.STABLE and node.fold.provenance_reconstructible
+        node.outcome = "VALIDATED" if node.validated else "REQUIRES_REVIEW"
+
+    def decay(self, factor: float = 0.99) -> None:
+        factor = _finite(factor, "factor")
+        if not 0 < factor <= 1:
+            raise ValueError("decay factor must be in (0, 1]")
+        for node in self.nodes.values():
+            node.decay_score *= factor
+
+    def export(self) -> Dict[str, Any]:
+        return {"roots": list(self.roots), "nodes": {k: v.to_dict() for k, v in self.nodes.items()}}
+
+
+@dataclass(frozen=True)
+class TensorFieldResult:
+    field: Matrix
+    scale_field: Matrix
+    saturation_count: int
+    gradient_activity: int
+    operator: str
+    advisory_only: bool = True
+
+
+def _saturate(value: int, low: int = -2, high: int = 2) -> int:
+    return max(low, min(high, value))
+
+
+def global_comma_shift(field: Sequence[Sequence[int]], scale: int) -> TensorFieldResult:
+    source = matrix_tuple(field, L5)
+    if scale not in (-2, -1, 1, 2):
+        raise ValueError("scale must be a nonzero integer in {-2,-1,1,2}")
+    shifted = tuple(tuple(_saturate(x * scale) for x in row) for row in source)
+    saturation = sum(1 for a, row in zip(source, shifted) for x, y in zip(a, row) if abs(x * scale) > 2)
+    gradient = sum(1 for row in shifted for a, b in zip(row, row[1:]) if a != b)
+    scales = tuple(tuple(scale for _ in row) for row in source)
+    return TensorFieldResult(shifted, scales, saturation, gradient, "global_comma_shift")
+
+
+def spatial_comma_shift(field: Sequence[Sequence[int]], scale_field: Sequence[Sequence[int]]) -> TensorFieldResult:
+    source = matrix_tuple(field, L5)
+    scales = matrix_tuple(scale_field, (-2, -1, 1, 2))
+    if matrix_shape(source) != matrix_shape(scales):
+        raise ValueError("field and scale_field shapes must match")
+    shifted = tuple(tuple(_saturate(x * s) for x, s in zip(row, srow)) for row, srow in zip(source, scales))
+    saturation = sum(1 for row, srow in zip(source, scales) for x, s in zip(row, srow) if abs(x * s) > 2)
+    gradient = sum(1 for row in shifted for a, b in zip(row, row[1:]) if a != b)
+    return TensorFieldResult(shifted, scales, saturation, gradient, "spatial_comma_shift")
+
+
+@dataclass(frozen=True)
+class DecisionGateResult:
+    decision: Decision
+    reasons: Tuple[str, ...]
+    bxos_authority: bool
+
+
+def decision_gate(node: ExperienceNode, *, external_effect: bool = True) -> DecisionGateResult:
+    reasons: List[str] = []
+    if not node.fold.provenance_reconstructible:
+        reasons.append("missing provenance")
+    if node.fold.status in (FoldStatus.AMBIGUOUS, FoldStatus.CONFLICTED):
+        reasons.append(node.fold.status.value)
+    if node.fold.loss_ratio > 0:
+        reasons.append("projection loss present")
+    if node.confidence < 0.70:
+        reasons.append("confidence below 0.70")
+    if node.decision == Decision.VETO:
+        return DecisionGateResult(Decision.VETO, tuple(reasons) + ("node veto",), False)
+    if node.decision == Decision.CLARIFY:
+        return DecisionGateResult(Decision.CLARIFY, tuple(reasons) + ("node requires clarification",), False)
+    if external_effect and reasons:
+        return DecisionGateResult(Decision.CLARIFY, tuple(reasons), False)
+    return DecisionGateResult(Decision.PASS, tuple(reasons), True)
+
+
+def run_v12_self_test() -> Dict[str, Any]:
+    tree = LomonosovSpiralTree()
+    stable = tree.add([[0, -1], [1, 0]], context="baseline", turn=1, confidence=0.95, validated=True, decision=Decision.PASS)
+    lossy = tree.add([[-2, -1], [1, 2]], context="experimental", turn=2, mode="sign", confidence=0.90)
+    gate_stable = decision_gate(stable)
+    gate_lossy = decision_gate(lossy)
+    assert stable.fold.status == FoldStatus.STABLE
+    assert lossy.fold.status == FoldStatus.LOSSY
+    assert not gate_lossy.bxos_authority
+    assert stable.fold.provenance_reconstructible
+    assert not stable.fold.mathematical_reversible
+    field = global_comma_shift([[-2, -1], [1, 2]], 2)
+    assert field.advisory_only
+    return {
+        "version": "V12",
+        "stable_experience": stable.to_dict(),
+        "lossy_experience": lossy.to_dict(),
+        "stable_gate": asdict(gate_stable),
+        "lossy_gate": asdict(gate_lossy),
+        "tensor_field": asdict(field),
+        "tree": tree.export(),
+        "invariants": {
+            "l3_domain_preserved": all(x in L3 for row in stable.fold.projection_matrix for x in row),
+            "source_digest_present": bool(lossy.fold.provenance.source_digest),
+            "loss_mask_present": lossy.fold.loss_count == 2,
+            "bxos_blocked_on_loss": not gate_lossy.bxos_authority,
+        },
+    }
+
+
+if __name__ == "__main__":
+    print(json.dumps(run_v12_self_test(), indent=2, ensure_ascii=False, default=str))
+
+
+# ---------------------------------------------------------------------------
+# V12 FULL ENGINEERING EXTENSION: CHARACTER MASKS + DOUBLE RASHOMON
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class CharacterMask:
+    mask_id: str
+    image: str
+    character: str
+    values: Tuple[str, ...]
+    questions: Tuple[str, ...]
+    contour: str
+
+    def perspective_record(self, assessment: str, uncertainty: Sequence[str], recommendation: str) -> Dict[str, Any]:
+        return {
+            'mask_id': self.mask_id, 'image': self.image, 'character': self.character,
+            'values': self.values, 'contour': self.contour, 'assessment': assessment,
+            'uncertainty': tuple(uncertainty), 'recommendation': recommendation,
+        }
+
+
+def v12_character_masks() -> Tuple[CharacterMask, ...]:
+    return (
+        CharacterMask('M1', 'Engineer', 'precise and practical', ('feasibility', 'interfaces'), ('Can it be built and tested?',), 'INPUT'),
+        CharacterMask('M2', 'Scientist', 'patient and skeptical', ('evidence', 'reproducibility'), ('What is demonstrated?',), 'INPUT'),
+        CharacterMask('M3', 'Economist', 'comparative and resource-aware', ('cost', 'opportunity'), ('What is the alternative cost?',), 'OUTPUT'),
+        CharacterMask('M4', 'Business Builder', 'strategic and decisive', ('value', 'deployment'), ('Can it become durable?',), 'EXPERIENCE'),
+        CharacterMask('M5', 'Social Observer', 'empathetic and contextual', ('impact', 'access'), ('Who benefits or carries burden?',), 'INPUT'),
+        CharacterMask('M6', 'Public Steward', 'institutional and long-horizon', ('governance', 'scale'), ('What happens at scale?',), 'OUTPUT'),
+        CharacterMask('M7', 'Cultural Interpreter', 'pluralistic and historical', ('meaning', 'compatibility'), ('How may communities read this?',), 'INPUT'),
+        CharacterMask('M8', 'Household Guardian', 'practical and protective', ('trust', 'everyday safety'), ('Does ordinary life improve?',), 'OUTPUT'),
+        CharacterMask('M9', 'Ethicist', 'principled and deliberate', ('dignity', 'consent'), ('Is it acceptable, not merely possible?',), 'OUTPUT'),
+        CharacterMask('M10', 'Security Guardian', 'adversarial and alert', ('abuse', 'tampering'), ('How could it fail or be attacked?',), 'OUTPUT'),
+        CharacterMask('M11', 'Educator', 'patient and explanatory', ('comprehension', 'transfer'), ('Can reasoning be checked and taught?',), 'INPUT'),
+        CharacterMask('M12', 'Creative Explorer', 'imaginative and associative', ('alternatives', 'novelty'), ('What option is missing?',), 'EXPERIENCE'),
+    )
+
+
+@dataclass(frozen=True)
+class RashomonBranch:
+    branch_id: str
+    event_id: str
+    mask_id: str
+    contour: str
+    interpretation: str
+    confidence: float
+    provenance_ref: str
+    loss_mask_ref: Optional[str] = None
+    status: str = 'ACTIVE'
+
+
+@dataclass(frozen=True)
+class CandidateOutcome:
+    candidate_id: str
+    input_branch_ids: Tuple[str, ...]
+    mask_id: str
+    description: str
+    risk: float
+    confidence: float
+    reversible: bool
+    provenance_ref: str
+    status: str = 'CANDIDATE'
+
+
+@dataclass(frozen=True)
+class RashomonAssessment:
+    input_conflict: bool
+    output_conflict: bool
+    selected_candidate_id: Optional[str]
+    decision: Decision
+    reasons: Tuple[str, ...]
+    bxos_authority: bool
+
+
+class DoubleRashomon:
+    """Preserves multiple interpretations at input and candidates at output."""
+
+    def __init__(self, masks: Sequence[CharacterMask] = ()) -> None:
+        active = masks or v12_character_masks()
+        self.masks: Dict[str, CharacterMask] = {mask.mask_id: mask for mask in active}
+        self.input_branches: Dict[str, RashomonBranch] = {}
+        self.output_candidates: Dict[str, CandidateOutcome] = {}
+
+    def add_input(self, event_id: str, mask_id: str, interpretation: str, confidence: float, provenance_ref: str, loss_mask_ref: Optional[str] = None) -> RashomonBranch:
+        if mask_id not in self.masks:
+            raise KeyError(f'unknown mask: {mask_id}')
+        if self.masks[mask_id].contour not in ('INPUT', 'EXPERIENCE'):
+            raise ValueError('mask is not valid for input interpretation')
+        confidence = max(0.0, min(1.0, _finite(confidence, 'confidence')))
+        branch_id = 'in-' + hashlib.sha256(f'{event_id}:{mask_id}:{interpretation}'.encode()).hexdigest()[:12]
+        branch = RashomonBranch(branch_id, event_id, mask_id, 'INPUT', interpretation, confidence, provenance_ref, loss_mask_ref)
+        self.input_branches[branch_id] = branch
+        return branch
+
+    def add_output(self, input_branch_ids: Sequence[str], mask_id: str, description: str, risk: float, confidence: float, reversible: bool, provenance_ref: str) -> CandidateOutcome:
+        if mask_id not in self.masks:
+            raise KeyError(f'unknown mask: {mask_id}')
+        if self.masks[mask_id].contour not in ('OUTPUT', 'EXPERIENCE'):
+            raise ValueError('mask is not valid for output assessment')
+        if any(branch_id not in self.input_branches for branch_id in input_branch_ids):
+            raise KeyError('output references unknown input branch')
+        candidate_id = 'out-' + hashlib.sha256(f'{sorted(input_branch_ids)}:{mask_id}:{description}'.encode()).hexdigest()[:12]
+        candidate = CandidateOutcome(candidate_id, tuple(input_branch_ids), mask_id, description,
+                                     max(0.0, min(1.0, _finite(risk, 'risk'))),
+                                     max(0.0, min(1.0, _finite(confidence, 'confidence'))), reversible, provenance_ref)
+        self.output_candidates[candidate_id] = candidate
+        return candidate
+
+    def assess(self, *, external_effect: bool = True) -> RashomonAssessment:
+        branches = list(self.input_branches.values())
+        candidates = sorted(self.output_candidates.values(), key=lambda item: (item.risk, -item.confidence, not item.reversible))
+        input_conflict = len({branch.interpretation for branch in branches}) > 1
+        output_conflict = len({candidate.description for candidate in candidates}) > 1
+        if not branches:
+            return RashomonAssessment(True, True, None, Decision.VETO, ('no input branches',), False)
+        if not candidates:
+            return RashomonAssessment(input_conflict, True, None, Decision.CLARIFY, ('no output candidates',), False)
+        selected = candidates[0]
+        reasons: List[str] = []
+        if input_conflict:
+            reasons.append('input interpretation conflict')
+        if output_conflict:
+            reasons.append('output candidate conflict')
+        if selected.risk > 0.70:
+            reasons.append('risk above 0.70')
+        if not selected.reversible:
+            reasons.append('candidate is not reversible')
+        if external_effect and selected.risk > 0.70:
+            return RashomonAssessment(input_conflict, output_conflict, selected.candidate_id, Decision.VETO, tuple(reasons), False)
+        if external_effect and (input_conflict or output_conflict or not selected.reversible):
+            return RashomonAssessment(input_conflict, output_conflict, selected.candidate_id, Decision.CLARIFY, tuple(reasons), False)
+        return RashomonAssessment(input_conflict, output_conflict, selected.candidate_id, Decision.PASS, tuple(reasons), True)
+
+    def export(self) -> Dict[str, Any]:
+        return {'masks': {key: asdict(value) for key, value in self.masks.items()},
+                'input_branches': {key: asdict(value) for key, value in self.input_branches.items()},
+                'output_candidates': {key: asdict(value) for key, value in self.output_candidates.items()}}
+
+
+@dataclass(frozen=True)
+class KotlinGraphContract:
+    source: str
+    language: str = 'Kotlin'
+    version: str = 'V12'
+
+    def write(self, path: str) -> None:
+        with open(path, 'w', encoding='utf-8') as handle:
+            handle.write(self.source)
+
+
+KOTLIN_GRAPH_SOURCE = r'''/* V12 typed graph contract
+ * Author: Vladimir Zavodiuk
+ * Contact: glovesandfactories@gmail.com
+ * License: All Rights Reserved
+ */
+enum class Contour { INPUT, EXPERIENCE, OUTPUT, GATE, AUDIT }
+enum class NodeKind { EVENT, MASK, EXPERIENCE, INTERSECTION, CANDIDATE, DECISION, AUDIT }
+enum class Decision { PASS, CLARIFY, VETO }
+data class Provenance(val sourceDigest: String, val operatorPath: List<String>, val parentIds: List<String> = emptyList())
+data class ProjectionMeta(val sourceSpace: String, val targetSpace: String, val lossMaskRef: String? = null)
+data class GraphNode(val id: String, val kind: NodeKind, val label: String, val contour: Contour, val maskId: String? = null, val provenance: Provenance? = null, val projection: ProjectionMeta? = null)
+data class GraphEdge(val from: String, val to: String, val relation: String, val weight: Double = 1.0)
+class V12Graph {
+    val nodes = linkedMapOf<String, GraphNode>()
+    val edges = mutableListOf<GraphEdge>()
+    fun add(node: GraphNode) { require(nodes.putIfAbsent(node.id, node) == null) { "duplicate node" } }
+    fun connect(from: String, to: String, relation: String) { require(from in nodes && to in nodes); edges += GraphEdge(from, to, relation) }
+    fun validate(): List<String> = edges.filter { it.from !in nodes || it.to !in nodes }.map { "orphan edge" }
+}
+'''
+
+
+def embedded_kotlin_graph() -> KotlinGraphContract:
+    return KotlinGraphContract(KOTLIN_GRAPH_SOURCE)
+
+
+def run_full_v12_self_test() -> Dict[str, Any]:
+    tree = LomonosovSpiralTree()
+    stable = tree.add([[0, -1], [1, 0]], context='baseline', turn=1, confidence=0.95, validated=True, decision=Decision.PASS)
+    lossy = tree.add([[-2, -1], [1, 2]], context='experimental', turn=2, confidence=0.90)
+    rashomon = DoubleRashomon()
+    event_id = 'event-v12-001'
+    for mask in v12_character_masks():
+        if mask.contour in ('INPUT', 'EXPERIENCE'):
+            rashomon.add_input(event_id, mask.mask_id, f'{mask.image} interpretation', 0.80, f'prov://{mask.mask_id}')
+    input_ids = tuple(rashomon.input_branches)
+    rashomon.add_output(input_ids, 'M3', 'conservative low-cost pilot', 0.25, 0.86, True, 'prov://out-pilot')
+    rashomon.add_output(input_ids, 'M10', 'reject external deployment', 0.05, 0.92, True, 'prov://out-veto')
+    assessment = rashomon.assess(external_effect=True)
+    gate_lossy = decision_gate(lossy, external_effect=True)
+    assert stable.fold.status == FoldStatus.STABLE
+    assert lossy.fold.status == FoldStatus.LOSSY
+    assert not gate_lossy.bxos_authority
+    assert len(rashomon.masks) == 12
+    assert assessment.decision in (Decision.CLARIFY, Decision.VETO)
+    kotlin = embedded_kotlin_graph()
+    return {
+        'version': 'V12-FULL-ENGINEERING',
+        'author': 'Vladimir Zavodiuk',
+        'license': 'All Rights Reserved',
+        'components': ['L3/L5', 'LomonosovSpiralTree', 'DoubleRashomon', '12CharacterMasks', 'LossMask', 'Provenance', 'DecisionGate', 'KotlinGraphContract'],
+        'stable_gate': asdict(decision_gate(stable, external_effect=True)),
+        'lossy_gate': asdict(gate_lossy),
+        'rashomon_assessment': asdict(assessment),
+        'mask_count': len(rashomon.masks),
+        'input_branch_count': len(rashomon.input_branches),
+        'output_candidate_count': len(rashomon.output_candidates),
+        'kotlin_contract_chars': len(kotlin.source),
+        'invariants': {
+            'twelve_masks': len(rashomon.masks) == 12,
+            'loss_blocks_external_pass': not gate_lossy.bxos_authority,
+            'l3_domain_preserved': all(x in L3 for row in stable.fold.projection_matrix for x in row),
+            'provenance_present': bool(lossy.fold.provenance.source_digest),
+            'kotlin_embedded': kotlin.language == 'Kotlin',
+        },
+    }
+
+
+if __name__ == '__main__':
+    print(json.dumps(run_full_v12_self_test(), indent=2, ensure_ascii=False, default=str))
+
+
+# ---------------------------------------------------------------------------
+# V12 GAME-INTEGRATED EXTENSION
+# ---------------------------------------------------------------------------
+# Adapted from preserved GamePenta and GameEngineV9.6 contracts.
+# Historical source files remain immutable. V12 uses deterministic execution,
+# explicit provenance and the existing V12 decision gate.
+
+class GamePenta:
+    """Deterministic pentary strategic game layer: -2..+2."""
+
+    STRATEGIES = (-2, -1, 0, 1, 2)
+    STRATEGY_NAMES = {
+        -2: 'hard_conflict', -1: 'competitive_pressure', 0: 'neutral_wait',
+        1: 'limited_cooperation', 2: 'active_cooperation',
+    }
+
+    def __init__(self) -> None:
+        self.players: Dict[str, Dict[str, Any]] = {}
+        self.history: List[Dict[str, Any]] = []
+
+    def add_player(self, name: str, role: str, resources: float, strategy: int, *, provenance_ref: str = '') -> None:
+        if strategy not in self.STRATEGIES:
+            raise ValueError('strategy must be one of -2, -1, 0, 1, 2')
+        resources = _finite(resources, 'resources')
+        if resources < 0:
+            raise ValueError('resources must be non-negative')
+        self.players[name] = {
+            'role': role, 'resources': resources, 'strategy': strategy,
+            'strategy_name': self.STRATEGY_NAMES[strategy], 'payoff': 0.0,
+            'l5_status': 0, 'provenance_ref': provenance_ref,
+        }
+
+    def set_strategy(self, name: str, strategy: int) -> None:
+        if name not in self.players:
+            raise KeyError(f'unknown player: {name}')
+        if strategy not in self.STRATEGIES:
+            raise ValueError('strategy must be one of -2, -1, 0, 1, 2')
+        self.players[name]['strategy'] = strategy
+        self.players[name]['strategy_name'] = self.STRATEGY_NAMES[strategy]
+
+    @staticmethod
+    def _deterministic_environment(name: str, step: int) -> float:
+        digest = hashlib.sha256(f'{name}:{step}'.encode()).hexdigest()
+        bucket = int(digest[:8], 16) % 9
+        return (bucket - 4) / 100.0
+
+    def simulate(self, steps: int = 5) -> List[Dict[str, Any]]:
+        if steps < 0:
+            raise ValueError('steps must be non-negative')
+        results: List[Dict[str, Any]] = []
+        for step in range(steps):
+            for name, data in self.players.items():
+                strategic_delta = data['strategy'] * 0.10
+                environmental_delta = self._deterministic_environment(name, step)
+                data['payoff'] += strategic_delta + environmental_delta
+                normalized = max(-1.0, min(1.0, data['payoff'] / 10.0))
+                data['l5_status'] = 2 if normalized >= 0.6 else 1 if normalized >= 0.2 else -2 if normalized <= -0.6 else -1 if normalized <= -0.2 else 0
+            snapshot = {
+                'step': step + 1,
+                'players': {name: round(data['payoff'], 6) for name, data in self.players.items()},
+                'l5': {name: data['l5_status'] for name, data in self.players.items()},
+            }
+            results.append(snapshot)
+            self.history.append(snapshot)
+        return results
+
+    def cost_of_conflict(self) -> float:
+        return sum(data['resources'] * (0.8 if data['strategy'] == -2 else 0.5)
+                   for data in self.players.values() if data['strategy'] in (-2, -1))
+
+    def gain_of_cooperation(self) -> float:
+        return sum(data['resources'] * (1.0 if data['strategy'] == 2 else 0.8)
+                   for data in self.players.values() if data['strategy'] in (1, 2))
+
+    def is_deal_good(self) -> bool:
+        return self.gain_of_cooperation() > self.cost_of_conflict()
+
+    def export(self) -> Dict[str, Any]:
+        return {'players': self.players, 'history': self.history,
+                'cost_of_conflict': self.cost_of_conflict(),
+                'gain_of_cooperation': self.gain_of_cooperation(),
+                'deal_good': self.is_deal_good()}
+
+
+@dataclass
+class V12WaveNode:
+    node_id: int
+    label: str
+    amplitude: float
+    phase: float
+    position: Tuple[float, float]
+    children: List[int] = field(default_factory=list)
+    parents: List[int] = field(default_factory=list)
+
+    def wave(self, timestamp: float) -> float:
+        return self.amplitude * math.sin(2.0 * timestamp + self.phase)
+
+
+class GameEngineV9Improved:
+    """V12-safe adaptation of GameEngineV9.6 for actor and mask scenarios."""
+
+    def __init__(self, *, domain_packs: Sequence[str] = ('Core', 'Market', 'Geopolitics')) -> None:
+        self.domain_packs = tuple(domain_packs)
+        self.nodes: Dict[int, V12WaveNode] = {}
+        self.history: List[Dict[str, Any]] = []
+        self.current_time = 0.0
+        self.experience: Dict[str, List[float]] = {}
+
+    def _add_node(self, label: str, amplitude: float, phase: float, position: Tuple[float, float]) -> int:
+        node_id = len(self.nodes) + 1
+        self.nodes[node_id] = V12WaveNode(node_id, label, amplitude, phase, position)
+        return node_id
+
+    def _wire_chain(self, node_ids: Sequence[int]) -> None:
+        for left, right in zip(node_ids, node_ids[1:]):
+            if right not in self.nodes[left].children:
+                self.nodes[left].children.append(right)
+            if left not in self.nodes[right].parents:
+                self.nodes[right].parents.append(left)
+
+    @staticmethod
+    def _positions(count: int) -> List[Tuple[float, float]]:
+        if count <= 0:
+            return []
+        return [(0.5 * math.cos(2 * math.pi * i / count), 0.5 * math.sin(2 * math.pi * i / count)) for i in range(count)]
+
+    def _experience_score(self, label: str) -> float:
+        values = self.experience.get(label, [])
+        return sum(values) / len(values) if values else 0.5
+
+    def add_experience(self, label: str, outcome: float) -> None:
+        outcome = max(0.0, min(1.0, _finite(outcome, 'outcome')))
+        self.experience.setdefault(label, []).append(outcome)
+
+    def process(self, query: str, interpretations: Dict[str, float], *, game: Optional[GamePenta] = None, mask_scores: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+        if not interpretations:
+            raise ValueError('interpretations must be non-empty')
+        self.current_time += 1.0
+        positions = self._positions(len(interpretations))
+        node_ids: Dict[str, int] = {}
+        for (label, score), position in zip(interpretations.items(), positions):
+            score = max(-1.0, min(1.0, _finite(score, f'interpretation:{label}')))
+            node_ids[label] = self._add_node(label, score, len(node_ids) * 0.5, position)
+        self._wire_chain(tuple(node_ids.values()))
+
+        pattern: Dict[int, float] = {}
+        for node_id, node in self.nodes.items():
+            incoming = 0.0
+            for parent_id in node.parents:
+                parent = self.nodes[parent_id]
+                dx = parent.position[0] - node.position[0]
+                dy = parent.position[1] - node.position[1]
+                attenuation = 1.0 / (1.0 + math.sqrt(dx * dx + dy * dy))
+                incoming += parent.wave(self.current_time) * attenuation
+            pattern[node_id] = incoming + node.wave(self.current_time)
+        conflicts = [node_id for node_id, value in pattern.items() if abs(value) > 0.3]
+        stability = 1.0 - len(conflicts) / max(len(self.nodes), 1)
+        balance = sum(pattern.values())
+        game_score = 0.5
+        if game is not None:
+            total = game.gain_of_cooperation() + game.cost_of_conflict()
+            game_score = game.gain_of_cooperation() / total if total else 0.5
+
+        candidate_scores: Dict[str, Dict[str, float]] = {}
+        best_candidate: Optional[str] = None
+        best_score = -float('inf')
+        for label, node_id in node_ids.items():
+            wave_score = max(0.0, min(1.0, (pattern.get(node_id, 0.0) + 1.0) / 2.0))
+            mask_score = (mask_scores or {}).get(label, 0.5)
+            experience_score = self._experience_score(label)
+            confidence = max(0.0, min(1.0, interpretations[label]))
+            composite = 0.20 * wave_score + 0.25 * mask_score + 0.20 * experience_score + 0.15 * confidence + 0.20 * game_score
+            candidate_scores[label] = {'wave': round(wave_score, 4), 'mask': round(mask_score, 4), 'experience': round(experience_score, 4), 'confidence': round(confidence, 4), 'game': round(game_score, 4), 'composite': round(composite, 4)}
+            if composite > best_score:
+                best_score, best_candidate = composite, label
+        result = {
+            'status': 'success', 'query': query, 'best_candidate': best_candidate,
+            'best_composite_score': round(best_score, 4), 'candidate_scores': candidate_scores,
+            'stability_index': round(stability, 4), 'conflicts_count': len(conflicts),
+            'system_balance': round(balance, 4), 'node_count': len(self.nodes),
+            'domain_packs': self.domain_packs, 'game_score': round(game_score, 4),
+            'version': 'V12 Game-Integrated / V9.6 adapter',
+        }
+        self.history.append(result)
+        return result
+
+    def get_state(self) -> Dict[str, Any]:
+        return {'version': 'V12 Game-Integrated / V9.6 adapter', 'nodes': len(self.nodes), 'history_len': len(self.history), 'current_time': self.current_time, 'domain_packs': self.domain_packs}
+
+
+@dataclass(frozen=True)
+class DomainMaskInstance:
+    instance_id: str
+    pack_id: str
+    base_mask_id: str
+    image: str
+    character: str
+    responsibility: str
+
+
+def v12_domain_masks(packs: Sequence[str] = ('Core', 'Market', 'Geopolitics')) -> Tuple[DomainMaskInstance, ...]:
+    base = v12_character_masks()
+    responsibilities = {
+        'Core': 'general systems perspective',
+        'Market': 'market and capital-allocation perspective',
+        'Geopolitics': 'state, diplomacy and transit perspective',
+        'Energy': 'energy infrastructure and supply perspective',
+        'Legal': 'legal, regulatory and sanctions perspective',
+    }
+    instances: List[DomainMaskInstance] = []
+    for pack in packs:
+        if pack not in responsibilities:
+            raise ValueError(f'unknown domain pack: {pack}')
+        for mask in base:
+            instances.append(DomainMaskInstance(f'{pack}:{mask.mask_id}', pack, mask.mask_id, mask.image, mask.character, responsibilities[pack]))
+    return tuple(instances)
+
+
+def run_game_integrated_v12_self_test() -> Dict[str, Any]:
+    masks = v12_domain_masks(('Core', 'Market', 'Geopolitics'))
+    assert len(masks) == 36
+    game = GamePenta()
+    game.add_player('Russian_state_Gazprom', 'issuer_state_corporate', 100.0, -1, provenance_ref='scenario://gazprom/rf')
+    game.add_player('EU_policy_layer', 'regulatory_import_layer', 90.0, -1, provenance_ref='scenario://gazprom/eu')
+    game.add_player('Transit_state', 'route_gatekeeper', 40.0, 1, provenance_ref='scenario://gazprom/transit')
+    game.simulate(steps=3)
+    engine = GameEngineV9Improved(domain_packs=('Core', 'Market', 'Geopolitics'))
+    interpretations = {'Russian_state_Gazprom': 0.65, 'EU_policy_layer': 0.55, 'Transit_state': 0.60}
+    mask_scores = {key: 0.55 for key in interpretations}
+    result = engine.process('Gazprom market and geopolitical conflict', interpretations, game=game, mask_scores=mask_scores)
+    fold_source = [[-2, -1], [1, 2]]
+    node = LomonosovSpiralTree().add(fold_source, context='gazprom', turn=1, confidence=0.85)
+    gate = decision_gate(node, external_effect=True)
+    assert game.is_deal_good() is False
+    assert result['node_count'] == 3
+    assert len(result['candidate_scores']) == 3
+    assert not gate.bxos_authority
+    return {
+        'version': 'V12-FULL-GAME-INTEGRATED',
+        'author': 'Vladimir Zavodiuk', 'license': 'All Rights Reserved',
+        'mask_count': len(masks), 'packs': ['Core', 'Market', 'Geopolitics'],
+        'game': game.export(), 'engine_result': result,
+        'loss_gate': asdict(gate),
+        'invariants': {
+            'thirty_six_masks': len(masks) == 36,
+            'game_pentary_domain': all(item['strategy'] in GamePenta.STRATEGIES for item in game.players.values()),
+            'conflict_cost_exceeds_cooperation_gain': game.cost_of_conflict() > game.gain_of_cooperation(),
+            'deterministic_history': len(game.history) == 3,
+            'engine_connected': result['node_count'] == 3,
+            'loss_blocks_external_pass': not gate.bxos_authority,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# HISTORICAL INTERSTATE-CONFLICT REPLAY BENCHMARK
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class HistoricalScenario:
+    scenario_id: str
+    title: str
+    event_window: str
+    actors: Tuple[str, ...]
+    actor_roles: Dict[str, str]
+    strategies: Dict[str, int]
+    documented_outcomes: Tuple[str, ...]
+    source_urls: Tuple[str, ...]
+    evidence_note: str
+
+
+def historical_v12_scenarios() -> Tuple[HistoricalScenario, ...]:
+    return (
+        HistoricalScenario(
+            'H1_2009_GAS_INTERRUPTION',
+            'Russia–Ukraine gas interruption affecting EU routes',
+            '2009-01-06 to 2009-01-20',
+            ('Russian_state_Gazprom', 'Ukraine_transit', 'EU_member_states', 'EU_importers'),
+            {'Russian_state_Gazprom': 'supplier_issuer', 'Ukraine_transit': 'transit_gatekeeper', 'EU_member_states': 'affected_policy_layer', 'EU_importers': 'contract_and_demand_layer'},
+            {'Russian_state_Gazprom': -1, 'Ukraine_transit': -1, 'EU_member_states': 0, 'EU_importers': -1},
+            ('gas flows via Ukraine were interrupted', 'a majority of EU Member States were directly affected', 'contract and transit interests were central'),
+            ('https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=CELEX:52009SC0977',),
+            'Historical policy document; quantitative market-price claims require a separate frozen dataset.'
+        ),
+        HistoricalScenario(
+            'H2_2014_SANCTIONS',
+            'Russia–Ukraine crisis and first EU sanctions regime',
+            '2014-03-01 to 2014-12-31',
+            ('Russian_state', 'Ukraine', 'EU_institutions', 'EU_member_states', 'market_participants'),
+            {'Russian_state': 'target_state', 'Ukraine': 'conflict_state', 'EU_institutions': 'sanctions_policy', 'EU_member_states': 'implementation_layer', 'market_participants': 'repricing_layer'},
+            {'Russian_state': -1, 'Ukraine': -2, 'EU_institutions': -1, 'EU_member_states': -1, 'market_participants': 0},
+            ('EU sanctions were first introduced in 2014', 'the sanctions regime was later expanded after February 2022', 'the episode tests policy escalation and market repricing'),
+            ('https://www.consilium.europa.eu/en/policies/sanctions-against-russia/timeline-sanctions-against-russia/',),
+            'Institutional timeline; this benchmark does not infer a single causal price effect.'
+        ),
+        HistoricalScenario(
+            'H3_2022_ENERGY_SHOCK',
+            'Russia–Ukraine war and European energy-market shock',
+            '2022-02-24 to 2023-12-31',
+            ('Russian_state_Gazprom', 'Ukraine', 'EU_institutions', 'EU_consumers', 'LNG_suppliers', 'renewable_and_efficiency_sector'),
+            {'Russian_state_Gazprom': 'supplier_issuer', 'Ukraine': 'security_and_energy_state', 'EU_institutions': 'diversification_policy', 'EU_consumers': 'demand_and_welfare_layer', 'LNG_suppliers': 'substitute_supply', 'renewable_and_efficiency_sector': 'demand_response'},
+            {'Russian_state_Gazprom': -1, 'Ukraine': -2, 'EU_institutions': -1, 'EU_consumers': -1, 'LNG_suppliers': 2, 'renewable_and_efficiency_sector': 2},
+            ('Russian pipeline supplies to Europe were sharply reduced', 'the EU faced a documented missing-gas problem', 'LNG and demand-side measures contributed to adjustment', 'industrial gas use and total demand declined'),
+            ('https://www.iea.org/topics/russias-war-on-ukraine',),
+            'IEA system assessment; the replay uses documented outcome descriptors and does not claim a causal forecast score.'
+        ),
+    )
+
+
+def _scenario_game(scenario: HistoricalScenario) -> GamePenta:
+    game = GamePenta()
+    for actor, strategy in scenario.strategies.items():
+        game.add_player(actor, scenario.actor_roles[actor], 1.0, strategy, provenance_ref=f'historical://{scenario.scenario_id}/{actor}')
+    game.simulate(steps=3)
+    return game
+
+
+def _replay_once(scenario: HistoricalScenario, packs: Sequence[str]) -> Dict[str, Any]:
+    game = _scenario_game(scenario)
+    engine = GameEngineV9Improved(domain_packs=tuple(packs))
+    interpretations = {actor: 0.5 + 0.1 * max(-2, min(2, strategy)) for actor, strategy in scenario.strategies.items()}
+    mask_scores = {actor: 0.5 for actor in interpretations}
+    engine_result = engine.process(scenario.title, interpretations, game=game, mask_scores=mask_scores)
+    folded = LomonosovSpiralTree().add([[-2, -1], [1, 2]], context=scenario.scenario_id, turn=1, confidence=0.75)
+    gate = decision_gate(folded, external_effect=True)
+    return {
+        'scenario_id': scenario.scenario_id,
+        'packs': list(packs),
+        'mask_count': len(v12_domain_masks(packs)),
+        'actor_count': len(scenario.actors),
+        'actor_coverage': round(len(set(scenario.actors) & set(scenario.strategies)) / len(scenario.actors), 3),
+        'engine_result': engine_result,
+        'game_summary': {'conflict_cost': game.cost_of_conflict(), 'cooperation_gain': game.gain_of_cooperation(), 'deal_good': game.is_deal_good()},
+        'decision': gate.decision.value,
+        'bxos_authority': gate.bxos_authority,
+        'source_urls': list(scenario.source_urls),
+        'documented_outcomes': list(scenario.documented_outcomes),
+    }
+
+
+def run_historical_replay_benchmark() -> Dict[str, Any]:
+    full_packs = ('Core', 'Market', 'Geopolitics')
+    scenarios = historical_v12_scenarios()
+    rows: List[Dict[str, Any]] = []
+    robustness: List[Dict[str, Any]] = []
+    for scenario in scenarios:
+        full = _replay_once(scenario, full_packs)
+        repeat = _replay_once(scenario, full_packs)
+        deterministic = (full['engine_result']['best_candidate'] == repeat['engine_result']['best_candidate'] and full['engine_result']['best_composite_score'] == repeat['engine_result']['best_composite_score'])
+        full['deterministic_repeat'] = deterministic
+        rows.append(full)
+        ablations = {}
+        for removed in full_packs:
+            reduced = tuple(pack for pack in full_packs if pack != removed)
+            ablations[f'without_{removed}'] = {
+                'mask_count': len(v12_domain_masks(reduced)),
+                'decision': _replay_once(scenario, reduced)['decision'],
+                'bxos_authority': _replay_once(scenario, reduced)['bxos_authority'],
+            }
+        robustness.append({'scenario_id': scenario.scenario_id, 'ablations': ablations, 'full_gate_conservative': full['bxos_authority'] is False})
+    return {
+        'version': 'V12-HISTORICAL-REPLAY-BENCHMARK',
+        'author': 'Vladimir Zavodiuk', 'license': 'All Rights Reserved',
+        'scenarios': rows, 'robustness': robustness,
+        'limitations': [
+            'Retrospective replay is not prospective validation.',
+            'Inputs must be frozen at each historical start date in a future data audit.',
+            'The current benchmark uses documented outcome descriptors; it does not claim causal price prediction.',
+            'Normalized game resources are analytical units, not reported financial values.',
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# MANDATORY TASK CONCLUSION AND DECISION RECORD
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class DecisionRecord:
+    task_id: str
+    preliminary_conclusions: Tuple[str, ...]
+    solution_options: Tuple[str, ...]
+    selected_solution: str
+    confidence: float
+    evidence_refs: Tuple[str, ...]
+    uncertainties: Tuple[str, ...]
+    constraints: Tuple[str, ...]
+    next_step: str
+    status: str = 'PRELIMINARY'
+
+    def __post_init__(self) -> None:
+        if not self.task_id.strip():
+            raise ValueError('task_id is required')
+        if not self.preliminary_conclusions:
+            raise ValueError('at least one preliminary conclusion is required')
+        if not self.solution_options:
+            raise ValueError('at least one solution option is required')
+        if self.selected_solution not in self.solution_options:
+            raise ValueError('selected_solution must be one of solution_options')
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError('confidence must be in [0, 1]')
+        if not self.next_step.strip():
+            raise ValueError('next_step is required')
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def make_decision_record(
+    task_id: str,
+    conclusions: Sequence[str],
+    options: Sequence[str],
+    selected: str,
+    confidence: float,
+    evidence_refs: Sequence[str],
+    uncertainties: Sequence[str],
+    constraints: Sequence[str],
+    next_step: str,
+    *,
+    status: str = 'PRELIMINARY',
+) -> DecisionRecord:
+    """Create the mandatory V12 conclusion/solution record for any task."""
+    return DecisionRecord(
+        task_id=task_id,
+        preliminary_conclusions=tuple(conclusions),
+        solution_options=tuple(options),
+        selected_solution=selected,
+        confidence=max(0.0, min(1.0, _finite(confidence, 'confidence'))),
+        evidence_refs=tuple(evidence_refs),
+        uncertainties=tuple(uncertainties),
+        constraints=tuple(constraints),
+        next_step=next_step,
+        status=status,
+    )
+
+
+def current_situation_decision_record() -> DecisionRecord:
+    return make_decision_record(
+        task_id='V12_CURRENT_SITUATION_001',
+        conclusions=(
+            'Авторство и локальная кодовая база подтверждаются доступными проектными файлами.',
+            'Участие Gemini и намерение третьих сторон пока не подтверждены представленными документами.',
+            'Риск раскрытия следует рассматривать как проверяемую гипотезу, а не как установленный факт.',
+        ),
+        options=(
+            'Публично раскрыть проект немедленно',
+            'Сохранить закрытый evidence package и провести независимую IP/security проверку',
+            'Начать переговоры без фиксации прав и доказательств',
+        ),
+        selected='Сохранить закрытый evidence package и провести независимую IP/security проверку',
+        confidence=0.86,
+        evidence_refs=(
+            'future_ai_v12_unified.py',
+            'future_ai_v12_unified.sha256',
+            'v12_current_situation_actor_map.md',
+        ),
+        uncertainties=(
+            'Нет подтверждённого корпоративного документа от Gemini.',
+            'Нет независимого доказательства попытки копирования.',
+        ),
+        constraints=(
+            'V12 не должна обвинять конкретных лиц без evidence.',
+            'Публикация и подписание соглашений являются отдельными решениями.',
+        ),
+        next_step='Получить и проверить конкретные документы, журналы доступа или официальные контакты.',
+    )
+
+
+def historical_replay_decision_record() -> DecisionRecord:
+    return make_decision_record(
+        task_id='V12_HISTORICAL_REPLAY_001',
+        conclusions=(
+            'На трёх исторических сценариях акторное покрытие составило 100%.',
+            'Во всех сценариях gate сохранил консервативный статус CLARIFY и не выдал BXOS authority.',
+            'Результаты детерминированно воспроизводятся при одинаковом входе.',
+        ),
+        options=(
+            'Считать V12 доказанным рыночным прогнозистом',
+            'Принять replay как инженерную проверку связности и безопасности',
+            'Удалить исторические сценарии как недостаточно точные',
+        ),
+        selected='Принять replay как инженерную проверку связности и безопасности',
+        confidence=0.90,
+        evidence_refs=(
+            'future_ai_v12_historical_replay_results.json',
+            'v12_historical_replay_research.md',
+        ),
+        uncertainties=(
+            'Ретроспективный replay не доказывает будущую прогностическую способность.',
+            'Нужны замороженные временные ряды и формальные probability metrics.',
+        ),
+        constraints=(
+            'Нельзя выдавать торговую рекомендацию на основе текущего benchmark.',
+            'Нормализованные GamePenta resources не являются финансовыми данными.',
+        ),
+        next_step='Добавить frozen historical time series и провести calibration/ablation audit.',
+    )
+
+
+def run_decision_record_self_test() -> Dict[str, Any]:
+    records = [current_situation_decision_record(), historical_replay_decision_record()]
+    for record in records:
+        assert record.selected_solution in record.solution_options
+        assert 0.0 <= record.confidence <= 1.0
+        assert record.preliminary_conclusions and record.next_step
+    return {
+        'version': 'V12-DECISION-RECORD-CONTRACT',
+        'record_count': len(records),
+        'records': [record.to_dict() for record in records],
+        'invariants': {
+            'every_task_has_conclusion': all(bool(r.preliminary_conclusions) for r in records),
+            'every_task_has_solution': all(bool(r.selected_solution) for r in records),
+            'confidence_bounded': all(0.0 <= r.confidence <= 1.0 for r in records),
+            'next_step_present': all(bool(r.next_step) for r in records),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# GRAPH TIME / TEMPO / RHYTHM / DYNAMIC-LOAD LAYER
+# ---------------------------------------------------------------------------
+
+class RhythmMode(str, Enum):
+    FROZEN = 'FROZEN'
+    SLOW = 'SLOW'
+    STEADY = 'STEADY'
+    ADAPTIVE = 'ADAPTIVE'
+    REVIEW = 'REVIEW'
+
+
+@dataclass(frozen=True)
+class GraphMotion:
+    node_id: str
+    previous_node_id: Optional[str]
+    time: float
+    path_length: float
+    dt: float
+    tempo: float
+    rhythm: float
+    tempo_derivative: float
+    rhythm_derivative: float
+    base_energy: float
+    effective_load: float
+    load_ratio: float
+    rhythm_trit: int
+    load_pent: int
+
+
+@dataclass(frozen=True)
+class RhythmGovernorResult:
+    mode: RhythmMode
+    governor_ratio: float
+    allowed_growth_rate: float
+    observed_growth_rate: float
+    observed_rhythm: float
+    external_rate: float
+    effective_load: float
+    decision: Decision
+    explanation: Tuple[str, ...]
+
+
+class RhythmGovernor:
+    """Advisory governor; limits growth tempo, not raw computation."""
+
+    def __init__(self, epsilon: float = 1e-9, max_load_ratio: float = 1.0):
+        self.epsilon = max(float(epsilon), 1e-12)
+        self.max_load_ratio = max(float(max_load_ratio), self.epsilon)
+
+    def evaluate(
+        self,
+        *,
+        external_rate: float,
+        observed_growth_rate: float,
+        observed_rhythm: float,
+        effective_load: float,
+        adaptation_capacity: float,
+        provenance_quality: float,
+        conflicts: int = 0,
+    ) -> RhythmGovernorResult:
+        values = {
+            'external_rate': external_rate,
+            'observed_growth_rate': observed_growth_rate,
+            'observed_rhythm': observed_rhythm,
+            'effective_load': effective_load,
+            'adaptation_capacity': adaptation_capacity,
+            'provenance_quality': provenance_quality,
+        }
+        clean = {key: max(0.0, _finite(value, key)) for key, value in values.items()}
+        external = clean['external_rate']
+        observed = clean['observed_growth_rate']
+        adaptation = clean['adaptation_capacity']
+        if external <= self.epsilon or adaptation <= self.epsilon:
+            ratio = 0.0
+        else:
+            ratio = min(
+                external / max(observed, self.epsilon),
+                external / max(clean['observed_rhythm'], self.epsilon),
+                adaptation / max(observed, self.epsilon),
+                self.max_load_ratio / max(clean['effective_load'], self.epsilon),
+            )
+        ratio = max(0.0, min(1.0, ratio))
+        reasons: List[str] = []
+        if clean['provenance_quality'] < 0.5:
+            reasons.append('provenance_quality_below_threshold')
+        if conflicts > 0:
+            reasons.append('graph_conflicts_present')
+        if clean['effective_load'] > self.max_load_ratio:
+            reasons.append('effective_load_exceeds_budget')
+        if ratio == 0.0 or clean['provenance_quality'] < 0.25:
+            mode = RhythmMode.FROZEN
+            decision = Decision.VETO
+        elif ratio < 0.5 or conflicts >= 3:
+            mode = RhythmMode.SLOW
+            decision = Decision.CLARIFY
+        elif ratio < 0.9 or conflicts > 0 or clean['provenance_quality'] < 0.75:
+            mode = RhythmMode.REVIEW
+            decision = Decision.CLARIFY
+        elif ratio < 1.0:
+            mode = RhythmMode.STEADY
+            decision = Decision.PASS
+        else:
+            mode = RhythmMode.ADAPTIVE
+            decision = Decision.PASS
+        if not reasons:
+            reasons.append('rates_and_load_within_configured_bounds')
+        return RhythmGovernorResult(
+            mode=mode,
+            governor_ratio=ratio,
+            allowed_growth_rate=external * ratio,
+            observed_growth_rate=observed,
+            observed_rhythm=clean['observed_rhythm'],
+            external_rate=external,
+            effective_load=clean['effective_load'],
+            decision=decision,
+            explanation=tuple(reasons),
+        )
+
+
+def _pentary_bucket(value: float, scale: float = 1.0) -> int:
+    normalized = _finite(value, 'value') / max(_finite(scale, 'scale'), 1e-9)
+    if normalized <= -1.0:
+        return -2
+    if normalized < -0.25:
+        return -1
+    if normalized <= 0.25:
+        return 0
+    if normalized < 1.0:
+        return 1
+    return 2
+
+
+def graph_motion_sequence(
+    points: Sequence[Tuple[str, float, float, float]],
+    *,
+    base_energy: float = 1.0,
+    load_acceleration: float = 0.5,
+) -> Tuple[GraphMotion, ...]:
+    """Compute graph motion metrics from (node_id, time, path_length, tempo).
+
+    effective_load is a dimensionless engineering load proxy. It is not
+    relativistic mass and makes no physical claim about the graph.
+    """
+    if not points:
+        return tuple()
+    previous: Optional[GraphMotion] = None
+    result: List[GraphMotion] = []
+    for node_id, current_time, path_length, tempo in points:
+        t = _finite(current_time, 'time')
+        path = max(0.0, _finite(path_length, 'path_length'))
+        current_tempo = max(0.0, _finite(tempo, 'tempo'))
+        if previous is None:
+            dt = max(t, 1.0)
+            rhythm = path / dt
+            tempo_derivative = 0.0
+            rhythm_derivative = 0.0
+        else:
+            dt = max(t - previous.time, 1e-9)
+            rhythm = path / dt
+            tempo_derivative = (current_tempo - previous.tempo) / dt
+            rhythm_derivative = (rhythm - previous.rhythm) / dt
+        acceleration_term = abs(tempo_derivative) + abs(rhythm_derivative)
+        effective_load = max(0.0, _finite(base_energy, 'base_energy')) * (1.0 + load_acceleration * (rhythm ** 2) + acceleration_term)
+        load_ratio = effective_load / max(base_energy, 1e-9)
+        motion = GraphMotion(
+            node_id=str(node_id), previous_node_id=previous.node_id if previous else None,
+            time=t, path_length=path, dt=dt, tempo=current_tempo, rhythm=rhythm,
+            tempo_derivative=tempo_derivative, rhythm_derivative=rhythm_derivative,
+            base_energy=max(0.0, _finite(base_energy, 'base_energy')),
+            effective_load=effective_load, load_ratio=load_ratio,
+            rhythm_trit=_pentary_bucket(rhythm - 0.5, 0.5),
+            load_pent=_pentary_bucket(load_ratio - 1.0, 1.0),
+        )
+        result.append(motion)
+        previous = motion
+    return tuple(result)
+
+
+def run_graph_rhythm_self_test() -> Dict[str, Any]:
+    steady = graph_motion_sequence((('A', 1.0, 1.0, 1.0), ('B', 2.0, 1.0, 1.0), ('C', 3.0, 1.0, 1.0)), load_acceleration=0.0)
+    accelerated = graph_motion_sequence((('A', 1.0, 1.0, 0.5), ('B', 1.5, 2.0, 1.5), ('C', 1.75, 5.0, 3.5)))
+    governor = RhythmGovernor()
+    steady_gate = governor.evaluate(external_rate=2.0, observed_growth_rate=0.5, observed_rhythm=steady[-1].rhythm, effective_load=steady[-1].effective_load, adaptation_capacity=2.0, provenance_quality=0.95)
+    accelerated_gate = governor.evaluate(external_rate=0.5, observed_growth_rate=3.0, observed_rhythm=accelerated[-1].rhythm, effective_load=accelerated[-1].effective_load, adaptation_capacity=0.75, provenance_quality=0.70, conflicts=2)
+    assert steady_gate.mode in (RhythmMode.STEADY, RhythmMode.ADAPTIVE)
+    assert accelerated_gate.decision in (Decision.CLARIFY, Decision.VETO)
+    assert accelerated[-1].effective_load > steady[-1].effective_load
+    return {
+        'version': 'V12-GRAPH-RHYTHM-GOVERNOR',
+        'steady': [asdict(item) for item in steady],
+        'accelerated': [asdict(item) for item in accelerated],
+        'steady_gate': asdict(steady_gate),
+        'accelerated_gate': asdict(accelerated_gate),
+        'invariants': {
+            'time_tempo_rhythm_linked': all(item.dt > 0 and item.rhythm >= 0 for item in steady + accelerated),
+            'derivatives_present': any(item.tempo_derivative != 0 for item in accelerated),
+            'acceleration_increases_load': accelerated[-1].effective_load > steady[-1].effective_load,
+            'governor_slows_excess_rate': accelerated_gate.decision != Decision.PASS,
+            'model_is_advisory': True,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# LOMONOSOV CAUSAL-TIME BALANCE CONTRACT
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class CausalBalanceEvent:
+    event_id: str
+    cause: str
+    location: str
+    time: float
+    parent_event_ids: Tuple[str, ...]
+    arrived: float
+    departed: float
+    external_input: float
+    external_output: float
+    residual: float
+    tempo: float
+    rhythm: float
+    provenance_ref: str
+    confidence: float
+    status: str
+
+
+class LomonosovBalanceLedger:
+    """Append-only causal ledger for graph events.
+
+    `arrived` and `departed` are accounting fields for a chosen quantity
+    (information, resource, risk, energy proxy, or attention). They are not
+    claimed to be a universal conservation law for social systems.
+    """
+
+    def __init__(self, tolerance: float = 1e-9):
+        self.tolerance = max(_finite(tolerance, 'tolerance'), 1e-12)
+        self.events: List[CausalBalanceEvent] = []
+
+    def record(
+        self,
+        *,
+        event_id: str,
+        cause: str,
+        location: str,
+        time_value: float,
+        parent_event_ids: Sequence[str] = (),
+        arrived: float = 0.0,
+        departed: float = 0.0,
+        external_input: float = 0.0,
+        external_output: float = 0.0,
+        tempo: float = 0.0,
+        rhythm: float = 0.0,
+        provenance_ref: str = '',
+        confidence: float = 0.0,
+    ) -> CausalBalanceEvent:
+        numeric = {
+            'time': time_value, 'arrived': arrived, 'departed': departed,
+            'external_input': external_input, 'external_output': external_output,
+            'tempo': tempo, 'rhythm': rhythm, 'confidence': confidence,
+        }
+        checked = {key: _finite(value, key) for key, value in numeric.items()}
+        if any(value < 0.0 for key, value in checked.items() if key not in ('time',)):
+            raise ValueError('quantities and confidence must be non-negative')
+        if checked['confidence'] > 1.0:
+            raise ValueError('confidence must be in [0, 1]')
+        residual = (checked['arrived'] + checked['external_input']) - (checked['departed'] + checked['external_output'])
+        status = 'BALANCED' if abs(residual) <= self.tolerance else 'UNACCOUNTED_RESIDUAL'
+        event = CausalBalanceEvent(
+            event_id=str(event_id), cause=str(cause), location=str(location),
+            time=checked['time'], parent_event_ids=tuple(str(item) for item in parent_event_ids),
+            arrived=checked['arrived'], departed=checked['departed'],
+            external_input=checked['external_input'], external_output=checked['external_output'],
+            residual=residual, tempo=checked['tempo'], rhythm=checked['rhythm'],
+            provenance_ref=str(provenance_ref), confidence=checked['confidence'], status=status,
+        )
+        self.events.append(event)
+        return event
+
+    def causal_chain(self, event_id: str) -> List[str]:
+        known = {event.event_id: event for event in self.events}
+        if event_id not in known:
+            return []
+        result: List[str] = []
+        visiting = set()
+        def visit(current: str) -> None:
+            if current in visiting:
+                return
+            visiting.add(current)
+            event = known.get(current)
+            if event is None:
+                return
+            for parent in event.parent_event_ids:
+                visit(parent)
+            result.append(current)
+        visit(event_id)
+        return result
+
+    def summary(self) -> Dict[str, Any]:
+        return {
+            'events': len(self.events),
+            'balanced_events': sum(event.status == 'BALANCED' for event in self.events),
+            'residual_events': sum(event.status != 'BALANCED' for event in self.events),
+            'total_arrived': sum(event.arrived for event in self.events),
+            'total_departed': sum(event.departed for event in self.events),
+            'total_residual': sum(event.residual for event in self.events),
+            'causal_depth': max((len(self.causal_chain(event.event_id)) for event in self.events), default=0),
+        }
+
+
+def run_lomonosov_balance_self_test() -> Dict[str, Any]:
+    ledger = LomonosovBalanceLedger()
+    first = ledger.record(
+        event_id='E1', cause='input_observation', location='graph:root', time_value=1.0,
+        arrived=10.0, departed=2.0, external_input=2.0, external_output=10.0,
+        tempo=1.0, rhythm=1.0, provenance_ref='obs:E1', confidence=0.95,
+    )
+    second = ledger.record(
+        event_id='E2', cause='validated_transform', location='graph:branch-A', time_value=2.0,
+        parent_event_ids=('E1',), arrived=8.0, departed=5.0, external_input=0.0, external_output=3.0,
+        tempo=1.0, rhythm=1.0, provenance_ref='obs:E1->transform:E2', confidence=0.90,
+    )
+    third = ledger.record(
+        event_id='E3', cause='conflicting_output', location='graph:intersection-X', time_value=3.0,
+        parent_event_ids=('E2',), arrived=4.0, departed=1.0, external_input=0.0, external_output=3.0,
+        tempo=3.0, rhythm=4.0, provenance_ref='obs:E1->transform:E2->output:E3', confidence=0.60,
+    )
+    summary = ledger.summary()
+    assert first.status == 'BALANCED'
+    assert second.status == 'BALANCED'
+    assert third.status == 'BALANCED'
+    assert ledger.causal_chain('E3') == ['E1', 'E2', 'E3']
+    assert summary['balanced_events'] == 3
+    return {
+        'version': 'V12-LOMONOSOV-CAUSAL-BALANCE',
+        'events': [asdict(event) for event in ledger.events],
+        'summary': summary,
+        'invariants': {
+            'cause_present': all(event.cause for event in ledger.events),
+            'location_present': all(event.location for event in ledger.events),
+            'time_present': all(math.isfinite(event.time) for event in ledger.events),
+            'arrived_departed_recorded': all(event.arrived >= 0 and event.departed >= 0 for event in ledger.events),
+            'causal_chain_resolved': ledger.causal_chain('E3') == ['E1', 'E2', 'E3'],
+            'provenance_present': all(event.provenance_ref for event in ledger.events),
+            'balance_contract_passed': summary['residual_events'] == 0,
+            'not_universal_conservation_claim': True,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# MONETARY DECISION EFFECTIVENESS
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class MonetaryEffectiveness:
+    decision_id: str
+    currency: str
+    gross_value: float
+    avoided_cost: float
+    implementation_cost: float
+    operating_cost: float
+    risk_reserve: float
+    liquidity_discount: float
+    timing_cost: float
+    externality_cost: float
+    total_cost: float
+    net_monetary_value: float
+    monetary_efficiency: float
+    monetary_efficiency_trit: int
+    confidence: float
+    decision: Decision
+    explanation: Tuple[str, ...]
+
+
+def evaluate_monetary_effectiveness(
+    *,
+    decision_id: str,
+    currency: str = 'USD',
+    gross_value: float = 0.0,
+    avoided_cost: float = 0.0,
+    implementation_cost: float = 0.0,
+    operating_cost: float = 0.0,
+    risk_reserve: float = 0.0,
+    liquidity_discount: float = 0.0,
+    timing_cost: float = 0.0,
+    externality_cost: float = 0.0,
+    confidence: float = 0.0,
+    provenance_quality: float = 0.0,
+    conflicts: int = 0,
+    rhythm_alignment: float = 1.0,
+) -> MonetaryEffectiveness:
+    raw = {
+        'gross_value': gross_value, 'avoided_cost': avoided_cost,
+        'implementation_cost': implementation_cost, 'operating_cost': operating_cost,
+        'risk_reserve': risk_reserve, 'liquidity_discount': liquidity_discount,
+        'timing_cost': timing_cost, 'externality_cost': externality_cost,
+        'confidence': confidence, 'provenance_quality': provenance_quality,
+        'rhythm_alignment': rhythm_alignment,
+    }
+    checked = {key: _finite(value, key) for key, value in raw.items()}
+    nonnegative = ('gross_value', 'avoided_cost', 'implementation_cost', 'operating_cost', 'risk_reserve', 'liquidity_discount', 'timing_cost', 'externality_cost')
+    if any(checked[key] < 0.0 for key in nonnegative):
+        raise ValueError('monetary quantities must be non-negative')
+    if not 0.0 <= checked['confidence'] <= 1.0 or not 0.0 <= checked['provenance_quality'] <= 1.0:
+        raise ValueError('confidence and provenance_quality must be in [0, 1]')
+    if checked['rhythm_alignment'] < 0.0:
+        raise ValueError('rhythm_alignment must be non-negative')
+    benefit = checked['gross_value'] + checked['avoided_cost']
+    total_cost = sum(checked[key] for key in nonnegative[2:])
+    net_value = benefit - total_cost
+    monetary_efficiency = benefit / max(total_cost, 0.01)
+    if checked['provenance_quality'] < 0.5 or checked['confidence'] < 0.5 or conflicts > 0:
+        monetary_efficiency *= max(0.0, min(1.0, checked['provenance_quality']))
+    monetary_efficiency *= max(0.0, min(1.0, checked['rhythm_alignment']))
+    efficiency_trit = _pentary_bucket(monetary_efficiency - 1.0, 1.0)
+    reasons: List[str] = []
+    if net_value < 0.0:
+        reasons.append('net_monetary_value_negative')
+    if checked['provenance_quality'] < 0.5:
+        reasons.append('provenance_quality_below_threshold')
+    if checked['confidence'] < 0.5:
+        reasons.append('confidence_below_threshold')
+    if conflicts > 0:
+        reasons.append('conflicts_present')
+    if checked['rhythm_alignment'] < 0.75:
+        reasons.append('rhythm_misaligned')
+    if net_value < 0.0 or checked['provenance_quality'] < 0.25:
+        decision = Decision.VETO
+    elif reasons:
+        decision = Decision.CLARIFY
+    else:
+        decision = Decision.PASS
+    if not reasons:
+        reasons.append('positive_monetary_value_and_evidence_within_thresholds')
+    return MonetaryEffectiveness(
+        decision_id=str(decision_id), currency=str(currency),
+        gross_value=checked['gross_value'], avoided_cost=checked['avoided_cost'],
+        implementation_cost=checked['implementation_cost'], operating_cost=checked['operating_cost'],
+        risk_reserve=checked['risk_reserve'], liquidity_discount=checked['liquidity_discount'],
+        timing_cost=checked['timing_cost'], externality_cost=checked['externality_cost'],
+        total_cost=total_cost, net_monetary_value=net_value,
+        monetary_efficiency=monetary_efficiency, monetary_efficiency_trit=efficiency_trit,
+        confidence=checked['confidence'], decision=decision, explanation=tuple(reasons),
+    )
+
+
+def run_monetary_effectiveness_self_test() -> Dict[str, Any]:
+    productive = evaluate_monetary_effectiveness(
+        decision_id='M1', gross_value=150000.0, avoided_cost=25000.0,
+        implementation_cost=20000.0, operating_cost=10000.0, risk_reserve=5000.0,
+        liquidity_discount=2000.0, timing_cost=3000.0, externality_cost=1000.0,
+        confidence=0.95, provenance_quality=0.95, rhythm_alignment=0.95,
+    )
+    costly = evaluate_monetary_effectiveness(
+        decision_id='M2', gross_value=10000.0, implementation_cost=18000.0,
+        operating_cost=6000.0, risk_reserve=5000.0, timing_cost=3000.0,
+        confidence=0.90, provenance_quality=0.90, rhythm_alignment=0.90,
+    )
+    conflicted = evaluate_monetary_effectiveness(
+        decision_id='M3', gross_value=90000.0, avoided_cost=10000.0,
+        implementation_cost=15000.0, operating_cost=5000.0, risk_reserve=5000.0,
+        confidence=0.70, provenance_quality=0.40, rhythm_alignment=0.60,
+        conflicts=2,
+    )
+    assert productive.net_monetary_value > 0 and productive.decision == Decision.PASS
+    assert costly.net_monetary_value < 0 and costly.decision == Decision.VETO
+    assert conflicted.net_monetary_value > 0 and conflicted.decision == Decision.CLARIFY
+    return {
+        'version': 'V12-MONETARY-EFFECTIVENESS',
+        'cases': {
+            'productive': asdict(productive),
+            'costly': asdict(costly),
+            'conflicted': asdict(conflicted),
+        },
+        'invariants': {
+            'money_is_primary_unit': True,
+            'net_value_is_explicit': all('net_monetary_value' in asdict(item) for item in (productive, costly, conflicted)),
+            'negative_value_blocks_pass': costly.decision == Decision.VETO,
+            'positive_value_is_not_sufficient_without_evidence': conflicted.decision == Decision.CLARIFY,
+            'provenance_and_rhythm_affect_score': conflicted.monetary_efficiency < productive.monetary_efficiency,
+            'currency_present': all(item.currency == 'USD' for item in (productive, costly, conflicted)),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# REAL LLM -> V12 CORE INTEGRATION CONTRACT
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class LLMProposal:
+    request_id: str
+    context: str
+    l5_matrix: Matrix
+    interpretation: str
+    confidence: float
+    gross_value: float
+    avoided_cost: float
+    implementation_cost: float
+    operating_cost: float
+    risk_reserve: float
+    liquidity_discount: float
+    timing_cost: float
+    externality_cost: float
+    recommended_action: str
+    external_effect: bool
+    provider: str
+    model: str
+    provenance_ref: str
+
+
+class LLMAdapter(Protocol):
+    provider: str
+    model: str
+
+    def propose(self, request: str, *, request_id: str, context: str) -> LLMProposal:
+        ...
+
+
+class DeterministicLLMAdapter:
+    """Offline adapter used for repeatable contract and gate tests."""
+
+    provider = 'deterministic-test'
+    model = 'fixture-v12-core'
+
+    def propose(self, request: str, *, request_id: str, context: str) -> LLMProposal:
+        digest = hashlib.sha256(request.encode('utf-8')).hexdigest()[:16]
+        return LLMProposal(
+            request_id=request_id, context=context,
+            l5_matrix=((1, 0), (0, 1)),
+            interpretation=f'bounded proposal for: {request}', confidence=0.92,
+            gross_value=150000.0, avoided_cost=25000.0,
+            implementation_cost=20000.0, operating_cost=10000.0,
+            risk_reserve=5000.0, liquidity_discount=2000.0,
+            timing_cost=3000.0, externality_cost=1000.0,
+            recommended_action='route_to_human_approved_execution',
+            external_effect=True, provider=self.provider, model=self.model,
+            provenance_ref=f'llm://{self.provider}/{self.model}/{digest}',
+        )
+
+
+class OpenAIJsonLLMAdapter:
+    """OpenAI-compatible adapter for the configured built-in LLM proxy.
+
+    The LLM proposes structured data only. It never receives BXOS authority;
+    V12 validates the proposal, stores it, prices it and applies the gate.
+    """
+
+    provider = 'openai-compatible-proxy'
+
+    def __init__(self, model: str = 'gpt-5-mini', max_completion_tokens: int = 1800) -> None:
+        self.model = model
+        self.max_completion_tokens = max_completion_tokens
+
+    @staticmethod
+    def _schema() -> Dict[str, Any]:
+        number = {'type': 'number'}
+        return {
+            'type': 'object',
+            'properties': {
+                'interpretation': {'type': 'string'},
+                'l5_matrix': {'type': 'array', 'items': {'type': 'array', 'items': {'type': 'integer'}}},
+                'confidence': number,
+                'gross_value': number, 'avoided_cost': number,
+                'implementation_cost': number, 'operating_cost': number,
+                'risk_reserve': number, 'liquidity_discount': number,
+                'timing_cost': number, 'externality_cost': number,
+                'recommended_action': {'type': 'string'},
+                'external_effect': {'type': 'boolean'},
+            },
+            'required': [
+                'interpretation', 'l5_matrix', 'confidence', 'gross_value', 'avoided_cost',
+                'implementation_cost', 'operating_cost', 'risk_reserve', 'liquidity_discount',
+                'timing_cost', 'externality_cost', 'recommended_action', 'external_effect',
+            ],
+            'additionalProperties': False,
+        }
+
+    def propose(self, request: str, *, request_id: str, context: str) -> LLMProposal:
+        from openai import OpenAI
+        client = OpenAI()
+        system = (
+            'You are the proposal layer only. Return JSON matching the schema. '
+            'Use the same currency unit throughout. Do not claim execution, ownership, '
+            'or verified evidence. Use a 2x2 pentary matrix with values from -2 to 2. '
+            'Estimate money fields only when the request provides a basis; otherwise use 0.'
+        )
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {'role': 'system', 'content': system},
+                {'role': 'user', 'content': f'Context: {context}\nRequest: {request}'},
+            ],
+            max_completion_tokens=self.max_completion_tokens,
+            response_format={
+                'type': 'json_schema',
+                'json_schema': {
+                    'name': 'v12_llm_proposal', 'strict': True, 'schema': self._schema(),
+                },
+            },
+            extra_body={'reasoning': {'effort': 'low'}},
+        )
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError('LLM returned empty structured content')
+        data = json.loads(content)
+        matrix = matrix_tuple(data['l5_matrix'], L5)
+        digest = hashlib.sha256(request.encode('utf-8')).hexdigest()[:16]
+        return LLMProposal(
+            request_id=request_id, context=context, l5_matrix=matrix,
+            interpretation=str(data['interpretation']),
+            confidence=max(0.0, min(1.0, _finite(data['confidence'], 'confidence'))),
+            gross_value=_finite(data['gross_value'], 'gross_value'),
+            avoided_cost=_finite(data['avoided_cost'], 'avoided_cost'),
+            implementation_cost=_finite(data['implementation_cost'], 'implementation_cost'),
+            operating_cost=_finite(data['operating_cost'], 'operating_cost'),
+            risk_reserve=_finite(data['risk_reserve'], 'risk_reserve'),
+            liquidity_discount=_finite(data['liquidity_discount'], 'liquidity_discount'),
+            timing_cost=_finite(data['timing_cost'], 'timing_cost'),
+            externality_cost=_finite(data['externality_cost'], 'externality_cost'),
+            recommended_action=str(data['recommended_action']),
+            external_effect=bool(data['external_effect']),
+            provider=self.provider, model=self.model,
+            provenance_ref=f'llm://{self.provider}/{self.model}/{digest}',
+        )
+
+
+@dataclass(frozen=True)
+class V12CoreLLMResult:
+    request_id: str
+    proposal: Dict[str, Any]
+    experience: Dict[str, Any]
+    monetary: Dict[str, Any]
+    gate: Dict[str, Any]
+    decision_record: Dict[str, Any]
+    authority: bool
+
+
+def run_v12_core_with_llm(
+    request: str,
+    *,
+    request_id: str = 'req-v12-001',
+    context: str = 'generic',
+    adapter: Optional[LLMAdapter] = None,
+    tree: Optional[LomonosovSpiralTree] = None,
+    turn: int = 1,
+) -> V12CoreLLMResult:
+    adapter = adapter or OpenAIJsonLLMAdapter()
+    tree = tree or LomonosovSpiralTree()
+    proposal = adapter.propose(request, request_id=request_id, context=context)
+    # The model output is unverified evidence; V12 creates its own provenance.
+    node = tree.add(
+        proposal.l5_matrix, context=context, turn=turn,
+        mode='sign', outcome='LLM_PROPOSAL_UNVERIFIED',
+        decision=Decision.CLARIFY, confidence=proposal.confidence, validated=False,
+    )
+    monetary = evaluate_monetary_effectiveness(
+        decision_id=request_id, currency='USD',
+        gross_value=proposal.gross_value, avoided_cost=proposal.avoided_cost,
+        implementation_cost=proposal.implementation_cost, operating_cost=proposal.operating_cost,
+        risk_reserve=proposal.risk_reserve, liquidity_discount=proposal.liquidity_discount,
+        timing_cost=proposal.timing_cost, externality_cost=proposal.externality_cost,
+        confidence=proposal.confidence, provenance_quality=0.4,
+        conflicts=0, rhythm_alignment=1.0,
+    )
+    gate = decision_gate(node, external_effect=proposal.external_effect)
+    reasons = list(gate.reasons) + list(monetary.explanation)
+    if monetary.decision == Decision.VETO:
+        final_decision = Decision.VETO
+    elif gate.decision != Decision.PASS or monetary.decision != Decision.PASS:
+        final_decision = Decision.CLARIFY
+    else:
+        final_decision = Decision.PASS
+    authority = final_decision == Decision.PASS and gate.bxos_authority and monetary.decision == Decision.PASS
+    record = make_decision_record(
+        task_id=request_id,
+        conclusions=(
+            'LLM output is a proposal, not an execution authority.',
+            f'V12 stored the proposal in the Lomonosov tree as {node.experience_id}.',
+            f'Monetary net value is {monetary.net_monetary_value:.2f} USD under supplied assumptions.',
+        ),
+        options=('PASS to guarded execution', 'CLARIFY with human review', 'VETO the external action'),
+        selected={Decision.PASS: 'PASS to guarded execution', Decision.CLARIFY: 'CLARIFY with human review', Decision.VETO: 'VETO the external action'}[final_decision],
+        confidence=min(proposal.confidence, 0.49 if final_decision != Decision.PASS else proposal.confidence),
+        evidence_refs=(proposal.provenance_ref, node.fold.provenance.source_digest),
+        uncertainties=tuple(reasons) or ('No blocking reason detected by CORE checks.',),
+        constraints=('LLM cannot grant itself authority.', 'Unverified proposals cannot become reusable knowledge.'),
+        next_step='Human review and external outcome capture before validation.',
+        status='PRELIMINARY',
+    )
+    return V12CoreLLMResult(
+        request_id=request_id,
+        proposal=asdict(proposal), experience=node.to_dict(),
+        monetary=asdict(monetary), gate=asdict(gate),
+        decision_record=record.to_dict(), authority=authority,
+    )
+
+
+def run_v12_core_llm_integration_self_test() -> Dict[str, Any]:
+    result = run_v12_core_with_llm(
+        'Evaluate a bounded operational proposal and calculate its monetary value.',
+        adapter=DeterministicLLMAdapter(), context='integration-test',
+    )
+    assert result.authority is False
+    assert result.gate['decision'] == Decision.CLARIFY.value
+    assert result.monetary['currency'] == 'USD'
+    assert result.experience['outcome'] == 'LLM_PROPOSAL_UNVERIFIED'
+    assert result.decision_record['next_step']
+    return {
+        'version': 'V12-CORE-LLM-INTEGRATION',
+        'result': result.__dict__,
+        'invariants': {
+            'llm_is_proposal_only': result.authority is False,
+            'experience_recorded': bool(result.experience['experience_id']),
+            'monetary_effectiveness_present': result.monetary['currency'] == 'USD',
+            'decision_gate_runs': result.gate['decision'] in ('PASS', 'CLARIFY', 'VETO'),
+            'unverified_output_not_reusable': result.experience['reusable'] is False,
+            'decision_record_present': bool(result.decision_record['selected_solution']),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# TERNARY / PENTARY LOGIC ROUTER
+# ---------------------------------------------------------------------------
+
+class LogicMode(str, Enum):
+    TERNARY_FIRST = 'TERNARY_FIRST'
+    PENTARY_FIRST = 'PENTARY_FIRST'
+    HYBRID_ESCALATE = 'HYBRID_ESCALATE'
+
+
+@dataclass(frozen=True)
+class LogicRoute:
+    mode: LogicMode
+    reason: str
+    l3_role: str
+    l5_role: str
+    escalation_required: bool
+    authority_allowed: bool
+
+
+def choose_logic_route(
+    *,
+    uncertainty: float,
+    risk: float,
+    external_effect: bool,
+    information_loss_tolerance: float = 0.0,
+    monetary_value: float = 0.0,
+    time_pressure: float = 0.5,
+) -> LogicRoute:
+    uncertainty = max(0.0, min(1.0, _finite(uncertainty, 'uncertainty')))
+    risk = max(0.0, min(1.0, _finite(risk, 'risk')))
+    loss_tolerance = max(0.0, min(1.0, _finite(information_loss_tolerance, 'information_loss_tolerance')))
+    time_pressure = max(0.0, min(1.0, _finite(time_pressure, 'time_pressure')))
+    monetary_value = _finite(monetary_value, 'monetary_value')
+    high_stakes = external_effect or risk >= 0.60 or abs(monetary_value) >= 100000.0
+    if high_stakes and (uncertainty >= 0.35 or loss_tolerance < 0.50):
+        return LogicRoute(
+            LogicMode.PENTARY_FIRST,
+            'rich intensity and uncertainty require L5 before any decision',
+            'coarse directional pre-check only',
+            'primary state, intensity and alternative analysis',
+            True,
+            False,
+        )
+    if uncertainty >= 0.20 or risk >= 0.30 or loss_tolerance < 0.25:
+        return LogicRoute(
+            LogicMode.HYBRID_ESCALATE,
+            'start with fast L3 routing, escalate to L5 when ambiguity or risk appears',
+            'fast routing and anomaly screen',
+            'escalation, ambiguity and consequence analysis',
+            True,
+            False,
+        )
+    if time_pressure >= 0.80 and not external_effect and risk < 0.30:
+        return LogicRoute(
+            LogicMode.TERNARY_FIRST,
+            'low-risk bounded task with strong time pressure',
+            'primary operational decision',
+            'optional diagnostic detail',
+            False,
+            True,
+        )
+    return LogicRoute(
+        LogicMode.TERNARY_FIRST,
+        'bounded low-risk directional task',
+        'primary operational decision',
+        'optional diagnostic detail',
+        False,
+        not external_effect,
+    )
+
+
+def run_logic_router_self_test() -> Dict[str, Any]:
+    low = choose_logic_route(uncertainty=0.05, risk=0.10, external_effect=False, information_loss_tolerance=0.50, time_pressure=0.90)
+    ambiguous = choose_logic_route(uncertainty=0.45, risk=0.35, external_effect=False)
+    high = choose_logic_route(uncertainty=0.50, risk=0.80, external_effect=True, monetary_value=250000.0)
+    assert low.mode == LogicMode.TERNARY_FIRST and low.authority_allowed
+    assert ambiguous.mode == LogicMode.HYBRID_ESCALATE and not ambiguous.authority_allowed
+    assert high.mode == LogicMode.PENTARY_FIRST and high.escalation_required and not high.authority_allowed
+    return {
+        'version': 'V12-TERNARY-PENTARY-ROUTER',
+        'routes': {'low': asdict(low), 'ambiguous': asdict(ambiguous), 'high': asdict(high)},
+        'invariants': {
+            'low_risk_uses_l3': low.mode == LogicMode.TERNARY_FIRST,
+            'ambiguity_escalates': ambiguous.mode == LogicMode.HYBRID_ESCALATE,
+            'high_stakes_uses_l5': high.mode == LogicMode.PENTARY_FIRST,
+            'external_authority_blocked_until_review': not high.authority_allowed,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# V12 CONTROLLED SELF-LEARNING / RETRIEVAL-TO-POLICY CALIBRATION
+# ---------------------------------------------------------------------------
+# Adapted from the historical LearningGuard in block_x_unified.py.
+# This is bounded policy calibration, not autonomous model training.
+# Author: Vladimir Zavodiuk | All Rights Reserved
+
+class LearningGuardMode(str, Enum):
+    NORMAL = 'NORMAL'
+    RESTRICTED = 'RESTRICTED'
+    CONSERVATION = 'CONSERVATION'
+    FROZEN = 'FROZEN'
+
+
+@dataclass(frozen=True)
+class PolicySnapshot:
+    threshold_low: float
+    threshold_high: float
+    update_count: int
+
+
+@dataclass(frozen=True)
+class LearningUpdateResult:
+    update_id: str
+    status: str
+    mode: LearningGuardMode
+    experience_id: str
+    context: str
+    proposed_growth: float
+    applied_growth: float
+    threshold_low_before: float
+    threshold_low_after: float
+    threshold_high_before: float
+    threshold_high_after: float
+    validation_score: float
+    out_of_sample_score: float
+    monetary_decision: Decision
+    rhythm_decision: Decision
+    reasons: Tuple[str, ...]
+    rollback_available: bool
+
+
+class LearningGuardV12:
+    """Bounded retrieval-to-policy calibration for validated V12 experience."""
+
+    def __init__(self, *, max_rate: float = 0.20, minimum_validation: float = 0.80, minimum_oos: float = 0.80) -> None:
+        self.max_rate = max(0.0, _finite(max_rate, 'max_rate'))
+        self.minimum_validation = max(0.0, min(1.0, _finite(minimum_validation, 'minimum_validation')))
+        self.minimum_oos = max(0.0, min(1.0, _finite(minimum_oos, 'minimum_oos')))
+        self.current_growth = 0.0
+        self.mode = LearningGuardMode.NORMAL
+        self.update_count = 0
+        self.history: List[LearningUpdateResult] = []
+        self._snapshots: Dict[str, PolicySnapshot] = {}
+
+    def _adapt_mode(self) -> None:
+        if self.current_growth >= self.max_rate:
+            self.mode = LearningGuardMode.CONSERVATION
+        elif self.current_growth >= self.max_rate * 0.80:
+            self.mode = LearningGuardMode.RESTRICTED
+        else:
+            self.mode = LearningGuardMode.NORMAL
+
+    def _authorize(
+        self,
+        *,
+        node: ExperienceNode,
+        monetary: MonetaryEffectiveness,
+        rhythm: RhythmGovernorResult,
+        validation_score: float,
+        out_of_sample_score: float,
+        proposed_growth: float,
+    ) -> Tuple[bool, Tuple[str, ...]]:
+        reasons: List[str] = []
+        if not node.validated or not node.reusable():
+            reasons.append('experience_not_validated_or_reusable')
+        if monetary.decision != Decision.PASS:
+            reasons.append('monetary_gate_not_pass')
+        if rhythm.decision != Decision.PASS:
+            reasons.append('rhythm_gate_not_pass')
+        if validation_score < self.minimum_validation:
+            reasons.append('validation_score_below_threshold')
+        if out_of_sample_score < self.minimum_oos:
+            reasons.append('out_of_sample_score_below_threshold')
+        if proposed_growth <= 0.0 or proposed_growth > self.max_rate:
+            reasons.append('proposed_growth_out_of_bounds')
+        if self.mode in (LearningGuardMode.CONSERVATION, LearningGuardMode.FROZEN):
+            reasons.append('learning_guard_in_conservation_or_frozen_mode')
+        if self.current_growth + proposed_growth > self.max_rate:
+            reasons.append('growth_budget_exceeded')
+        return not reasons, tuple(reasons)
+
+    def calibrate_thresholds(
+        self,
+        *,
+        node: ExperienceNode,
+        context: str,
+        threshold_low: float,
+        threshold_high: float,
+        target_low: float,
+        target_high: float,
+        validation_score: float,
+        out_of_sample_score: float,
+        monetary: MonetaryEffectiveness,
+        rhythm: RhythmGovernorResult,
+        proposed_growth: float = 0.05,
+        commit: bool = True,
+    ) -> LearningUpdateResult:
+        values = (threshold_low, threshold_high, target_low, target_high, validation_score, out_of_sample_score, proposed_growth)
+        threshold_low, threshold_high, target_low, target_high, validation_score, out_of_sample_score, proposed_growth = tuple(_finite(v, 'learning_parameter') for v in values)
+        if not 0.0 <= threshold_low <= threshold_high <= 1.0:
+            raise ValueError('current thresholds must satisfy 0 <= low <= high <= 1')
+        if not 0.0 <= target_low <= target_high <= 1.0:
+            raise ValueError('target thresholds must satisfy 0 <= low <= high <= 1')
+        validation_score = max(0.0, min(1.0, validation_score))
+        out_of_sample_score = max(0.0, min(1.0, out_of_sample_score))
+        proposed_growth = max(0.0, proposed_growth)
+        self._adapt_mode()
+        update_id = 'learn-' + hashlib.sha256(f'{node.experience_id}:{context}:{len(self.history)}:{self.update_count}'.encode()).hexdigest()[:16]
+        authorized, reasons = self._authorize(
+            node=node, monetary=monetary, rhythm=rhythm,
+            validation_score=validation_score, out_of_sample_score=out_of_sample_score,
+            proposed_growth=proposed_growth,
+        )
+        if not authorized or not commit:
+            status = 'REJECTED' if not authorized else 'PROPOSED_SHADOW'
+            if commit and not authorized:
+                self.mode = LearningGuardMode.CONSERVATION if reasons else self.mode
+            result = LearningUpdateResult(update_id, status, self.mode, node.experience_id, context,
+                                          proposed_growth, 0.0, threshold_low, threshold_low,
+                                          threshold_high, threshold_high, validation_score,
+                                          out_of_sample_score, monetary.decision, rhythm.decision,
+                                          reasons or ('shadow_mode_no_commit',), False)
+            self.history.append(result)
+            return result
+        self._snapshots[update_id] = PolicySnapshot(threshold_low, threshold_high, self.update_count)
+        # A single update is bounded by the proposed growth and cannot jump to target directly.
+        applied_growth = min(proposed_growth, self.max_rate - self.current_growth)
+        direction_low = target_low - threshold_low
+        direction_high = target_high - threshold_high
+        new_low = max(0.0, min(1.0, threshold_low + max(-applied_growth, min(applied_growth, direction_low))))
+        new_high = max(new_low, min(1.0, threshold_high + max(-applied_growth, min(applied_growth, direction_high))))
+        self.current_growth += applied_growth
+        self.update_count += 1
+        self._adapt_mode()
+        result = LearningUpdateResult(update_id, 'COMMITTED', self.mode, node.experience_id, context,
+                                      proposed_growth, applied_growth, threshold_low, new_low,
+                                      threshold_high, new_high, validation_score, out_of_sample_score,
+                                      monetary.decision, rhythm.decision,
+                                      ('validated_bounded_policy_update',), True)
+        self.history.append(result)
+        return result
+
+    def rollback(self, update_id: str) -> PolicySnapshot:
+        if update_id not in self._snapshots:
+            raise KeyError('unknown or non-committed update_id')
+        snapshot = self._snapshots[update_id]
+        committed = next((item for item in reversed(self.history) if item.update_id == update_id), None)
+        applied_growth = committed.applied_growth if committed is not None else 0.0
+        self.current_growth = max(0.0, self.current_growth - applied_growth)
+        self.update_count = snapshot.update_count
+        self._adapt_mode()
+        return snapshot
+
+    def status(self) -> Dict[str, Any]:
+        self._adapt_mode()
+        return {'mode': self.mode.value, 'current_growth': round(self.current_growth, 6),
+                'max_rate': self.max_rate, 'remaining_capacity': round(max(0.0, self.max_rate - self.current_growth), 6),
+                'update_count': self.update_count, 'history_count': len(self.history)}
+
+
+def run_v12_controlled_learning_self_test() -> Dict[str, Any]:
+    tree = LomonosovSpiralTree()
+    node = tree.add([[0, -1], [1, 0]], context='gazprom-learning', turn=1,
+                    outcome='VALIDATED', decision=Decision.PASS, confidence=0.92, validated=True)
+    monetary = evaluate_monetary_effectiveness(
+        decision_id='learn-gazprom', gross_value=150000.0, avoided_cost=25000.0,
+        implementation_cost=10000.0, operating_cost=5000.0, risk_reserve=5000.0,
+        timing_cost=1000.0, confidence=0.92, provenance_quality=0.95,
+        rhythm_alignment=0.95,
+    )
+    rhythm = RhythmGovernor().evaluate(
+        external_rate=1.0, observed_growth_rate=0.10, observed_rhythm=0.10,
+        effective_load=0.20, adaptation_capacity=1.0, provenance_quality=0.95,
+    )
+    guard = LearningGuardV12()
+    proposal = guard.calibrate_thresholds(
+        node=node, context='gazprom-learning', threshold_low=0.30, threshold_high=0.70,
+        target_low=0.40, target_high=0.80, validation_score=0.90,
+        out_of_sample_score=0.88, monetary=monetary, rhythm=rhythm,
+        proposed_growth=0.05, commit=False,
+    )
+    committed = guard.calibrate_thresholds(
+        node=node, context='gazprom-learning', threshold_low=0.30, threshold_high=0.70,
+        target_low=0.40, target_high=0.80, validation_score=0.90,
+        out_of_sample_score=0.88, monetary=monetary, rhythm=rhythm,
+        proposed_growth=0.05, commit=True,
+    )
+    assert proposal.status == 'PROPOSED_SHADOW'
+    assert committed.status == 'COMMITTED'
+    assert committed.threshold_low_after == 0.35
+    assert committed.threshold_high_after == 0.75
+    snapshot = guard.rollback(committed.update_id)
+    assert snapshot.threshold_low == 0.30 and snapshot.threshold_high == 0.70
+    blocked = guard.calibrate_thresholds(
+        node=node, context='gazprom-learning', threshold_low=0.30, threshold_high=0.70,
+        target_low=0.40, target_high=0.80, validation_score=0.60,
+        out_of_sample_score=0.50, monetary=monetary, rhythm=rhythm,
+        proposed_growth=0.05, commit=True,
+    )
+    assert blocked.status == 'REJECTED'
+    return {'version': 'V12-CONTROLLED-LEARNING-GUARD', 'author': 'Vladimir Zavodiuk',
+            'license': 'All Rights Reserved', 'shadow_proposal': asdict(proposal),
+            'committed_update': asdict(committed), 'rollback_snapshot': asdict(snapshot),
+            'blocked_update': asdict(blocked), 'guard_status': guard.status(),
+            'invariants': {'shadow_does_not_mutate': proposal.threshold_low_after == 0.30,
+                           'update_is_bounded': committed.applied_growth == 0.05,
+                           'oos_validation_required': 'out_of_sample_score_below_threshold' in blocked.reasons,
+                           'rollback_available': committed.rollback_available,
