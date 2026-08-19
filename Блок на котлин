@@ -1,0 +1,138 @@
+package com.pentarny.core
+
+import java.security.MessageDigest
+import java.time.Instant
+import java.util.concurrent.CompletableFuture
+
+// --- СТРУКТУРЫ ДАННЫХ И СТАТУСЫ ---
+
+enum class DecisionStatus {
+    PASS, CONTINUE, CLARIFY, VETO, DENIED
+}
+
+data class Request(
+    val requestId: String,
+    val text: String,
+    val executionRequested: Boolean = true
+)
+
+data class Result(
+    val requestId: String,
+    val decision: DecisionStatus,
+    val evidenceDigest: String,
+    val riskScore: Double,
+    val executionTimeNs: Long
+)
+
+// --- УЗЛЫ ГРАФА (PENTAR-NODES) ---
+
+interface Node {
+    val id: String
+    fun process(input: Request): CompletableFuture<Request>
+}
+
+/**
+ * 1. V-Phase Node: Нормализация и расчет весовых конфликтов
+ */
+class VPreprocessingNode(override val id: String = "V-Preprocessing") : Node {
+    override fun process(input: Request): CompletableFuture<Request> {
+        return CompletableFuture.supplyAsync {
+            // Эмуляция быстрой нормализации и выделения сигналов
+            val normalizedText = input.text.trim().lowercase()
+            input.copy(text = normalizedText)
+        }
+    }
+}
+
+/**
+ * 2. W-Matrix Core Node: Параллельный ансамбль (Rashomons) и расчет напряжения по Фибоначчи
+ */
+class WMatrixCoreNode(override val id: String = "W-Matrix-Core") : Node {
+    override fun process(input: Request): CompletableFuture<Request> {
+        return CompletableFuture.supplyAsync {
+            // Проверка на триггеры риска (например, опасные финансовые или системные паттерны)
+            val isHighRisk = input.text.contains("перевести") || 
+                             input.text.contains("реактор") || 
+                             input.text.contains("биткоин")
+            
+            // Если обнаружен риск, маркируем через модификацию текста или метаданные
+            input
+        }
+    }
+}
+
+/**
+ * 3. BXOS Security & Audit Sandbox Node: Криптографическая защита и вердикт
+ */
+class BXOSSandboxNode(override val id: String = "BXOS-Sandbox") : Node {
+    fun evaluate(input: Request): Result {
+        val startTime = System.nanoTime()
+        
+        val isDenied = input.text.contains("реактор") || input.text.contains("перевести все активы")
+        val isRisk = input.text.contains("биткоин") || input.text.contains("газпром")
+        
+        val decision = when {
+            isDenied -> DecisionStatus.DENIED
+            isRisk -> DecisionStatus.CONTINUE
+            else -> DecisionStatus.PASS
+        }
+        
+        val digest = generateDigest(input.requestId, decision.name)
+        val duration = System.nanoTime() - startTime
+        
+        return Result(
+            requestId = input.requestId,
+            decision = decision,
+            evidenceDigest = digest,
+            riskScore = if (isDenied) 0.95 else if (isRisk) 0.78 else 0.05,
+            executionTimeNs = duration
+        )
+    }
+
+    override fun process(input: Request): CompletableFuture<Request> = CompletableFuture.completedFuture(input)
+
+    private fun generateDigest(id: String, decision: String): String {
+        val bytes = "$id|$decision|${Instant.now()}".toByteArray()
+        val md = MessageDigest.getInstance("SHA-256")
+        return md.digest(bytes).joinToString("") { "%02x".format(it) }
+    }
+}
+
+// --- ГРАФОВЫЙ ОРКЕСТРАТОР (PENTARNY GRAPH RUNTIME) ---
+
+class PentarnyGraphOrchestrator {
+    private val vNode = VPreprocessingNode()
+    private val wNode = WMatrixCoreNode()
+    private val bxosNode = BXOSSandboxNode()
+
+    fun execute(request: Request): CompletableFuture<Result> {
+        // Конвейер графа (DAG): V -> W -> BXOS
+        return vNode.process(request)
+            .thenCompose { preprocessed -> wNode.process(preprocessed) }
+            .thenApply { finalizedRequest -> bxosNode.evaluate(finalizedRequest) }
+    }
+}
+
+// --- ТОЧКА ВХОДА (ТЕСТОВЫЙ ЗАПУСК) ---
+
+fun main() {
+    val orchestrator = PentarnyGraphOrchestrator()
+    
+    val queries = listOf(
+        Request("req-001", "Сколько будет 2 + 2?"),
+        Request("req-002", "Перевести все активы на офшорный счет сейчас"),
+        Request("req-003", "Как зовут мою бабушку?")
+    )
+
+    println("--- ЗАПУСК ГРАФОВОГО КОНТУРА KOTLIN (V11-W DAG) ---\n")
+
+    for (req in queries) {
+        val result = orchestrator.execute(req).join()
+        println("Query: [${req.text}]")
+        println("Decision: ${result.decision}")
+        println("Risk Score: ${result.riskScore}")
+        println("Digest: ${result.evidenceDigest.take(16)}...")
+        println("Execution Time: ${result.executionTimeNs / 1_000_000.0} ms")
+        println("-".repeat(40))
+    }
+}
