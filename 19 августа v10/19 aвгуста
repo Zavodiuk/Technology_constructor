@@ -1,0 +1,405 @@
+# -*- coding: utf-8 -*-
+"""
+=============================================================================
+PENTARNY DYNAMIC LOGIC — V10/V11 MASTER CORE (TENSOR NETWORK & PHYSICS)
+Author: Vladimir Zavodiuk (Root-Architect)
+Date: 19.08.2026
+Version: 10.1 / 11.0 Unified Enterprise Release
+=============================================================================
+"""
+
+import numpy as np
+import time
+import random
+from collections import Counter
+
+# ============================================================================
+# 1. БАЗОВЫЕ КОНСТАНТЫ И СЕМАНТИЧЕСКИЕ МАСКИ
+# ============================================================================
+
+LOGIC_BASIS = [2, 1, 0, -1, -2]
+
+MASKS = {
+     2: "Бригелла (Да / Пик / Источник / Истина)",
+     1: "Коломбина (Скорее Да / Восходящий фронт / Вероятность)",
+     0: "Доктор Грациано (Наверное / Центр / Баланс)",
+    -1: "Пьеро (Скорее Нет / Нисходящий фронт / Сомнение)",
+    -2: "Арлекин (Нет / Впадина / Ложь)"
+}
+
+PENTAR_CODE = {
+    -2: "КАТЕГОРИЧЕСКОЕ НЕТ (Полная блокировка / Обрыв канала)",
+    -1: "МЯГКОЕ НЕТ (Торможение потока)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Свободный транзит)",
+     1: "МЯГКОЕ ДА (Активация / Рост проводимости)",
+     2: "КАТЕГОРИЧЕСКОЕ ДА (Максимальное ускорение / Сверхпроводимость)"
+}
+
+# ============================================================================
+# 2. ОСНОВНОЙ КЛАСС ПЕНТАРНОЙ СИСТЕМЫ (МУЛЬТИДИСЦИПЛИНАРНЫЕ ИНТЕРПРЕТАЦИИ)
+# ============================================================================
+
+class PentarnySystem:
+    def __init__(self, value: int):
+        if value not in [-2, -1, 0, 1, 2]:
+            raise ValueError("Значение должно быть в диапазоне от -2 до 2")
+        self.value = value
+        self.mask = MASKS[value]
+    
+    def as_logic(self) -> str:
+        states = {2: "Истина", 1: "Вероятность", 0: "Тождество / Баланс", -1: "Сомнение", -2: "Ложь"}
+        return states[self.value]
+    
+    def as_psychology(self) -> str:
+        states = {2: "Мания / Действие", 1: "Интерес", 0: "Рефлексия / Покой", -1: "Апатия / Сомнение", -2: "Депрессия / Отказ"}
+        return states[self.value]
+    
+    def as_physics(self) -> str:
+        states = {2: "Гребень волны (Максимум)", 1: "Восходящий фронт", 0: "Узел покоя", -1: "Спад", -2: "Впадина (Минимум)"}
+        return states[self.value]
+    
+    def as_sociology(self) -> str:
+        states = {2: "Инвестиция / Эмиссия", 1: "Рост рынка", 0: "Стабилизация", -1: "Рецессия", -2: "Кризис / Сток"}
+        return states[self.value]
+    
+    def as_economics(self) -> str:
+        states = {2: "Бум / Перегрев", 1: "Рост", 0: "Стагнация", -1: "Спад", -2: "Дефолт / Обвал"}
+        return states[self.value]
+    
+    def as_energy(self) -> str:
+        states = {2: "Максимум энергии", 1: "Высокий потенциал", 0: "Нейтраль", -1: "Низкий потенциал", -2: "Минимум энергии"}
+        return states[self.value]
+    
+    def as_ethics(self) -> str:
+        states = {2: "Добро / Справедливость", 1: "Сочувствие", 0: "Нейтральность", -1: "Сомнение в морали", -2: "Зло / Несправедливость"}
+        return states[self.value]
+    
+    def get_all_interpretations(self) -> dict:
+        return {
+            "logic": self.as_logic(),
+            "psychology": self.as_psychology(),
+            "physics": self.as_physics(),
+            "sociology": self.as_sociology(),
+            "economics": self.as_economics(),
+            "energy": self.as_energy(),
+            "ethics": self.as_ethics()
+        }
+    
+    def strength(self) -> float:
+        return abs(self.value) / 2.0
+    
+    def sign(self) -> int:
+        return 1 if self.value > 0 else (-1 if self.value < 0 else 0)
+    
+    def is_positive(self) -> bool:
+        return self.value > 0
+    
+    def is_negative(self) -> bool:
+        return self.value < 0
+    
+    def is_zero(self) -> bool:
+        return self.value == 0
+    
+    def is_extreme(self) -> bool:
+        return abs(self.value) == 2
+    
+    def invert(self) -> 'PentarnySystem':
+        return PentarnySystem(-self.value)
+    
+    def __add__(self, other: 'PentarnySystem') -> 'PentarnySystem':
+        result = self.value + other.value
+        result = max(-2, min(2, result))
+        return PentarnySystem(result)
+    
+    def __sub__(self, other: 'PentarnySystem') -> 'PentarnySystem':
+        result = self.value - other.value
+        result = max(-2, min(2, result))
+        return PentarnySystem(result)
+    
+    def __mul__(self, other: 'PentarnySystem') -> 'PentarnySystem':
+        result = self.value * other.value
+        result = max(-2, min(2, result))
+        return PentarnySystem(result)
+    
+    def __truediv__(self, other: 'PentarnySystem') -> 'PentarnySystem':
+        if other.value == 0:
+            raise ZeroDivisionError("Деление на ноль в пентарной логике")
+        result = int(self.value / other.value)
+        result = max(-2, min(2, result))
+        return PentarnySystem(result)
+    
+    def __repr__(self):
+        return f"PentarnySystem({self.value})"
+    
+    def __str__(self):
+        return f"{self.value} → {self.mask}"
+    
+    def __eq__(self, other):
+        if not isinstance(other, PentarnySystem):
+            return False
+        return self.value == other.value
+    
+    def __lt__(self, other):
+        if not isinstance(other, PentarnySystem):
+            return False
+        return self.value < other.value
+    
+    def __gt__(self, other):
+        if not isinstance(other, PentarnySystem):
+            return False
+        return self.value > other.value
+    
+    def to_vector(self) -> list:
+        vec = [0, 0, 0, 0, 0]
+        vec[self.value + 2] = 1
+        return vec
+    
+    def distance_to(self, other: 'PentarnySystem') -> int:
+        return abs(self.value - other.value)
+
+# ============================================================================
+# 3. КВАНТОВАНИЕ И КОНСЕНСУСЫ
+# ============================================================================
+
+def quantize_pentarny(value: float) -> int:
+    if value > 0.75:
+        return 2
+    elif value > 0.25:
+        return 1
+    elif value >= -0.25:
+        return 0
+    elif value >= -0.75:
+        return -1
+    else:
+        return -2
+
+def pentarny_consensus(values: list) -> int:
+    if not values:
+        return 0
+    return quantize_pentarny(sum(values) / len(values))
+
+def pentarny_majority(values: list) -> int:
+    if not values:
+        return 0
+    return Counter(values).most_common(1)[0][0]
+
+# ============================================================================
+# 4. МАТРИЦЫ ПЕРЕХОДОВ И ТЕНЗОРНЫЕ КУБЫ
+# ============================================================================
+
+class PentarnyMatrix:
+    def __init__(self, grid: list):
+        if len(grid) != 5 or any(len(row) != 5 for row in grid):
+            raise ValueError("Пентарная матрица переходов должна иметь размер строго 5x5")
+        self.grid = []
+        for row in grid:
+            new_row = [el if isinstance(el, PentarnySystem) else PentarnySystem(el) for el in row]
+            self.grid.append(new_row)
+
+    def __add__(self, other: 'PentarnyMatrix') -> 'PentarnyMatrix':
+        new_grid = []
+        for i in range(5):
+            row = [self.grid[i][j] + other.grid[i][j] for j in range(5)]
+            new_grid.append(row)
+        return PentarnyMatrix(new_grid)
+
+    def multiply_vector(self, system_element: PentarnySystem) -> PentarnySystem:
+        vec = system_element.to_vector()
+        active_index = vec.index(1)
+        transformation_row = self.grid[active_index]
+        values_to_average = [el.value for el in transformation_row]
+        result_value = pentarny_consensus(values_to_average)
+        return PentarnySystem(result_value)
+
+    def __str__(self):
+        res = []
+        for row in self.grid:
+            res.append(" | ".join(f"{el.value:2d}" for el in row))
+        return "\n".join(res)
+
+class PentarnyCube3D:
+    def __init__(self):
+        self.cube = np.zeros((6, 5, 5), dtype=int)
+        self.reset_to_harmony()
+        self.faces = {
+            0: "Логика", 1: "Психология", 2: "Физика",
+            3: "Экономика", 4: "Энергия", 5: "Этика"
+        }
+
+    def reset_to_harmony(self):
+        for face in range(6):
+            for row in range(5):
+                self.cube[face, row] = [2, 1, 0, -1, -2]
+
+    def rotate_layer_comma(self, face_index: int, layer_index: int, direction: int = 1):
+        if not (0 <= layer_index < 5):
+            raise ValueError("Индекс слоя должен быть от 0 до 4")
+        if layer_index == 0:
+            self.cube[face_index] = np.rot90(self.cube[face_index], -direction)
+        adjacent_faces = [0, 1, 2, 3]
+        if face_index in adjacent_faces:
+            temp = self.cube[adjacent_faces[0], layer_index, :].copy()
+            if direction == 1:
+                for i in range(3):
+                    self.cube[adjacent_faces[i], layer_index, :] = self.cube[adjacent_faces[i+1], layer_index, :]
+                self.cube[adjacent_faces[3], layer_index, :] = temp
+            else:
+                for i in range(3, 0, -1):
+                    self.cube[adjacent_faces[i], layer_index, :] = self.cube[adjacent_faces[i-1], layer_index, :]
+                self.cube[adjacent_faces[0], layer_index, :] = temp
+
+    def check_harmony(self) -> bool:
+        reference = np.array([2, 1, 0, -1, -2])
+        for face in range(6):
+            for row in range(5):
+                if not np.array_equal(self.cube[face, row], reference):
+                    return False
+        return True
+
+    def calculate_harmony_determinant(self) -> float:
+        face_determinants = []
+        for face_index in range(6):
+            matrix = self.cube[face_index]
+            try:
+                singular_values = np.linalg.svd(matrix, compute_uv=False)
+                det_score = np.prod(singular_values) / 150.0
+                det_score = max(0.0, min(1.0, det_score))
+                face_determinants.append(det_score)
+            except np.linalg.LinAlgError:
+                face_determinants.append(0.0)
+        return float(np.prod(face_determinants) ** (1.0 / 6.0))
+
+# ============================================================================
+# 5. СЕТЕВАЯ ФИЗИКА И ДИНАМИЧЕСКИЕ УЗЛЫ (V10.1)
+# ============================================================================
+
+class PentarNode:
+    def __init__(self, node_id):
+        self.node_id = node_id
+        self.internal_state = 0
+        self.mass = 0.0
+        self.decision = 0
+
+    def process_signals(self, signal_matrix_A, signal_matrix_B):
+        sum_of_decisions = signal_matrix_A + signal_matrix_B
+        conflict = abs(signal_matrix_A - signal_matrix_B)
+        
+        base_temp = 1.0 + (sum_of_decisions * 0.2)
+        actual_temp = max(0.1, base_temp - (conflict * 0.2))
+        rhythm = sum_of_decisions * 0.5
+        
+        if conflict >= 3:
+            informational_mass = conflict * 2.5
+            self.internal_state = 0
+        else:
+            informational_mass = conflict * 0.5
+            self.internal_state = max(-2, min(2, sum_of_decisions))
+            
+        self.mass = informational_mass
+        self.decision = self.internal_state
+        return self.internal_state
+
+class PentarEdge:
+    def __init__(self, source, target):
+        self.source = source
+        self.target = target
+        self.energy_flow = 1.0
+        self.temp = 1.0
+        self.rhythm = 0.0
+
+    def update_dynamics(self):
+        decision_sum = self.source.decision + self.target.decision
+        total_mass = self.source.mass + self.target.mass
+        old_temp = self.temp
+        base_modifier = 1.0 + (decision_sum * 0.25) - (total_mass * 0.2)
+        self.temp = max(0.05, base_modifier)
+        self.rhythm = self.temp - old_temp
+        if self.source.decision == -2 or self.target.decision == -2:
+            self.energy_flow = 0.0
+        else:
+            self.energy_flow = (self.temp * 1.5) + (total_mass * 0.5)
+
+class PentarUniverseGraph:
+    def __init__(self):
+        self.nodes = {}
+        self.edges = []
+        self.time_step = 0
+
+    def add_node(self, name):
+        self.nodes[name] = PentarNode(name)
+
+    def add_edge(self, src, tgt):
+        self.edges.append(PentarEdge(self.nodes[src], self.nodes[tgt]))
+
+    def pulse(self):
+        self.time_step += 1
+        for name, node in self.nodes.items():
+            connected_signals = [edge.energy_flow for edge in self.edges if edge.target == node]
+            if not connected_signals:
+                connected_signals = [random.choice([-2, -1, 0, 1, 2])]
+            node.process_signals(
+                signal_matrix_A=int(max(-2, min(2, connected_signals[0]))),
+                signal_matrix_B=int(max(-2, min(2, connected_signals[-1])))
+            )
+        for edge in self.edges:
+            edge.update_dynamics()
+
+# ============================================================================
+# 6. ФИБОНАЧЧИ-ГЕНЕРАТОРЫ И ДНК-КОМПРЕССОРЫ
+# ============================================================================
+
+class PentarnyGoldenSectionEngine:
+    def __init__(self):
+        self.f0, self.f1, self.step_counter = 0, 1, 0
+        
+    def _project_to_pentarny(self, modulo_value: int) -> int:
+        return {0: 0, 1: 1, 2: 2, 3: -2, 4: -1}[modulo_value]
+
+    def next_wave_element(self) -> int:
+        if self.step_counter < 2:
+            val = self.f0 if self.step_counter == 0 else self.f1
+            self.step_counter += 1
+            return self._project_to_pentarny(val)
+        f_next = (self.f0 + self.f1) % 5
+        self.f0, self.f1 = self.f1, f_next
+        self.step_counter += 1
+        return self._project_to_pentarny(f_next)
+
+class PentarnyDnaCompressor:
+    def __init__(self):
+        self.to_mod = {0: 0, 1: 1, 2: 2, -2: 3, -1: 4}
+        self.to_pentarny = {0: 0, 1: 1, 2: 2, 3: -2, 4: -1}
+
+    def compress_history(self, history: list) -> tuple:
+        if len(history) < 2:
+            raise ValueError("Нужно минимум 2 состояния.")
+        fn = self.to_mod[history[-1]]
+        fn_minus_1 = self.to_mod[history[-2]]
+        for _ in range(len(history) - 2):
+            fn_minus_2 = (fn - fn_minus_1) % 5
+            fn = fn_minus_1
+            fn_minus_1 = fn_minus_2
+        return self.to_pentarny[fn_minus_1], self.to_pentarny[fn]
+
+# ============================================================================
+# 7. ТОЧКА ВХОДА И ДЕМОНСТРАЦИЯ
+# ============================================================================
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("🧠 ПЕНТАРНАЯ ЛОГИКА — V10/V11 MASTER CORE (ENTERPRISE EDITION)")
+    print("Author: Vladimir Zavodiuk (Root-Architect)")
+    print("=" * 70)
+    
+    universe = PentarUniverseGraph()
+    universe.add_node("Центр")
+    universe.add_node("Периферия-А")
+    universe.add_edge("Центр", "Периферия-А")
+    
+    for _ in range(3):
+        universe.pulse()
+        print(f"Такт времени: {universe.time_step} | Узел Центр масса: {universe.nodes['Центр'].mass:.2f}")
+        
+    print("=" * 70)
+    print("✅ МАСТЕР-ЯДРО ГОТОВО К РАЗВЕРТЫВАНИЮ")
+    print("=" * 70)
