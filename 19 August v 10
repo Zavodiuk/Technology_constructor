@@ -1,0 +1,1003 @@
+# -*- coding: utf-8 -*-
+"""
+ПЕНТАРНАЯ ДИНАМИЧЕСКАЯ ЛОГИКА — V10.1 (СЕТЕВАЯ ФИЗИКА)
+Автор: Владимир Заводюк (Root-Architect)
+Дата: 13.08.2026
+Версия: 10.1
+"""
+
+import numpy as np
+import time
+import random
+from collections import Counter
+
+LOGIC_BASIS = [2, 1, 0, -1, -2]
+
+MASKS = {
+     2: "Бригелла (Да / Пик / Источник / Истина)",
+     1: "Коломбина (Скорее Да / Восходящий фронт / Вероятность)",
+     0: "Доктор Грациано (Наверное / Центр / Баланс)",
+    -1: "Пьеро (Скорее Нет / Нисходящий фронт / Сомнение)",
+    -2: "Арлекин (Нет / Впадина / Ложь)"
+}
+
+PENTAR_CODE = {
+    -2: "КАТЕГОРИЧЕСКОЕ НЕТ (Полная блокировка / Обрыв канала)",
+    -1: "МЯГКОЕ НЕТ (Торможение потока)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Свободный транзит)",
+     1: "МЯГКОЕ ДА (Активация / Рост проводимости)",
+     2: "КАТЕГОРИЧЕСКОЕ ДА (Максимальное ускорение / Сверхпроводимость)"
+}
+
+class PentarnySystem:
+    def __init__(self, value: int):
+        if value not in [-2, -1, 0, 1, 2]:
+            raise ValueError("Значение должно быть в диапазоне от -2 до 2")
+        self.value = value
+        self.mask = MASKS[value]
+    
+    def as_logic(self) -> str:
+        states = {2: "Истина", 1: "Вероятность", 0: "Тождество / Баланс", -1: "Сомнение", -2: "Ложь"}
+        return states[self.value]
+    
+    def as_psychology(self) -> str:
+        states = {2: "Мания / Действие", 1: "Интерес", 0: "Рефлексия / Покой", -1: "Апатия / Сомнение", -2: "Депрессия / Отказ"}
+        return states[self.value]
+    
+    def as_physics(self) -> str:
+        states = {2: "Гребень волны (Максимум)", 1: "Восходящий фронт", 0: "Узел покоя", -1: "Спад", -2: "Впадина (Минимум)"}
+        return states[self.value]
+    
+    def as_sociology(self) -> str:
+        states = {2: "Инвестиция / Эмиссия", 1: "Рост рынка", 0: "Стабилизация", -1: "Рецессия", -2: "Кризис / Сток"}
+        return states[self.value]
+    
+    def as_economics(self) -> str:
+        states = {2: "Бум / Перегрев", 1: "Рост", 0: "Стагнация", -1: "Спад", -2: "Дефолт / Обвал"}
+        return states[self.value]
+    
+    def as_energy(self) -> str:
+        states = {2: "Максимум энергии", 1: "Высокий потенциал", 0: "Нейтраль", -1: "Низкий потенциал", -2: "Минимум энергии"}
+        return states[self.value]
+    
+    def as_ethics(self) -> str:
+        states = {2: "Добро / Справедливость", 1: "Сочувствие", 0: "Нейтральность", -1: "Сомнение в морали", -2: "Зло / Несправедливость"}
+        return states[self.value]
+    
+    def get_all_interpretations(self) -> dict:
+        return {
+            "logic": self.as_logic(),
+            "psychology": self.as_psychology(),
+            "physics": self.as_physics(),
+            "sociology": self.as_sociology(),
+            "economics": self.as_economics(),
+            "energy": self.as_energy(),
+            "ethics": self.as_ethics()
+        }
+    
+    def strength(self) -> float:
+        return abs(self.value) / 2.0
+    
+    def sign(self) -> int:
+        return 1 if self.value > 0 else (-1 if self.value < 0 else 0)
+    
+    def is_positive(self) -> bool:
+        return self.value > 0
+    
+    def is_negative(self) -> bool:
+        return self.value < 0
+    
+    def is_zero(self) -> bool:
+        return self.value == 0
+    
+    def is_extreme(self) -> bool:
+        return abs(self.value) == 2
+    
+    def invert(self) -> 'PentarnySystem':
+        return PentarnySystem(-self.value)
+    
+    def __add__(self, other: 'PentarnySystem') -> 'PentarnySystem':
+        result = self.value + other.value
+        result = max(-2, min(2, result))
+        return PentarnySystem(result)
+    
+    def __sub__(self, other: 'PentarnySystem') -> 'PentarnySystem':
+        result = self.value - other.value
+        result = max(-2, min(2, result))
+        return PentarnySystem(result)
+    
+    def __mul__(self, other: 'PentarnySystem') -> 'PentarnySystem':
+        result = self.value * other.value
+        result = max(-2, min(2, result))
+        return PentarnySystem(result)
+    
+    def __truediv__(self, other: 'PentarnySystem') -> 'PentarnySystem':
+        if other.value == 0:
+            raise ZeroDivisionError("Деление на ноль в пентарной логике")
+        result = int(self.value / other.value)
+        result = max(-2, min(2, result))
+        return PentarnySystem(result)
+    
+    def __repr__(self):
+        return f"PentarnySystem({self.value})"
+    
+    def __str__(self):
+        return f"{self.value} → {self.mask}"
+    
+    def __eq__(self, other):
+        if not isinstance(other, PentarnySystem):
+            return False
+        return self.value == other.value
+    
+    def __lt__(self, other):
+        if not isinstance(other, PentarnySystem):
+            return False
+        return self.value < other.value
+    
+    def __gt__(self, other):
+        if not isinstance(other, PentarnySystem):
+            return False
+        return self.value > other.value
+    
+    def to_vector(self) -> list:
+        vec = [0, 0, 0, 0, 0]
+        vec[self.value + 2] = 1
+        return vec
+    
+    def distance_to(self, other: 'PentarnySystem') -> int:
+        return abs(self.value - other.value)
+
+def quantize_pentarny(value: float) -> int:
+    if value > 0.75:
+        return 2
+    elif value > 0.25:
+        return 1
+    elif value >= -0.25:
+        return 0
+    elif value >= -0.75:
+        return -1
+    else:
+        return -2
+
+def pentarny_consensus(values: list) -> int:
+    if not values:
+        return 0
+    return quantize_pentarny(sum(values) / len(values))
+
+def pentarny_majority(values: list) -> int:
+    if not values:
+        return 0
+    return Counter(values).most_common(1)[0][0]
+
+class PentarnyMatrix:
+    def __init__(self, grid: list):
+        if len(grid) != 5 or any(len(row) != 5 for row in grid):
+            raise ValueError("Пентарная матрица переходов должна иметь размер строго 5x5")
+        self.grid = []
+        for row in grid:
+            new_row = [el if isinstance(el, PentarnySystem) else PentarnySystem(el) for el in row]
+            self.grid.append(new_row)
+
+    def __add__(self, other: 'PentarnyMatrix') -> 'PentarnyMatrix':
+        new_grid = []
+        for i in range(5):
+            row = [self.grid[i][j] + other.grid[i][j] for j in range(5)]
+            new_grid.append(row)
+        return PentarnyMatrix(new_grid)
+
+    def multiply_vector(self, system_element: PentarnySystem) -> PentarnySystem:
+        vec = system_element.to_vector()
+        active_index = vec.index(1)
+        transformation_row = self.grid[active_index]
+        values_to_average = [el.value for el in transformation_row]
+        result_value = pentarny_consensus(values_to_average)
+        return PentarnySystem(result_value)
+
+    def __str__(self):
+        res = []
+        for row in self.grid:
+            res.append(" | ".join(f"{el.value:2d}" for el in row))
+        return "\n".join(res)
+
+class PentarnyCube3D:
+    def __init__(self):
+        self.cube = np.zeros((6, 5, 5), dtype=int)
+        self.reset_to_harmony()
+        self.faces = {
+            0: "Логика",
+            1: "Психология",
+            2: "Физика",
+            3: "Экономика",
+            4: "Энергия",
+            5: "Этика"
+        }
+
+    def reset_to_harmony(self):
+        for face in range(6):
+            for row in range(5):
+                self.cube[face, row] = [2, 1, 0, -1, -2]
+
+    def rotate_layer_comma(self, face_index: int, layer_index: int, direction: int = 1):
+        if not (0 <= layer_index < 5):
+            raise ValueError("Индекс слоя должен быть от 0 до 4")
+        if layer_index == 0:
+            self.cube[face_index] = np.rot90(self.cube[face_index], -direction)
+        adjacent_faces = [0, 1, 2, 3]
+        if face_index in adjacent_faces:
+            temp = self.cube[adjacent_faces[0], layer_index, :].copy()
+            if direction == 1:
+                for i in range(3):
+                    self.cube[adjacent_faces[i], layer_index, :] = self.cube[adjacent_faces[i+1], layer_index, :]
+                self.cube[adjacent_faces[3], layer_index, :] = temp
+            else:
+                for i in range(3, 0, -1):
+                    self.cube[adjacent_faces[i], layer_index, :] = self.cube[adjacent_faces[i-1], layer_index, :]
+                self.cube[adjacent_faces[0], layer_index, :] = temp
+
+    def check_harmony(self) -> bool:
+        reference = np.array([2, 1, 0, -1, -2])
+        for face in range(6):
+            for row in range(5):
+                if not np.array_equal(self.cube[face, row], reference):
+                    return False
+        return True
+
+    def calculate_harmony_determinant(self) -> float:
+        face_determinants = []
+        for face_index in range(6):
+            matrix = self.cube[face_index]
+            try:
+                singular_values = np.linalg.svd(matrix, compute_uv=False)
+                det_score = np.prod(singular_values) / 150.0
+                det_score = max(0.0, min(1.0, det_score))
+                face_determinants.append(det_score)
+            except np.linalg.LinAlgError:
+                face_determinants.append(0.0)
+        total_determinant = np.prod(face_determinants) ** (1.0 / 6.0)
+        return float(total_determinant)
+
+    def auto_assemble(self, max_steps: int = 100) -> bool:
+        for step in range(max_steps):
+            if self.check_harmony() or self.calculate_harmony_determinant() >= 0.999:
+                print(f"  [Автосборка]: Система приведена к гармонии за {step} шагов!")
+                self.reset_to_harmony()
+                return True
+            best_det = self.calculate_harmony_determinant()
+            best_move = None
+            for face in range(6):
+                for layer in range(5):
+                    for direction in [1, -1]:
+                        self.rotate_layer_comma(face, layer, direction)
+                        current_det = self.calculate_harmony_determinant()
+                        if current_det > best_det:
+                            best_det = current_det
+                            best_move = (face, layer, direction)
+                        self.rotate_layer_comma(face, layer, -direction)
+            if best_move:
+                self.rotate_layer_comma(best_move[0], best_move[1], best_move[2])
+            else:
+                random_face = np.random.randint(0, 6)
+                self.rotate_layer_comma(random_face, 0, 1)
+        return self.check_harmony()
+
+    def to_quantum_density_matrix(self, face_index: int) -> np.ndarray:
+        pentarny_matrix = self.cube[face_index]
+        normalized = pentarny_matrix / 2.0
+        quantum_matrix = (normalized + normalized.T) / 2.0 + 1j * (normalized - normalized.T) / 2.0
+        trace = np.trace(quantum_matrix)
+        if trace != 0:
+            quantum_matrix = quantum_matrix / trace
+        return quantum_matrix
+
+    def entangle_faces(self, face_a: int, face_b: int):
+        if face_a == face_b:
+            return
+        matrix_a = self.cube[face_a]
+        matrix_b = self.cube[face_b]
+        for i in range(5):
+            for j in range(5):
+                val_a = matrix_a[i, j]
+                val_b = matrix_b[i, j]
+                entangled_val = val_a * val_b
+                if entangled_val > 2:
+                    entangled_val = 2
+                elif entangled_val < -2:
+                    entangled_val = -2
+                self.cube[face_b, i, j] = entangled_val
+        print(f"  [Квантовый Мост]: Грани '{self.faces[face_a]}' и '{self.faces[face_b]}' теперь квантово запутаны.")
+
+class PentarnyGraphNetwork:
+    def __init__(self, num_nodes: int):
+        self.num_nodes = num_nodes
+        self.node_states = np.zeros(num_nodes, dtype=int)
+        self.adjacency_matrix = np.random.randint(-2, 3, size=(num_nodes, num_nodes))
+        np.fill_diagonal(self.adjacency_matrix, 0)
+
+    def set_node_state(self, node_id: int, value: int):
+        if value not in [-2, -1, 0, 1, 2]:
+            raise ValueError("Значение должно быть в базисе [-2, 2]")
+        self.node_states[node_id] = value
+
+    def pulse_propagation(self):
+        new_states = np.zeros(self.num_nodes, dtype=int)
+        for i in range(self.num_nodes):
+            incoming_signals = []
+            for j in range(self.num_nodes):
+                weight = self.adjacency_matrix[j, i]
+                if weight != 0:
+                    signal = self.node_states[j] * weight
+                    signal = max(-2, min(2, signal))
+                    incoming_signals.append(signal)
+            if incoming_signals:
+                avg_signal = sum(incoming_signals) / len(incoming_signals)
+                if avg_signal > 0.75:
+                    new_states[i] = 2
+                elif avg_signal > 0.25:
+                    new_states[i] = 1
+                elif avg_signal >= -0.25:
+                    new_states[i] = 0
+                elif avg_signal >= -0.75:
+                    new_states[i] = -1
+                else:
+                    new_states[i] = -2
+            else:
+                new_states[i] = 0
+        self.node_states = new_states
+
+    def get_network_state(self) -> list:
+        return self.node_states.tolist()
+
+class PentarNode:
+    def __init__(self, node_id):
+        self.node_id = node_id
+        self.internal_state = 0
+        self.mass = 0.0
+        self.decision = 0
+        self.history_temp = []
+
+    def process_signals(self, signal_matrix_A, signal_matrix_B):
+        print(f"\n--- [Узел {self.node_id}] Точка пересечения матриц ---")
+        print(f"Сигнал Матрицы А: {signal_matrix_A} ({PENTAR_CODE[signal_matrix_A]})")
+        print(f"Сигнал Матрицы Б: {signal_matrix_B} ({PENTAR_CODE[signal_matrix_B]})")
+        
+        sum_of_decisions = signal_matrix_A + signal_matrix_B
+        conflict = abs(signal_matrix_A - signal_matrix_B)
+        
+        base_temp = 1.0 + (sum_of_decisions * 0.2)
+        actual_temp = max(0.1, base_temp - (conflict * 0.2))
+        rhythm = sum_of_decisions * 0.5
+        
+        if conflict >= 3:
+            informational_mass = conflict * 2.5
+            self.internal_state = 0
+        else:
+            informational_mass = conflict * 0.5
+            self.internal_state = max(-2, min(2, sum_of_decisions))
+            
+        self.mass = informational_mass
+        self.decision = self.internal_state
+        
+        processing_delay = informational_mass * 0.1
+        time.sleep(processing_delay)
+        
+        print(f"-> Итоговое состояние узла: {self.internal_state} ({PENTAR_CODE[self.internal_state]})")
+        print(f"-> ТЕМП (1-я производная времени): {actual_temp:.2f} шагов/сек")
+        print(f"-> РИТМ (2-я производная времени): {rhythm:+.2f} ускорение")
+        print(f"-> ИНФОРМАЦИОННАЯ МАССА (Инерция узла): {informational_mass:.2f} у.е. (Задержка: {processing_delay:.2f} сек)")
+        return self.internal_state
+
+class PentarEdge:
+    def __init__(self, source, target):
+        self.source = source
+        self.target = target
+        self.energy_flow = 1.0
+        self.temp = 1.0
+        self.rhythm = 0.0
+
+    def update_dynamics(self):
+        decision_sum = self.source.decision + self.target.decision
+        total_mass = self.source.mass + self.target.mass
+        old_temp = self.temp
+        base_modifier = 1.0 + (decision_sum * 0.25) - (total_mass * 0.2)
+        self.temp = max(0.05, base_modifier)
+        self.rhythm = self.temp - old_temp
+        if self.source.decision == -2 or self.target.decision == -2:
+            self.energy_flow = 0.0
+        else:
+            self.energy_flow = (self.temp * 1.5) + (total_mass * 0.5)
+
+class PentarUniverseGraph:
+    def __init__(self):
+        self.nodes = {}
+        self.edges = []
+        self.time_step = 0
+
+    def add_node(self, name):
+        self.nodes[name] = PentarNode(name)
+
+    def add_edge(self, src, tgt):
+        self.edges.append(PentarEdge(self.nodes[src], self.nodes[tgt]))
+
+    def pulse(self):
+        self.time_step += 1
+        for name, node in self.nodes.items():
+            connected_signals = []
+            for edge in self.edges:
+                if edge.target == node:
+                    connected_signals.append(edge.energy_flow)
+                elif edge.source == node:
+                    connected_signals.append(edge.energy_flow * 0.5)
+            if not connected_signals:
+                connected_signals = [random.choice([-2, -1, 0, 1, 2])]
+            node.process_signals(
+                signal_matrix_A=connected_signals[0] if len(connected_signals) > 0 else 0,
+                signal_matrix_B=connected_signals[-1] if len(connected_signals) > 1 else 0
+            )
+        for edge in self.edges:
+            edge.update_dynamics()
+
+    def display_state(self):
+        print(f"\n================ [ ТАКТ ВРЕМЕНИ (Скаляр): {self.time_step} ] ================")
+        print("\n--- СОСТОЯНИЕ УЗЛОВ ---")
+        for name, node in self.nodes.items():
+            print(f"Узел [{name}]: Решение = {node.decision:+d} ({PENTAR_CODE[node.decision][:20]}...) | МАССА = {node.mass:.2f}")
+        print("\n--- ДИНАМИКА ПОТОКОВ В КАНАЛАХ ---")
+        for edge in self.edges:
+            print(f"Канал [{edge.source.node_id} -> {edge.target.node_id}]:")
+            print(f"  -> ТЕМП = {edge.temp:.2f} шагов/такт")
+            print(f"  -> РИТМ = {edge.rhythm:+.2f} изменение")
+            print(f"  -> ПОТОК ЭНЕРГИИ = {edge.energy_flow:.2f} у.е.")
+
+class PentarnyFibonacciGenerator:
+    def __init__(self):
+        self.wave_sequence = [0, 1, 1, 2, -2, 0, -2, -2, 1, -1, 0, -1, -1, -2, 2, 0, 2, 2, -1, 1]
+        self.current_index = 0
+
+    def next_step(self) -> int:
+        val = self.wave_sequence[self.current_index]
+        self.current_index = (self.current_index + 1) % 20
+        return val
+    
+    def reset(self):
+        self.current_index = 0
+
+class PentarnyFibonacciNetwork:
+    def __init__(self, num_nodes: int):
+        self.num_nodes = num_nodes
+        self.node_states = np.zeros(num_nodes, dtype=int)
+        self.base_topology = np.random.choice([-1, 0, 1], size=(num_nodes, num_nodes))
+        np.fill_diagonal(self.base_topology, 0)
+        self.fib_gen = PentarnyFibonacciGenerator()
+
+    def set_node_state(self, node_id: int, value: int):
+        if value not in [-2, -1, 0, 1, 2]:
+            raise ValueError("Значение вне базиса [-2, 2]")
+        self.node_states[node_id] = value
+
+    def pulse_propagation_fibonacci(self):
+        new_states = np.zeros(self.num_nodes, dtype=int)
+        fib_shift = self.fib_gen.next_step()
+        for i in range(self.num_nodes):
+            incoming_signals = []
+            for j in range(self.num_nodes):
+                base_weight = self.base_topology[j, i]
+                if base_weight != 0:
+                    modulated_weight = base_weight + fib_shift
+                    modulated_weight = max(-2, min(2, modulated_weight))
+                    signal = self.node_states[j] * modulated_weight
+                    signal = max(-2, min(2, signal))
+                    incoming_signals.append(signal)
+            if incoming_signals:
+                avg_signal = sum(incoming_signals) / len(incoming_signals)
+                if avg_signal > 0.75:
+                    new_states[i] = 2
+                elif avg_signal > 0.25:
+                    new_states[i] = 1
+                elif avg_signal >= -0.25:
+                    new_states[i] = 0
+                elif avg_signal >= -0.75:
+                    new_states[i] = -1
+                else:
+                    new_states[i] = -2
+            else:
+                new_states[i] = 0
+        self.node_states = new_states
+
+    def get_network_state(self) -> list:
+        return self.node_states.tolist()
+
+class PentarnyGoldenSectionEngine:
+    def __init__(self):
+        self.f0 = 0
+        self.f1 = 1
+        self.step_counter = 0
+        
+    def _project_to_pentarny(self, modulo_value: int) -> int:
+        projection = {0: 0, 1: 1, 2: 2, 3: -2, 4: -1}
+        return projection[modulo_value]
+
+    def next_wave_element(self) -> int:
+        if self.step_counter == 0:
+            self.step_counter += 1
+            return self._project_to_pentarny(self.f0)
+        elif self.step_counter == 1:
+            self.step_counter += 1
+            return self._project_to_pentarny(self.f1)
+        f_next = (self.f0 + self.f1) % 5
+        self.f0 = self.f1
+        self.f1 = f_next
+        self.step_counter += 1
+        return self._project_to_pentarny(f_next)
+    
+    def reset(self):
+        self.f0 = 0
+        self.f1 = 1
+        self.step_counter = 0
+
+class PentarnyCube3DFibonacci:
+    def __init__(self):
+        self.cube = np.zeros((6, 5, 5), dtype=int)
+        self.reset_to_harmony()
+        self.faces = {0: "Логика", 1: "Психология", 2: "Физика", 3: "Экономика", 4: "Энергия", 5: "Этика"}
+        self.fib_engine = PentarnyGoldenSectionEngine()
+
+    def reset_to_harmony(self):
+        for face in range(6):
+            for row in range(5):
+                self.cube[face, row] = [2, 1, 0, -1, -2]
+
+    def rotate_layer_comma(self, face_index: int, layer_index: int, direction: int = 1):
+        if not (0 <= layer_index < 5):
+            raise ValueError("Индекс слоя должен быть от 0 до 4")
+        if layer_index == 0:
+            self.cube[face_index] = np.rot90(self.cube[face_index], -direction)
+        adjacent_faces = [0, 1, 2, 3]
+        if face_index in adjacent_faces:
+            temp = self.cube[adjacent_faces[0], layer_index, :].copy()
+            if direction == 1:
+                for i in range(3):
+                    self.cube[adjacent_faces[i], layer_index, :] = self.cube[adjacent_faces[i+1], layer_index, :]
+                self.cube[adjacent_faces[3], layer_index, :] = temp
+            else:
+                for i in range(3, 0, -1):
+                    self.cube[adjacent_faces[i], layer_index, :] = self.cube[adjacent_faces[i-1], layer_index, :]
+                self.cube[adjacent_faces[0], layer_index, :] = temp
+
+    def check_harmony(self) -> bool:
+        reference = np.array([2, 1, 0, -1, -2])
+        for face in range(6):
+            for row in range(5):
+                if not np.array_equal(self.cube[face, row], reference):
+                    return False
+        return True
+
+    def calculate_harmony_determinant(self) -> float:
+        face_determinants = []
+        for face_index in range(6):
+            matrix = self.cube[face_index]
+            try:
+                singular_values = np.linalg.svd(matrix, compute_uv=False)
+                det_score = np.prod(singular_values) / 150.0
+                det_score = max(0.0, min(1.0, det_score))
+                face_determinants.append(det_score)
+            except np.linalg.LinAlgError:
+                face_determinants.append(0.0)
+        return float(np.prod(face_determinants) ** (1.0 / 6.0))
+
+    def evolve_by_fibonacci(self) -> tuple:
+        fib_val = self.fib_engine.next_wave_element()
+        layer_index = fib_val + 2
+        face_index = (self.fib_engine.step_counter - 1) % 6
+        direction = 1 if (self.fib_engine.step_counter % 2 == 0) else -1
+        self.rotate_layer_comma(face_index, layer_index, direction)
+        return face_index, layer_index, direction
+
+class PentarnyDnaCompressor:
+    def __init__(self):
+        self.to_mod = {0: 0, 1: 1, 2: 2, -2: 3, -1: 4}
+        self.to_pentarny = {0: 0, 1: 1, 2: 2, 3: -2, 4: -1}
+
+    def compress_history(self, history: list) -> tuple:
+        if len(history) < 2:
+            raise ValueError("Для формирования ДНК-кода нужно минимум 2 состояния.")
+        fn = self.to_mod[history[-1]]
+        fn_minus_1 = self.to_mod[history[-2]]
+        for _ in range(len(history) - 2):
+            fn_minus_2 = (fn - fn_minus_1) % 5
+            fn = fn_minus_1
+            fn_minus_1 = fn_minus_2
+        dna_f0 = self.to_pentarny[fn_minus_1]
+        dna_f1 = self.to_pentarny[fn]
+        return dna_f0, dna_f1
+
+    def decompress_dna(self, dna: tuple, length: int) -> list:
+        f0_mod = self.to_mod[dna[0]]
+        f1_mod = self.to_mod[dna[1]]
+        reconstructed_mod = [f0_mod, f1_mod]
+        for _ in range(length - 2):
+            f_next = (reconstructed_mod[-1] + reconstructed_mod[-2]) % 5
+            reconstructed_mod.append(f_next)
+        return [self.to_pentarny[x] for x in reconstructed_mod]
+
+class PentarnyEconomicCycle:
+    def __init__(self):
+        self.compressor = PentarnyDnaCompressor()
+        self.economic_states = {
+             2: "Бум / Перегрев рынка (Бригелла)",
+             1: "Устойчивый Рост (Коломбина)",
+             0: "Стагнация / Точка Баланса (Доктор Грациано)",
+            -1: "Рецессия / Спад (Пьеро)",
+            -2: "Дефолт / Системный Обвал (Арлекин)"
+        }
+
+    def analyze_market_trend(self, quarters_history: list) -> dict:
+        market_dna = self.compressor.compress_history(quarters_history)
+        future_mod = self.compressor.decompress_dna(market_dna, len(quarters_history) + 8)
+        forecast_horizon = future_mod[len(quarters_history):]
+        default_quarters = [idx + 1 for idx, val in enumerate(forecast_horizon) if val == -2]
+        boom_quarters = [idx + 1 for idx, val in enumerate(forecast_horizon) if val == 2]
+        return {
+            "market_dna": market_dna,
+            "forecast_vector": forecast_horizon,
+            "quarters_to_default": default_quarters,
+            "quarters_to_boom": boom_quarters
+        }
+
+class PentarnyProjectiveGeometry:
+    def __init__(self):
+        self.state_to_angle = {
+             2: np.pi / 2,
+             1: np.pi / 4,
+             0: 0.0,
+            -1: -np.pi / 4,
+            -2: -np.pi / 2
+        }
+        
+    def tangent_distance(self, state: int) -> float:
+        angle = self.state_to_angle[state]
+        if abs(state) == 2:
+            return np.sign(state) * 999.0 
+        return float(np.tan(angle))
+
+    def arctan_involution(self, distance: float) -> int:
+        raw_angle = np.arctan(distance)
+        if raw_angle > np.pi / 3:
+            return 2
+        elif raw_angle > np.pi / 8:
+            return 1
+        elif raw_angle >= -np.pi / 8:
+            return 0
+        elif raw_angle >= -np.pi / 3:
+            return -1
+        else:
+            return -2
+
+class PentarnyTrigonometricGraph:
+    def __init__(self, num_nodes: int):
+        self.num_nodes = num_nodes
+        self.geometry = PentarnyProjectiveGeometry()
+        self.node_phases = np.zeros(num_nodes)
+        self.distance_matrix = np.zeros((num_nodes, num_nodes))
+
+    def set_node_trig_state(self, node_id: int, pentarny_state: int):
+        self.node_phases[node_id] = self.geometry.state_to_angle[pentarny_state]
+
+    def calculate_kirchhoff_flow(self):
+        simulated_states = np.zeros(self.num_nodes, dtype=int)
+        for i in range(self.num_nodes):
+            total_pressure = 0.0
+            incoming_count = 0
+            for j in range(self.num_nodes):
+                if i != j:
+                    phase_delta = self.node_phases[j] - self.node_phases[i]
+                    if abs(phase_delta) >= np.pi / 2:
+                        spatial_distance = np.sign(phase_delta) * 5.0
+                    else:
+                        spatial_distance = np.tan(phase_delta)
+                    total_pressure += spatial_distance
+                    incoming_count += 1
+            if incoming_count > 0:
+                avg_pressure = total_pressure / incoming_count
+                simulated_states[i] = self.geometry.arctan_involution(avg_pressure)
+        return simulated_states.tolist()
+
+def performance_analysis():
+    float32_bits = 32
+    bfloat16_bits = 16
+    v10_state_bits = 3
+    v11_state_bits = 4
+    gain_v10_vs_32 = float32_bits / v10_state_bits
+    gain_v11_vs_32 = float32_bits / v11_state_bits
+    gain_v10_vs_16 = bfloat16_bits / v10_state_bits
+    print(f"Выигрыш V10 по сравнению с Float32: {gain_v10_vs_32:.2f}x")
+    print(f"Выигрыш V11 по сравнению с Float32: {gain_v11_vs_32:.2f}x")
+    return gain_v10_vs_32, gain_v11_vs_32
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("🧠 ПЕНТАРНАЯ ЛОГИКА — V10.1 (СЕТЕВАЯ ФИЗИКА)")
+    print("=" * 70)
+    
+    print("\n[1. ТЕСТ PENTAR NODE]")
+    node = PentarNode("Альфа")
+    node.process_signals(1, 1)
+    node.process_signals(2, 1)
+    node.process_signals(2, -2)
+    
+    print("\n[2. ТЕСТ PENTAR UNIVERSE GRAPH]")
+    universe = PentarUniverseGraph()
+    universe.add_node("Центр")
+    universe.add_node("Периферия-А")
+    universe.add_node("Периферия-Б")
+    universe.add_edge("Центр", "Периферия-А")
+    universe.add_edge("Периферия-А", "Периферия-Б")
+    universe.add_edge("Периферия-Б", "Центр")
+    
+    for _ in range(3):
+        universe.pulse()
+        universe.display_state()
+        time.sleep(0.5)
+    
+    print("\n[3. АНАЛИЗ ПРОИЗВОДИТЕЛЬНОСТИ]")
+    performance_analysis()
+    
+    print("\n" + "=" * 70)
+    print("✅ ПЕНТАРНАЯ ЭКОСИСТЕМА V10.1 ЗАВЕРШЕНА")
+    print("=" * 70)0
+# -*- coding: utf-8 -*-
+"""
+ПЕНТАРНАЯ ДИНАМИЧЕСКАЯ ЛОГИКА — V11 (ТЕНЗОРНОЕ ПОЛЕ)
+Автор: Владимир Заводюк (Root-Architect)
+Дата: 13.08.2026
+Версия: 11.0
+"""
+
+import numpy as np
+
+class PentarnyTensorField:
+    def __init__(self, dimensions: tuple):
+        self.dimensions = dimensions
+        self.field = np.zeros(dimensions, dtype=int)
+        self.attractor_matrix = np.zeros((5, 5), dtype=int)
+        print(f"📡 [Ядро V11]: Тензорное поле инициализировано с размерностью {self.dimensions}")
+
+    def inject_quantum_impulse(self, coordinates: tuple, value: int):
+        if value not in [-2, -1, 0, 1, 2]:
+            raise ValueError("Значение должно строго лежать в пентарном базисе V11")
+        self.field[coordinates] = value
+
+    def calculate_field_entropy(self) -> float:
+        total_elements = self.field.size
+        extreme_states = np.sum(np.abs(self.field) == 2)
+        return float(extreme_states / total_elements)
+
+class PentarnyTensorEvolution:
+    def __init__(self, tensor_field: PentarnyTensorField):
+        self.field = tensor_field
+        self.step_counter = 0
+
+    def propagate_wave(self, origin: tuple, radius: int = 1):
+        dims = len(origin)
+        self.step_counter += 1
+        ranges = [range(max(0, origin[d] - radius), 
+                       min(self.field.dimensions[d], origin[d] + radius + 1)) 
+                  for d in range(dims)]
+        from itertools import product
+        for coords in product(*ranges):
+            dist = sum(abs(coords[d] - origin[d]) for d in range(dims))
+            if 0 < dist <= radius:
+                impulse_value = self.field.field[origin] // (dist + 1)
+                if impulse_value != 0:
+                    current = self.field.field[coords]
+                    new_val = current + impulse_value
+                    new_val = max(-2, min(2, new_val))
+                    self.field.field[coords] = new_val
+
+    def get_field_state(self) -> np.ndarray:
+        return self.field.field
+
+    def calculate_field_gradient(self) -> np.ndarray:
+        return np.gradient(self.field.field)
+
+    def calculate_field_divergence(self) -> float:
+        gradient = self.calculate_field_gradient()
+        divergence = np.sum([np.sum(np.abs(g)) for g in gradient])
+        return float(divergence)
+
+def performance_analysis_v11():
+    float32_bits = 32
+    v11_state_bits = 4
+    gain = float32_bits / v11_state_bits
+    print(f"Выигрыш V11 по сравнению с Float32: {gain:.2f}x")
+    return gain
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("🧠 ПЕНТАРНАЯ ЛОГИКА — V11 (ТЕНЗОРНОЕ ПОЛЕ)")
+    print("=" * 70)
+    v11_field = PentarnyTensorField((3, 5, 5, 5))
+    evolution = PentarnyTensorEvolution(v11_field)
+    v11_field.inject_quantum_impulse((1, 2, 2, 2), 2)
+    print(f"\nНачальная энтропия поля: {v11_field.calculate_field_entropy():.4f}")
+    print("\n[Распространение волны V11]")
+    for step in range(3):
+        evolution.propagate_wave((1, 2, 2, 2), radius=step+1)
+        print(f"  Шаг {step+1} | Энтропия: {v11_field.calculate_field_entropy():.4f} | Дивергенция: {evolution.calculate_field_divergence():.2f}")
+    print("\n[Анализ производительности]")
+    performance_analysis_v11()
+    print("\n" + "=" * 70)
+    print("✅ V11 УСПЕШНО ЗАВЕРШЕНА")
+    print("=" * 70)
+package com.rootarchitect.pentarny
+
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import java.util.Random
+
+enum class PentarState(val value: Int, val description: String) {
+    HARLEKIN(-2, "КАТЕГОРИЧЕСКОЕ НЕТ (Полная блокировка / Обрыв канала)"),
+    PIERO(-1, "МЯГКОЕ НЕТ (Торможение потока)"),
+    GRACIANO(0, "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Свободный транзит)"),
+    COLOMBINA(1, "МЯГКОЕ ДА (Активация / Рост проводимости)"),
+    BRIGELLA(2, "КАТЕГОРИЧЕСКОЕ ДА (Максимальное ускорение / Сверхпроводимость)");
+
+    companion object {
+        fun from(v: Int): PentarState = entries.firstOrNull { it.value == v } ?: GRACIANO
+        fun quantize(value: Float): PentarState {
+            return when {
+                value > 0.75f -> BRIGELLA
+                value > 0.25f -> COLOMBINA
+                value >= -0.25f -> GRACIANO
+                value >= -0.75f -> PIERO
+                else -> HARLEKIN
+            }
+        }
+    }
+}
+
+class PentarNode(val nodeId: String) {
+    var internalState: PentarState = PentarState.GRACIANO
+        private set
+    var mass: Float = 0.0f
+        private set
+    var temp: Float = 1.0f
+        private set
+    var rhythm: Float = 0.0f
+        private set
+    var decision: PentarState = PentarState.GRACIANO
+        private set
+
+    fun processSignals(signalA: PentarState, signalB: PentarState): PentarState {
+        val sumVal = signalA.value + signalB.value
+        val conflict = abs(signalA.value - signalB.value)
+
+        val baseTemp = 1.0f + (sumVal * 0.2f)
+        temp = max(0.1f, baseTemp - (conflict * 0.2f))
+        rhythm = sumVal * 0.5f
+
+        val informationalMass = if (conflict >= 3) {
+            conflict * 2.5f
+        } else {
+            conflict * 0.5f
+        }
+
+        mass = informationalMass
+
+        val resolvedValue = if (conflict >= 3) {
+            0
+        } else {
+            max(-2, min(2, sumVal))
+        }
+
+        internalState = PentarState.from(resolvedValue)
+        decision = internalState
+
+        return internalState
+    }
+}
+
+class PentarEdge(val source: PentarNode, val target: PentarNode) {
+    var energyFlow: Float = 1.0f
+        private set
+    var temp: Float = 1.0f
+        private set
+    var rhythm: Float = 0.0f
+        private set
+
+    fun updateDynamics() {
+        val decisionSum = source.decision.value + target.decision.value
+        val totalMass = source.mass + target.mass
+        val oldTemp = temp
+        
+        val baseModifier = 1.0f + (decisionSum * 0.25f) - (totalMass * 0.2f)
+        temp = max(0.05f, baseModifier)
+        rhythm = temp - oldTemp
+
+        energyFlow = if (source.decision == PentarState.HARLEKIN || target.decision == PentarState.HARLEKIN) {
+            0.0f
+        } else {
+            (temp * 1.5f) + (totalMass * 0.5f)
+        }
+    }
+}
+
+class PentarUniverseGraph {
+    private val nodes = mutableMapOf<String, PentarNode>()
+    private val edges = mutableListOf<PentarEdge>()
+    var timeStep: Int = 0
+        private set
+
+    fun addNode(name: String) {
+        nodes[name] = PentarNode(name)
+    }
+
+    fun addEdge(srcName: String, tgtName: String) {
+        val src = nodes[srcName] ?: throw IllegalArgumentException("Узел $srcName не найден")
+        val tgt = nodes[tgtName] ?: throw IllegalArgumentException("Узел $tgtName не найден")
+        edges.add(PentarEdge(src, tgt))
+    }
+
+    fun pulse() {
+        timeStep++
+        val random = Random()
+        val statesList = PentarState.entries.toTypedArray()
+
+        for ((name, node) in nodes) {
+            val connectedSignals = mutableListOf<PentarState>()
+            for (edge in edges) {
+                if (edge.target == node) {
+                    connectedSignals.add(node.internalState)
+                }
+            }
+
+            val sigA = if (connectedSignals.isNotEmpty()) connectedSignals[0] else statesList[random.nextInt(statesList.size)]
+            val sigB = if (connectedSignals.size > 1) connectedSignals[1] else sigA
+
+            node.processSignals(sigA, sigB)
+        }
+
+        for (edge in edges) {
+            edge.updateDynamics()
+        }
+    }
+
+    fun displayState() {
+        println("\n================ [ ТАКТ ВРЕМЕНИ: $timeStep ] ================")
+        println("--- СОСТОЯНИЕ УЗЛОВ ---")
+        for ((name, node) in nodes) {
+            println("Узел [$name]: Решение = ${node.decision.value:+d} (${node.decision.name}) | МАССА = ${node.mass}")
+        }
+        println("--- ДИНАМИКА ПОТОКОВ ---")
+        for (edge in edges) {
+            println("Канал [${edge.source.nodeId} -> ${edge.target.nodeId}]: ТЕМП = ${edge.temp}, ПОТОК = ${edge.energyFlow}")
+        }
+    }
+}
+
+fun main() {
+    println("======================================================================")
+    println("🧠 ПЕНТАРНАЯ ЛОГИКА — V10/V11 (KOTLIN GRAPH ENGINE)")
+    println("======================================================================")
+
+    val universe = PentarUniverseGraph()
+    universe.addNode("Центр")
+    universe.addNode("Периферия-А")
+    universe.addNode("Периферия-Б")
+
+    universe.addEdge("Центр", "Периферия-А")
+    universe.addEdge("Периферия-А", "Периферия-Б")
+    universe.addEdge("Периферия-Б", "Центр")
+
+    for (step in 1..3) {
+        universe.pulse()
+        universe.displayState()
+        Thread.sleep(300)
+    }
+
+    println("\n======================================================================")
+    println("✅ KOTLIN-ЯДРО V10/V11 УСПЕШНО ИНИЦИАЛИЗИРОВАНО")
+    println("======================================================================")
+}
