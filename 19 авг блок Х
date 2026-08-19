@@ -1,0 +1,921 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Unified Block X: Compress That Match + Block X Full Version.
+
+Содержит:
+- гиперболическую геометрию Пуанкаре;
+- граф решений и двойной Rashomon-анализ;
+- bounded exponential z_match;
+- LearningGuard и базовый цикл Compress That Match;
+- единый демонстрационный запуск.
+"""
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+block_x_v6.3_full_with_graphs.py — ПОЛНАЯ ВЕРСИЯ С ГРАФАМИ И ЛОБАЧЕВСКИМ
+================================================================================
+
+Этот файл объединяет:
+
+    1. Полный Block X v6.3 (все компоненты)
+    2. Гиперболическую геометрию Лобачевского
+    3. Графы как пространство решений
+    4. Двойной Rashomon (вход/выход)
+    5. Эффективность (value/cost)
+
+ГИПЕРБОЛИЧЕСКОЕ ПРОСТРАНСТВО:
+    - Расстояния растут экспоненциально.
+    - Графы естественно укладываются в гиперболический шар.
+    - Антагонизм измеряется гиперболическим расстоянием.
+    - Триты интерпретируются как координаты в гиперболическом пространстве.
+
+АВТОР: Владимир Заводюк
+ЛИЦЕНЗИЯ: MIT
+ВЕРСИЯ: 6.3.2 (полная с графами)
+================================================================================
+"""
+
+import math
+import time
+from statistics import median
+from typing import List, Tuple, Dict, Optional, Any
+from dataclasses import dataclass, field
+from enum import Enum
+
+# ============================================================================
+# БАЗОВОЕ ЯДРО BLOCK X
+# ============================================================================
+
+def quantize(value: float, low: float = 0.3, high: float = 0.7) -> int:
+    if value >= high: return 1
+    if value <= low: return -1
+    return 0
+
+def normalize_sign(x: int) -> int:
+    if x > 0: return 1
+    if x < 0: return -1
+    return 0
+
+def ternary_fold(vector: Tuple[int, ...]) -> int:
+    return normalize_sign(sum(vector))
+
+def ternary_diff(vec_a: Tuple[int, ...], vec_b: Tuple[int, ...]) -> Tuple[int, ...]:
+    if len(vec_a) != len(vec_b):
+        raise ValueError(f"Размерности не совпадают: {len(vec_a)} != {len(vec_b)}")
+    return tuple(a - b for a, b in zip(vec_a, vec_b))
+
+# ============================================================================
+# ГИПЕРБОЛИЧЕСКАЯ ЛОГИКА (ЛОБАЧЕВСКИЙ)
+# ============================================================================
+
+def _validate_radius(radius: float) -> float:
+    if not math.isfinite(radius) or radius <= 0:
+        raise ValueError("radius должен быть конечным положительным числом")
+    return float(radius)
+
+
+def _project_inside_ball(vector: Tuple[float, ...], radius: float, epsilon: float = 1e-9) -> Tuple[float, ...]:
+    radius = _validate_radius(radius)
+    if not 0 < epsilon < 1:
+        raise ValueError("epsilon должен находиться в интервале (0, 1)")
+    point = tuple(float(v) for v in vector)
+    if not all(math.isfinite(v) for v in point):
+        raise ValueError("Координаты должны быть конечными числами")
+    norm = math.sqrt(math.fsum(v * v for v in point))
+    limit = radius * (1.0 - epsilon)
+    if norm == 0.0 or norm < limit:
+        return point
+    return tuple(v * limit / norm for v in point)
+
+
+def quantize_hyperbolic(value: float, radius: float = 1.0) -> int:
+    radius = _validate_radius(radius)
+    if not math.isfinite(value):
+        raise ValueError("value должен быть конечным числом")
+    value = max(-0.999999, min(0.999999, float(value)))
+    return quantize(math.atanh(value))
+
+
+def hyperbolic_distance(vec_a: Tuple[float, ...], vec_b: Tuple[float, ...], radius: float = 1.0) -> float:
+    radius = _validate_radius(radius)
+    if len(vec_a) != len(vec_b):
+        raise ValueError("Векторы должны иметь одинаковую размерность")
+    a = _project_inside_ball(vec_a, radius)
+    b = _project_inside_ball(vec_b, radius)
+    a_norm = tuple(v / radius for v in a)
+    b_norm = tuple(v / radius for v in b)
+    norm_a_sq = math.fsum(v * v for v in a_norm)
+    norm_b_sq = math.fsum(v * v for v in b_norm)
+    denominator = (1.0 - norm_a_sq) * (1.0 - norm_b_sq)
+    squared_difference = math.fsum((x - y) ** 2 for x, y in zip(a_norm, b_norm))
+    argument = max(1.0, 1.0 + 2.0 * squared_difference / denominator)
+    return radius * math.acosh(argument)
+
+
+def hyperbolic_vector(metrics: List[float], radius: float = 1.0) -> Tuple[float, ...]:
+    radius = _validate_radius(radius)
+    trits = [quantize(float(metric)) for metric in metrics]
+    norm = math.sqrt(sum(trit ** 2 for trit in trits))
+    if norm >= radius and norm > 0:
+        scale = radius * (1.0 - 1e-9) / norm
+        trits = [trit * scale for trit in trits]
+    return tuple(trits)
+
+def z_match_from_distance(distance: float, scale: float) -> float:
+    """Преобразует гиперболическое расстояние в bounded similarity [0, 1]."""
+    if not math.isfinite(distance):
+        return 0.0
+    if not math.isfinite(scale) or scale <= 0:
+        raise ValueError("scale должен быть конечным положительным числом")
+    return math.exp(-max(0.0, distance) / scale)
+
+
+# ============================================================================
+# ГИПЕРБОЛИЧЕСКИЙ ГРАФ
+# ============================================================================
+
+class HyperbolicGraph:
+    """
+    Граф с узлами в гиперболическом пространстве.
+    """
+    
+    def __init__(self, radius: float = 1.0):
+        self.nodes: Dict[int, Tuple[float, ...]] = {}
+        self.edges: List[Tuple[int, int, float]] = []
+        self.radius = radius
+        self.node_labels: Dict[int, str] = {}
+    
+    def add_node(self, node_id: int, coordinates: List[float], label: str = ""):
+        """Добавляет узел с координатами и опциональной меткой."""
+        norm = math.sqrt(sum(c**2 for c in coordinates))
+        if norm >= self.radius and norm > 0:
+            coordinates = [c * (self.radius * (1.0 - 1e-9)) / norm for c in coordinates]
+        self.nodes[node_id] = tuple(coordinates)
+        self.node_labels[node_id] = label or f"Узел {node_id}"
+    
+    def add_edge(self, id1: int, id2: int, weight: float = 1.0):
+        """Добавляет ребро с весом."""
+        if id1 in self.nodes and id2 in self.nodes:
+            self.edges.append((id1, id2, weight))
+    
+    def get_distance(self, id1: int, id2: int) -> float:
+        """Расстояние между двумя узлами."""
+        if id1 not in self.nodes or id2 not in self.nodes:
+            return float('inf')
+        return hyperbolic_distance(self.nodes[id1], self.nodes[id2], self.radius)
+    
+    def find_conflicts(self, threshold: float = 1.5) -> List[Tuple[int, int, float]]:
+        """Находит конфликтные пары (расстояние > threshold)."""
+        conflicts = []
+        for id1, id2, weight in self.edges:
+            dist = self.get_distance(id1, id2)
+            if dist > threshold:
+                conflicts.append((id1, id2, dist))
+        return conflicts
+    
+    def nearest_nodes(self, vector: Tuple[float, ...], n: int = 3) -> List[Tuple[int, float, str]]:
+        """Находит n ближайших узлов к вектору с метками."""
+        distances = []
+        for node_id, coords in self.nodes.items():
+            dist = hyperbolic_distance(vector, coords, self.radius)
+            distances.append((node_id, dist, self.node_labels.get(node_id, f"Узел {node_id}")))
+        distances.sort(key=lambda x: x[1])
+        return distances[:n]
+    
+    def get_graph_stats(self) -> Dict:
+        """Возвращает статистику графа."""
+        conflicts = self.find_conflicts()
+        distances = []
+        for id1, id2, weight in self.edges:
+            distances.append(self.get_distance(id1, id2))
+        return {
+            'nodes': len(self.nodes),
+            'edges': len(self.edges),
+            'conflicts': len(conflicts),
+            'avg_distance': sum(distances) / len(distances) if distances else 0,
+            'max_distance': max(distances) if distances else 0,
+            'min_distance': min(distances) if distances else 0
+        }
+
+# ============================================================================
+# ДЕТЕКЦИЯ КОНФЛИКТОВ
+# ============================================================================
+
+def detect_conflicts(text: str) -> Dict:
+    lower = text.lower()
+    patterns = [
+        ['дешёвый', 'флагман'],
+        ['дешёвый', 'лучший'],
+        ['быстрый', 'дешёвый'],
+        ['новый', 'дешёвый'],
+        ['мало', 'много'],
+        ['дешевле', 'дороже'],
+        ['минимум', 'максимум'],
+        ['хороший', 'дешёвый'],
+    ]
+    for a, b in patterns:
+        if a in lower and b in lower:
+            return {'conflict': True, 'a': a, 'b': b}
+    return {'conflict': False}
+
+# ============================================================================
+# RASHOMON (УНИВЕРСАЛЬНЫЙ)
+# ============================================================================
+
+def rashomon_analyze(
+    interpretations: Dict[str, float],
+    margin_threshold: float = 0.15,
+    min_score: float = 0.3
+) -> Dict:
+    if not interpretations:
+        return {'state': -1, 'top': None, 'margin': 0, 'reason': 'Нет интерпретаций'}
+
+    sorted_items = sorted(interpretations.items(), key=lambda x: x[1], reverse=True)
+    top_label, top_score = sorted_items[0]
+
+    if len(sorted_items) == 1:
+        margin = top_score
+    else:
+        margin = top_score - sorted_items[1][1]
+
+    if top_score < min_score:
+        state = -1
+        reason = f"Лучшая оценка слишком низкая: {top_score:.2f}"
+    elif margin >= margin_threshold:
+        state = 1
+        reason = f"Устойчивое ядро: отрыв {margin:.2f}"
+    else:
+        state = 0
+        reason = f"Неопределённость: отрыв {margin:.2f}"
+
+    return {
+        'state': state,
+        'top': top_label,
+        'margin': margin,
+        'top_score': top_score,
+        'reason': reason,
+        'all_scores': dict(sorted_items)
+    }
+
+# ============================================================================
+# МАТРИЧНЫЙ АНАЛИЗ СОГЛАСИЯ
+# ============================================================================
+
+def candidate_agreement_matrix(vectors: List[Tuple[int, ...]], names: List[str]) -> Dict:
+    pairs = []
+    for i in range(len(vectors)):
+        for j in range(i + 1, len(vectors)):
+            diff = ternary_diff(vectors[i], vectors[j])
+            conflict_axes = [idx for idx, d in enumerate(diff) if abs(d) >= 2]
+            pairs.append({
+                'pair': (names[i], names[j]),
+                'diff': diff,
+                'conflict_axes': conflict_axes,
+                'disagreement': bool(conflict_axes)
+            })
+    return {'pairs': pairs, 'has_disagreement': any(p['disagreement'] for p in pairs)}
+
+# ============================================================================
+# ГЕНЕРАЦИЯ КАНДИДАТОВ С ГРАФОМ
+# ============================================================================
+
+def generate_candidates_with_graph(query: str, graph: HyperbolicGraph) -> Dict[str, Dict]:
+    """Генерирует кандидатов на основе гиперболического графа."""
+    lower = query.lower()
+    candidates = {}
+
+    # Преобразуем запрос в гиперболический вектор
+    query_metrics = [
+        0.7 if any(w in lower for w in ['телефон', 'смартфон', 'ноутбук', 'компьютер']) else 0.3,
+        0.7 if any(w in lower for w in ['камера', 'цена', 'память', 'скорость']) else 0.3,
+        0.7 if any(w in lower for w in ['до', 'бюджет', 'хочу', 'нужен']) else 0.3
+    ]
+    query_vec = hyperbolic_vector(query_metrics, graph.radius)
+
+    # Находим ближайшие узлы в графе
+    nearest = graph.nearest_nodes(query_vec, 3)
+    all_distances = [
+        hyperbolic_distance(query_vec, coords, graph.radius)
+        for coords in graph.nodes.values()
+    ]
+    finite_distances = [distance for distance in all_distances if math.isfinite(distance)]
+    distance_scale = median(finite_distances) if finite_distances else graph.radius
+    distance_scale = max(distance_scale, graph.radius)
+
+    for node_id, dist, label in nearest:
+        # Экспоненциальная similarity сохраняет диапазон [0, 1] и
+        # использует характерный масштаб расстояний текущего графа.
+        z_match = z_match_from_distance(dist, distance_scale)
+        candidates[label] = {
+            'z_match': z_match,
+            'efficiency': 0.7 + 0.2 * z_match,
+            'reliability': 0.8,
+            'tempo': 0.6,
+            'strategic': 0.7,
+            'consensus_opinions': [z_match, z_match * 0.9, z_match * 0.95],
+            'graph_node': node_id,
+            'graph_distance': dist
+        }
+
+    # Если кандидатов нет, добавляем общий ответ
+    if not candidates:
+        candidates['Общий ответ'] = {
+            'z_match': 0.5,
+            'efficiency': 0.5,
+            'reliability': 0.6,
+            'tempo': 0.5,
+            'strategic': 0.5,
+            'consensus_opinions': [0.5, 0.55, 0.45],
+            'graph_node': None,
+            'graph_distance': float('inf')
+        }
+
+    return candidates
+
+# ============================================================================
+# ПОЛНЫЙ ЦИКЛ BLOCK X С ГРАФАМИ И ЛОБАЧЕВСКИМ
+# ============================================================================
+
+class DecisionMode(Enum):
+    DIRECT = "Direct Answer Mode"
+    CLARIFICATION = "Clarification Mode"
+    PROTECTION = "Protection Mode"
+
+@dataclass
+class FullBlockXWithGraphResult:
+    """Результат полного цикла Block X с графами."""
+    query: str
+    graph_stats: Dict
+    l3_in: int
+    l3_in_reason: str
+    l3_in_top: Optional[str]
+    candidates: Dict[str, Dict]
+    nearest_graph_nodes: List[Tuple[int, float, str]]
+    rashomon_2_results: Dict
+    best_candidate: Optional[str]
+    l3_out: int
+    l3_out_reason: str
+    delta_l3: int
+    rc: int
+    decoder_mode: str
+    efficiency: Dict[str, Any]
+    graph_conflicts: List[Tuple[int, int, float]]
+    final_decision: str
+    log: Dict[str, Any] = field(default_factory=dict)
+    rollback_needed: bool = False
+    rollback_reason: Optional[str] = None
+
+def run_block_x_with_graph(
+    query: str,
+    input_interpretations: Dict[str, float],
+    graph: HyperbolicGraph,
+    margin_threshold: float = 0.15,
+    risk: float = 0.1,
+    risk_critical: float = 0.8
+) -> FullBlockXWithGraphResult:
+    """
+    Полный цикл Block X с гиперболическим графом.
+    """
+    log = {}
+    rollback_needed = False
+    rollback_reason = None
+
+    # --- ГРАФ: СТАТИСТИКА ---
+    graph_stats = graph.get_graph_stats()
+    log['graph_stats'] = graph_stats
+
+    # --- ШАГ 1: ДЕТЕКЦИЯ КОНФЛИКТОВ ---
+    conflict = detect_conflicts(query)
+    if conflict['conflict']:
+        return FullBlockXWithGraphResult(
+            query=query,
+            graph_stats=graph_stats,
+            l3_in=-1,
+            l3_in_reason=f"Конфликт: {conflict['a']} vs {conflict['b']}",
+            l3_in_top=None,
+            candidates={},
+            nearest_graph_nodes=[],
+            rashomon_2_results={},
+            best_candidate=None,
+            l3_out=-1,
+            l3_out_reason="Прервано на входе",
+            delta_l3=0,
+            rc=-1,
+            decoder_mode="Protection Mode",
+            efficiency={'efficiency_trit': -1, 'explanation': 'Прервано'},
+            graph_conflicts=[],
+            final_decision="REJECT (конфликт)",
+            log=log,
+            rollback_needed=True,
+            rollback_reason="CONFLICT_DETECTED"
+        )
+
+    # --- ШАГ 2: L3_in ---
+    l3_in_result = rashomon_analyze(input_interpretations, margin_threshold)
+    l3_in = l3_in_result['state']
+    log['l3_in'] = l3_in_result
+
+    if l3_in == -1:
+        return FullBlockXWithGraphResult(
+            query=query,
+            graph_stats=graph_stats,
+            l3_in=-1,
+            l3_in_reason=l3_in_result['reason'],
+            l3_in_top=l3_in_result['top'],
+            candidates={},
+            nearest_graph_nodes=[],
+            rashomon_2_results={},
+            best_candidate=None,
+            l3_out=-1,
+            l3_out_reason="Нет интерпретаций",
+            delta_l3=0,
+            rc=-1,
+            decoder_mode="Protection Mode",
+            efficiency={'efficiency_trit': -1, 'explanation': 'Нет интерпретаций'},
+            graph_conflicts=[],
+            final_decision="REJECT (L3_in = -1)",
+            log=log,
+            rollback_needed=True,
+            rollback_reason="NO_INTERPRETATIONS"
+        )
+
+    if l3_in == 0:
+        return FullBlockXWithGraphResult(
+            query=query,
+            graph_stats=graph_stats,
+            l3_in=0,
+            l3_in_reason=l3_in_result['reason'],
+            l3_in_top=l3_in_result['top'],
+            candidates={},
+            nearest_graph_nodes=[],
+            rashomon_2_results={},
+            best_candidate=None,
+            l3_out=0,
+            l3_out_reason="Неопределённость на входе",
+            delta_l3=0,
+            rc=0,
+            decoder_mode="Clarification Mode",
+            efficiency={'efficiency_trit': 0, 'explanation': 'Неопределённость'},
+            graph_conflicts=[],
+            final_decision="CLARIFY (L3_in = 0)",
+            log=log,
+            rollback_needed=False
+        )
+
+    # --- ШАГ 3: ГЕНЕРАЦИЯ КАНДИДАТОВ С ГРАФОМ ---
+    candidates = generate_candidates_with_graph(query, graph)
+    log['candidates'] = candidates
+
+    # --- ШАГ 4: БЛИЖАЙШИЕ УЗЛЫ ГРАФА ---
+    query_metrics = [
+        0.7 if any(w in query.lower() for w in ['телефон', 'смартфон', 'ноутбук']) else 0.3,
+        0.7 if any(w in query.lower() for w in ['камера', 'цена', 'память']) else 0.3,
+        0.7 if any(w in query.lower() for w in ['до', 'бюджет', 'хочу']) else 0.3
+    ]
+    query_vec = hyperbolic_vector(query_metrics, graph.radius)
+    nearest_nodes = graph.nearest_nodes(query_vec, 3)
+    log['nearest_nodes'] = nearest_nodes
+
+    # --- ШАГ 5: ПОСТРОЕНИЕ ВЕКТОРОВ РЕШЕНИЯ ---
+    solution_vectors = {}
+    for name, data in candidates.items():
+        vec = (
+            quantize(data.get('z_match', 0.5)),
+            quantize(data.get('efficiency', 0.5)),
+            quantize(data.get('reliability', 0.5)),
+            quantize(data.get('tempo', 0.5)),
+            quantize(data.get('strategic', 0.5))
+        )
+        solution_vectors[name] = vec
+    log['solution_vectors'] = solution_vectors
+
+    # --- ШАГ 6: МАТРИЧНЫЙ АНАЛИЗ ---
+    names = list(solution_vectors.keys())
+    vectors = [solution_vectors[n] for n in names]
+    matrix_result = candidate_agreement_matrix(vectors, names)
+    log['matrix_analysis'] = matrix_result
+
+    # --- ШАГ 7: ГРАФ КОНФЛИКТЫ ---
+    graph_conflicts = graph.find_conflicts()
+    log['graph_conflicts'] = graph_conflicts
+    has_graph_conflict = len(graph_conflicts) > 0
+
+    # --- ШАГ 8: RASHOMON-2 ---
+    rashomon_2_results = {}
+    for name, data in candidates.items():
+        consensus = sum(data.get('consensus_opinions', [0.5])) / len(data.get('consensus_opinions', [0.5]))
+        disagreement = matrix_result['has_disagreement'] or has_graph_conflict
+        if disagreement:
+            decision_score = 0
+            l3_decision = 0
+        else:
+            decision_score = (data.get('z_match', 0.5) * data.get('efficiency', 0.5) *
+                            data.get('reliability', 0.5) * consensus) ** (1/4)
+            l3_decision = quantize(decision_score)
+        rashomon_2_results[name] = {
+            'Decision_score': decision_score,
+            'L3_decision': l3_decision,
+            'Disagreement': disagreement,
+            'Consensus': consensus
+        }
+    log['rashomon_2'] = rashomon_2_results
+
+    # --- ШАГ 9: ВЫБОР ЛУЧШЕГО ---
+    eligible = [k for k, v in rashomon_2_results.items() if v['L3_decision'] != -1]
+    if eligible:
+        best_candidate = max(eligible, key=lambda k: rashomon_2_results[k]['Decision_score'])
+        best_result = rashomon_2_results[best_candidate]
+    else:
+        best_candidate = None
+        best_result = None
+    log['best_candidate'] = best_candidate
+
+    # --- ШАГ 10: L3_out ---
+    if risk > risk_critical:
+        l3_out = -1
+        l3_out_reason = "Критический риск"
+        rollback_needed = True
+        rollback_reason = "RISK_CRITICAL"
+    elif best_candidate is None:
+        l3_out = -1
+        l3_out_reason = "Нет подходящего кандидата"
+        rollback_needed = True
+        rollback_reason = "NO_CANDIDATE"
+    else:
+        l3_out = best_result['L3_decision']
+        l3_out_reason = f"Выбран кандидат: {best_candidate}"
+
+    log['l3_out'] = l3_out
+
+    # --- ШАГ 11: ΔL3 ---
+    delta_l3 = l3_out - l3_in
+    log['delta_l3'] = delta_l3
+
+    # --- ШАГ 12: Rc ---
+    if best_candidate and best_candidate in solution_vectors:
+        rc = ternary_fold(solution_vectors[best_candidate])
+    else:
+        rc = -1
+    log['rc'] = rc
+
+    # --- ШАГ 13: ДЕКОДЕР ---
+    if l3_out == 1:
+        decoder_mode = DecisionMode.DIRECT.value
+        final_decision = "PASS (Direct Answer)"
+    elif l3_out == 0:
+        decoder_mode = DecisionMode.CLARIFICATION.value
+        final_decision = "CLARIFY (L3_out = 0)"
+    else:
+        decoder_mode = DecisionMode.PROTECTION.value
+        final_decision = "REJECT (L3_out = -1)"
+    log['decoder_mode'] = decoder_mode
+
+    # --- ШАГ 14: ЭФФЕКТИВНОСТЬ ---
+    if best_candidate:
+        value = best_result['Decision_score']
+        cost = 0.3 + (1 - best_result['Consensus']) * 0.3
+        efficiency = value / (cost + 0.001)
+        efficiency_trit = quantize(efficiency)
+        if efficiency_trit == 1:
+            eff_explanation = "✅ Высокая эффективность"
+        elif efficiency_trit == 0:
+            eff_explanation = "⚖️ Средняя эффективность"
+        else:
+            eff_explanation = "❌ Низкая эффективность"
+    else:
+        efficiency = 0
+        efficiency_trit = -1
+        eff_explanation = "Нет кандидата"
+
+    efficiency_result = {
+        'value': value if best_candidate else 0,
+        'cost': cost if best_candidate else 1,
+        'efficiency': efficiency,
+        'efficiency_trit': efficiency_trit,
+        'explanation': eff_explanation
+    }
+    log['efficiency'] = efficiency_result
+
+    # --- ШАГ 15: ROLLBACK ---
+    if rollback_needed:
+        log['rollback'] = {'needed': True, 'reason': rollback_reason}
+
+    return FullBlockXWithGraphResult(
+        query=query,
+        graph_stats=graph_stats,
+        l3_in=l3_in,
+        l3_in_reason=l3_in_result['reason'],
+        l3_in_top=l3_in_result['top'],
+        candidates=candidates,
+        nearest_graph_nodes=nearest_nodes,
+        rashomon_2_results=rashomon_2_results,
+        best_candidate=best_candidate,
+        l3_out=l3_out,
+        l3_out_reason=l3_out_reason,
+        delta_l3=delta_l3,
+        rc=rc,
+        decoder_mode=decoder_mode,
+        efficiency=efficiency_result,
+        graph_conflicts=graph_conflicts,
+        final_decision=final_decision,
+        log=log,
+        rollback_needed=rollback_needed,
+        rollback_reason=rollback_reason
+    )
+
+# ============================================================================
+# ВИЗУАЛИЗАЦИЯ
+# ============================================================================
+
+def print_full_result(result: FullBlockXWithGraphResult) -> None:
+    """Красиво выводит результат полного цикла с графами."""
+    print("=" * 70)
+    print("ПОЛНЫЙ BLOCK X v6.3.2 (ГРАФЫ + ЛОБАЧЕВСКИЙ)")
+    print("=" * 70)
+
+    print(f"\n📝 ЗАПРОС: {result.query}")
+
+    print(f"\n📊 ГРАФ:")
+    print(f"   Узлов: {result.graph_stats['nodes']}")
+    print(f"   Рёбер: {result.graph_stats['edges']}")
+    print(f"   Конфликтов: {result.graph_stats['conflicts']}")
+    print(f"   Среднее расстояние: {result.graph_stats['avg_distance']:.3f}")
+
+    if result.nearest_graph_nodes:
+        print(f"\n📍 БЛИЖАЙШИЕ УЗЛЫ ГРАФА:")
+        for node_id, dist, label in result.nearest_graph_nodes[:3]:
+            print(f"   {label} (ID={node_id}): расстояние {dist:.3f}")
+
+    print(f"\n🔵 L3_in: {result.l3_in} ({result.l3_in_reason})")
+    if result.l3_in_top:
+        print(f"   Лучшая интерпретация: {result.l3_in_top}")
+
+    if result.candidates:
+        print(f"\n📋 КАНДИДАТЫ ({len(result.candidates)}):")
+        for name, data in result.candidates.items():
+            score = result.rashomon_2_results.get(name, {}).get('Decision_score', 0)
+            l3 = result.rashomon_2_results.get(name, {}).get('L3_decision', 0)
+            graph_dist = data.get('graph_distance', float('inf'))
+            print(f"   {name}: score={score:.3f}, L3={l3}, dist={graph_dist:.3f}")
+
+    if result.best_candidate:
+        print(f"\n🏆 ЛУЧШИЙ КАНДИДАТ: {result.best_candidate}")
+
+    print(f"\n🔴 L3_out: {result.l3_out} ({result.l3_out_reason})")
+    print(f"📊 ΔL3: {result.delta_l3}")
+    print(f"🌀 Rc: {result.rc}")
+    print(f"🎯 ДЕКОДЕР: {result.decoder_mode}")
+
+    print(f"\n⚡ ЭФФЕКТИВНОСТЬ:")
+    print(f"   {result.efficiency['explanation']}")
+    print(f"   Значение: {result.efficiency['efficiency']:.3f}")
+    print(f"   Трит: {result.efficiency['efficiency_trit']}")
+
+    if result.graph_conflicts:
+        print(f"\n⚠️ КОНФЛИКТЫ В ГРАФЕ ({len(result.graph_conflicts)}):")
+        for id1, id2, dist in result.graph_conflicts[:3]:
+            print(f"   Узел {id1} ↔ Узел {id2}: расстояние {dist:.3f}")
+
+    if result.rollback_needed:
+        print(f"\n⚠️ ROLLBACK: {result.rollback_reason}")
+
+    print(f"\n🎯 ФИНАЛЬНОЕ РЕШЕНИЕ: {result.final_decision}")
+
+    print("\n" + "-" * 70)
+
+# ============================================================================
+# ДЕМОНСТРАЦИЯ
+# ============================================================================
+
+
+# ============================================================
+# COMPRESS THAT MATCH / LEARNING COMPONENTS
+# ============================================================
+
+MONTH_SECONDS = 30 * 24 * 60 * 60
+
+def _validate_probability(value: float, name: str) -> float:
+    """Проверяет, что оценка является конечным числом в диапазоне [0, 1]."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{name} должна быть числом, получено {type(value).__name__}")
+    value = float(value)
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError(f"{name} должна находиться в диапазоне [0, 1]: {value}")
+    return value
+
+
+@dataclass
+class LearningGuard:
+    max_rate: float = 0.20
+    current_growth: float = 0.0
+    last_reset: float = field(default_factory=time.time)
+    emergency_break: bool = False
+    mode: str = "NORMAL"
+    experience_log: List[Dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.max_rate) or self.max_rate < 0:
+            raise ValueError("max_rate должен быть конечным неотрицательным числом")
+
+    def _reset_if_new_cycle(self, now: Optional[float] = None) -> None:
+        now = time.time() if now is None else now
+        if now - self.last_reset >= MONTH_SECONDS:
+            self.reset_cycle(now=now)
+
+    def approve_learning(self, proposed_growth: float) -> bool:
+        self._reset_if_new_cycle()
+        if isinstance(proposed_growth, bool) or not isinstance(proposed_growth, (int, float)):
+            raise TypeError("proposed_growth должна быть числом")
+        proposed_growth = float(proposed_growth)
+        if not math.isfinite(proposed_growth) or proposed_growth < 0:
+            raise ValueError("proposed_growth должна быть конечной и неотрицательной")
+        if self.emergency_break or self.current_growth + proposed_growth > self.max_rate:
+            self.mode = "CONSERVATION"
+            return False
+        self.current_growth += proposed_growth
+        self.adapt_mode()
+        return True
+
+    def adapt_mode(self) -> None:
+        if self.current_growth >= self.max_rate * 0.95:
+            self.mode = "CONSERVATION"
+        elif self.current_growth >= self.max_rate * 0.80:
+            self.mode = "RESTRICTED"
+        else:
+            self.mode = "NORMAL"
+
+    def get_mode(self) -> str:
+        self._reset_if_new_cycle()
+        self.adapt_mode()
+        return self.mode
+
+    def reset_cycle(self, now: Optional[float] = None) -> None:
+        self.current_growth = 0.0
+        self.last_reset = time.time() if now is None else now
+        self.mode = "NORMAL"
+        self.experience_log.clear()
+
+    def add_experience(self, experience: Dict[str, Any]) -> None:
+        self.experience_log.append(dict(experience))
+        del self.experience_log[:-100]
+
+    def get_best_threshold(self, key: str, default: float = 0.3) -> float:
+        values = [e[key] for e in self.experience_log if e.get("success") and key in e]
+        return sum(values) / len(values) if values else default
+
+    def status(self) -> Dict[str, Any]:
+        self._reset_if_new_cycle()
+        return {
+            "mode": self.get_mode(),
+            "current_growth": round(self.current_growth, 4),
+            "monthly_limit": round(self.max_rate, 4),
+            "remaining_capacity": round(max(0.0, self.max_rate - self.current_growth), 4),
+            "experience_count": len(self.experience_log),
+            "emergency_break": self.emergency_break,
+        }
+
+
+
+@dataclass
+class BlockXResultV6_4:
+    query: str
+    l3_in: int
+    l3_in_reason: str
+    l3_out: int
+    l3_out_reason: str
+    delta_l3: int
+    final_decision: str
+    efficiency: float
+    efficiency_trit: int
+    experience_used: bool = False
+    rollback_needed: bool = False
+    rollback_reason: Optional[str] = None
+
+
+class BlockXV6_4:
+    def __init__(self) -> None:
+        self.guard = LearningGuard()
+        self.threshold_low = 0.3
+        self.threshold_high = 0.7
+        self.history: List[Dict[str, Any]] = []
+        self.state = 0
+
+    @staticmethod
+    def efficiency(value: float, cost: float) -> float:
+        value = _validate_probability(value, "value")
+        if not math.isfinite(cost) or cost < 0:
+            raise ValueError("cost должна быть конечной и неотрицательной")
+        denominator = value + cost
+        return value / denominator if denominator else 0.0
+
+    def process(self, query: str, interpretations: Dict[str, float]) -> BlockXResultV6_4:
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("query должен быть непустой строкой")
+        if not isinstance(interpretations, dict):
+            raise TypeError("interpretations должен быть словарём")
+
+        l3_in_result = rashomon_analyze(interpretations)
+        l3_in = l3_in_result["state"]
+        if l3_in == -1:
+            return BlockXResultV6_4(query, -1, l3_in_result["reason"], -1,
+                "Остановлено на входе (Veto)", 0, "REJECT", 0.0, -1,
+                rollback_needed=True, rollback_reason="L3_IN_NEGATIVE")
+
+        if self.guard.emergency_break:
+            return BlockXResultV6_4(query, l3_in, l3_in_result["reason"], 0,
+                "Остановлено аварийным контуром", -l3_in, "REJECT", 0.0, -1,
+                rollback_needed=True, rollback_reason="EMERGENCY_BREAK")
+
+        low = self.guard.get_best_threshold("threshold_low", self.threshold_low)
+        high = self.guard.get_best_threshold("threshold_high", self.threshold_high)
+        before_experience = len(self.guard.experience_log) > 0
+        candidates = []
+        for name, score in l3_in_result["all_scores"].items():
+            candidates.append({"name": name, "score": score,
+                               "efficiency": self.efficiency(score, 1.0 - score),
+                               "l3": quantize(score, low, high)})
+        best = max(candidates, key=lambda item: (item["score"], item["name"]))
+        l3_out = best["l3"]
+        if l3_out == 1:
+            if self.guard.approve_learning(0.05):
+                self.guard.add_experience({"query": query, "best": best["name"], "score": best["score"],
+                    "threshold_low": low, "threshold_high": high, "success": True})
+                reason = "SUCCESS"
+            else:
+                l3_out, reason = 0, "CONSERVATION_MODE"
+        else:
+            reason = "NEUTRAL_OR_NEGATIVE"
+
+        self.state = l3_out
+        self.history.append({"query": query, "l3_in": l3_in, "l3_out": l3_out,
+                             "best": best["name"], "mode": self.guard.get_mode(), "time": time.time()})
+        eff = best["efficiency"]
+        return BlockXResultV6_4(query, l3_in, l3_in_result["reason"], l3_out, reason,
+            l3_out - l3_in, "PASS" if l3_out == 1 else "CLARIFY" if l3_out == 0 else "REJECT",
+            eff, quantize(eff), experience_used=before_experience,
+            rollback_needed=l3_out == -1, rollback_reason="L3_OUT_NEGATIVE" if l3_out == -1 else None)
+
+    def reset(self) -> None:
+        self.guard.reset_cycle()
+        self.history.clear()
+        self.state = 0
+
+    def veto(self) -> Dict[str, str]:
+        self.guard.emergency_break = True
+        return {"status": "veto", "message": "STOP Veto активирован"}
+
+    def resume(self) -> Dict[str, str]:
+        self.guard.emergency_break = False
+        return {"status": "resumed", "message": "Работа возобновлена"}
+
+    def status(self) -> Dict[str, Any]:
+        return {"version": "6.4", "guard": self.guard.status(),
+                "history_len": len(self.history), "state": self.state}
+
+
+# Public alias for the combined base component.
+CompressThatMatch = BlockXV6_4
+
+if __name__ == "__main__":
+    # Создаём гиперболический граф
+    graph = HyperbolicGraph(radius=1.5)
+
+    # Добавляем узлы (координаты в гиперболическом шаре)
+    graph.add_node(1, [0.8, 0.2, 0.1], "Смартфон с камерой")
+    graph.add_node(2, [0.1, 0.9, 0.3], "Смартфон с автономностью")
+    graph.add_node(3, [0.3, 0.1, 0.8], "Смартфон для игр")
+    graph.add_node(4, [0.9, 0.8, 0.2], "Смартфон премиум")
+    graph.add_node(5, [0.2, 0.3, 0.9], "Смартфон бюджетный")
+
+    # Добавляем рёбра
+    graph.add_edge(1, 2, 1.0)
+    graph.add_edge(1, 4, 1.0)
+    graph.add_edge(2, 5, 1.0)
+    graph.add_edge(3, 5, 1.0)
+    graph.add_edge(4, 1, 1.0)
+
+    # Тестовый запрос
+    query = "хочу хороший телефон с камерой и автономностью до 600 евро"
+
+    input_interpretations = {
+        "Телефон с камерой и автономностью": 0.9,
+        "Телефон с камерой и хорошим экраном": 0.7,
+        "Телефон с автономностью и ценой до 600": 0.6
+    }
+
+    result = run_block_x_with_graph(
+        query=query,
+        input_interpretations=input_interpretations,
+        graph=graph,
+        margin_threshold=0.15,
+        risk=0.1
+    )
+
+    print_full_result(result)
+
+    print("\n📋 ПОЛНЫЙ ЛОГ:")
+    for step, data in result.log.items():
+        print(f"
