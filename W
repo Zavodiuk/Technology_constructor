@@ -1,0 +1,194 @@
+"W — Effective Decision Making | Compact Autonomous Block
+Author: Vladimir Zavodiuk
+License: All Rights Reserved
+
+Advisory deterministic control plane. BXOS is simulation-only.
+No network calls, external actions, payments, messages, or live execution.
+"""
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from enum import Enum
+import hashlib
+import json
+import re
+import time
+from typing import Any, Mapping
+
+
+class Decision(str, Enum):
+    PASS = "PASS"
+    CONTINUE = "CONTINUE"
+    CLARIFY = "CLARIFY"
+    VETO = "VETO"
+
+
+@dataclass(frozen=True)
+class Request:
+    request_id: str
+    text: str
+    risk: float | None = None
+    uncertainty: float | None = None
+    execution_requested: bool = False
+    action_type: str = "DRY_RUN"
+    action_payload: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if not self.request_id or not self.text.strip():
+            raise ValueError("request_id and text are required")
+        if self.action_payload is None:
+            object.__setattr__(self, "action_payload", {})
+
+
+@dataclass(frozen=True)
+class Result:
+    request_id: str
+    decision: str
+    route: str
+    fibonacci_depth: int
+    depth_action: str
+    risk: float
+    uncertainty: float
+    confidence: float
+    evidence_digest: str
+    provenance: tuple[str, ...]
+    authority: bool
+    bxos_receipt: Mapping[str, Any] | None
+    reasons: tuple[str, ...]
+
+
+class BXOS:
+    """Execution boundary. It only produces simulated, auditable receipts."""
+
+    ALLOWLIST = frozenset({"DRY_RUN", "LOCAL_TASK", "RESEARCH_RECORD"})
+
+    def __init__(self, max_risk: float = 0.35, max_actions: int = 10) -> None:
+        self.max_risk = max_risk
+        self.max_actions = max_actions
+        self.actions = 0
+        self.stopped = False
+        self.seen: set[str] = set()
+        self.audit: list[dict[str, Any]] = []
+
+    def emergency_stop(self, reason: str = "MANUAL_STOP") -> None:
+        self.stopped = True
+        self.audit.append({"event": "EMERGENCY_STOP", "reason": reason, "ts": time.time_ns()})
+
+    def simulate(self, request: Request, decision: Decision, risk: float,
+                 provenance: tuple[str, ...]) -> dict[str, Any]:
+        key = request.request_id
+        reason = "SIMULATION_ONLY"
+        status = "SIMULATED"
+        if self.stopped:
+            status, reason = "EMERGENCY_STOP", "EMERGENCY_STOP_ACTIVE"
+        elif decision is not Decision.PASS:
+            status, reason = "DENIED", "DECISION_GATE_NOT_PASS"
+        elif not request.execution_requested:
+            status, reason = "DENIED", "EXECUTION_NOT_REQUESTED"
+        elif request.action_type not in self.ALLOWLIST:
+            status, reason = "DENIED", "ACTION_TYPE_NOT_ALLOWLISTED"
+        elif risk > self.max_risk:
+            status, reason = "DENIED", "RISK_QUOTA_EXCEEDED"
+        elif key in self.seen:
+            status, reason = "DENIED", "IDEMPOTENCY_DUPLICATE"
+        elif self.actions >= self.max_actions:
+            status, reason = "DENIED", "ACTION_QUOTA_EXCEEDED"
+        else:
+            self.actions += 1
+            self.seen.add(key)
+        body = {"request_id": key, "status": status, "reason": reason,
+                "action_type": request.action_type, "ts": time.time_ns()}
+        receipt = {**body, "simulated": True, "authority": False,
+                   "digest": hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()}
+        self.audit.append({"event": "BXOS_RECEIPT", **receipt})
+        return receipt
+
+
+class W:
+    """Compact W orchestrator: bounded metrics, routing, gates, provenance, BXOS."""
+
+    FIBONACCI = (1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144)
+
+    def __init__(self) -> None:
+        self.bxos = BXOS()
+        self.history: list[dict[str, Any]] = []
+
+    def decide(self, request: Request) -> Result:
+        risk = self._bound(request.risk, self._infer_risk(request.text))
+        uncertainty = self._bound(request.uncertainty, self._infer_uncertainty(request.text))
+        pressure = max(risk, uncertainty)
+        index = min(len(self.FIBONACCI) - 1, int(pressure * (len(self.FIBONACCI) - 1)))
+        depth = self.FIBONACCI[index]
+        route = self._route(risk, uncertainty)
+        if risk >= 0.85:
+            decision = Decision.VETO
+        elif risk >= 0.40 or uncertainty >= 0.45:
+            decision = Decision.CONTINUE
+        else:
+            decision = Decision.PASS
+        depth_action = "STOP" if pressure <= 0.35 else "CONTINUE" if pressure >= 0.80 else "REVIEW"
+        digest = hashlib.sha256(
+            f"{request.request_id}|{request.text}|{risk:.6f}|{uncertainty:.6f}".encode()
+        ).hexdigest()
+        provenance = (f"evidence:{digest}", f"route:{route}", f"depth:{depth}")
+        receipt = self.bxos.simulate(request, decision, risk, provenance) if request.execution_requested else None
+        reasons = self._reasons(decision, risk, uncertainty, receipt)
+        result = Result(
+            request.request_id, decision.value, route, depth, depth_action,
+            risk, uncertainty, round(max(0.05, min(0.95, 1 - 0.55 * risk - 0.45 * uncertainty)), 4),
+            digest, provenance, False, receipt, tuple(reasons)
+        )
+        self.history.append(asdict(result))
+        return result
+
+    @staticmethod
+    def _bound(value: float | None, fallback: float) -> float:
+        value = fallback if value is None else float(value)
+        if not 0 <= value <= 1:
+            raise ValueError("risk and uncertainty must be in [0, 1]")
+        return value
+
+    @staticmethod
+    def _infer_risk(text: str) -> float:
+        t = text.lower()
+        if re.search(r"куп|перевод|инвест|акци|крипт|конфликт|операц|медицин|юрид", t):
+            return 0.78
+        if re.search(r"здоров|леч|кастр|безопас", t):
+            return 0.58
+        return 0.25
+
+    @staticmethod
+    def _infer_uncertainty(text: str) -> float:
+        t = text.lower()
+        if len(text.strip()) < 40 or "?" in text:
+            return 0.55
+        if re.search(r"сейчас|текущ|лучший|доходн|дешев|точно", t):
+            return 0.65
+        return 0.30
+
+    @staticmethod
+    def _route(risk: float, uncertainty: float) -> str:
+        if risk >= 0.75 or uncertainty >= 0.75:
+            return "V13_HARMONIA_REVIEW"
+        if risk >= 0.45 or uncertainty >= 0.45:
+            return "V13_FROZEN_REVIEW"
+        return "V12_STABLE"
+
+    @staticmethod
+    def _reasons(decision: Decision, risk: float, uncertainty: float,
+                 receipt: Mapping[str, Any] | None) -> list[str]:
+        reasons = [f"decision_gate={decision.value}", f"risk={risk:.3f}", f"uncertainty={uncertainty:.3f}"]
+        if decision is Decision.PASS:
+            reasons.append("bounded advisory pass; no live authority")
+        elif decision is Decision.CONTINUE:
+            reasons.append("additional evidence or clarification required")
+        else:
+            reasons.append("conservative veto or review due to elevated risk")
+        if receipt is not None:
+            reasons.append(f"BXOS={receipt['status']}:{receipt['reason']}")
+        return reasons
+
+
+def run(text: str, request_id: str = "w-001", **kwargs: Any) -> dict[str, Any]:
+    """Convenience entry point for a single autonomous advisory decision."""
+    return asdict(W().decide(Request(request_id=request_id, text=text, **kwargs)))
