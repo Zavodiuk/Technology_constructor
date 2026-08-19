@@ -1,0 +1,100 @@
+package com.rootarchitect.pentarny
+
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+
+// ============================================================================
+// ПЕНТАРНАЯ МАТРИЦА ФИЛЬТРАЦИИ И ОЧИСТКИ ВОДЫ (KOTLIN IMPLEMENTATION)
+// ============================================================================
+
+enum class PurificationPhase {
+    PHASE_DEAD_WATER,  // Стерилизация, деструкция, осаждение грязи
+    PHASE_LIVING_WATER // Озонирование (O3), структурирование, энергетическое насыщение
+}
+
+class TensorWaterFilterEngine(val waterVolumeMl: Int = 200) {
+    
+    // Метрики среды (имитация обратной связи от микрофона / акустического импеданса)
+    var contaminationIndex: Float = 1.0f // 1.0 = грязь/бактерии, 0.0 = идеальная чистота
+    var ozoneSaturation: Float = 0.0f    // Уровень озонирования живой воды
+    var currentPhase: PurificationPhase = PurificationPhase.PHASE_DEAD_WATER
+
+    private val universeGraph = PentarUniverseGraph()
+
+    init {
+        // Инициализация графа Рашимона (разные грани/точки зрения на среду)
+        universeGraph.addNode("Логика_Среды")
+        universeGraph.addNode("Физика_Кавитации")
+        universeGraph.addNode("Энергетика_Поля")
+        
+        universeGraph.addEdge("Логика_Среды", "Физика_Кавитации")
+        universeGraph.addEdge("Физика_Кавитации", "Энергетика_Поля")
+        universeGraph.addEdge("Энергетика_Поля", "Логика_Среды")
+    }
+
+    // Запуск полного двухмакроциклового процесса очистки и оживления
+    fun executePurificationCycle() = runBlocking {
+        println("\n🌊 [СТАРТ ПРОЦЕССА]: Инициализация тензорного фильтра для $waterVolumeMl мл воды.")
+        
+        // --- МАКРО-ЦИКЛ 1: МЕРТВАЯ ВОДА (3 такта стерилизации и осаждения) ---
+        currentPhase = PurificationPhase.PHASE_DEAD_WATER
+        println("\n--- [МАКРО-ЦИКЛ 1]: Фаза 'Мертвая вода' (Деструкция и Осаждение) ---")
+        
+        for (tick in 1..3) {
+            println("\n  [Такт мертвой воды $tick / 3]")
+            // Задаем экстремальные состояния для разрушения мембран (конфликт -2 и 2)
+            universeGraph.pulse()
+            
+            // Имитация физического воздействия: кавитация разрушает бактерии, грязь падает на дно
+            contaminationIndex = max(0.0f, contaminationIndex - 0.3f)
+            val impedanceFeedback = assessAcousticImpedance()
+            
+            println("  -> Индекс загрязнения среды: ${String.format("%.2f", contaminationIndex)}")
+            println("  -> Акустический импеданс (микрофон): $impedanceFeedback")
+            delay(300)
+        }
+        println("✅ [ИТОГ ФАЗЫ 1]: Патогены разрушены, осадок сформирован на дне.")
+
+        // --- МАКРО-ЦИКЛ 2: ЖИВАЯ ВОДА (5 тактов озонирования и гармонизации) ---
+        currentPhase = PurificationPhase.PHASE_LIVING_WATER
+        println("\n--- [МАКРО-ЦИКЛ 2]: Фаза 'Живая вода' (Озонирование и Фибоначчи-структурирование) ---")
+        
+        for (tick in 1..5) {
+            println("\n  [Такт живой воды $tick / 5] (Сдвиг запятой в пентарной матрице)")
+            // Сдвиг семантики в сторону роста и гармонии (1 и 2)
+            universeGraph.pulse()
+            
+            // Имитация генерации озона O3 и структурирования кластеров
+            ozoneSaturation += 0.2f
+            val harmonyDeterminant = calculateHarmonyDeterminantMock(tick)
+            
+            println("  -> Уровень активного озона (O3): ${String.format("%.2f", ozoneSaturation)} у.е.")
+            println("  -> Детерминант гармонии поля: ${String.format("%.4f", harmonyDeterminant)}")
+            delay(300)
+        }
+        
+        println("\n" + "=".repeat(60))
+        println("✨ [ОЧИСТКА ЗАВЕРШЕНА УСПЕШНО]: Вода стерильна, озонирована и структурирована.")
+        println("=".repeat(60))
+    }
+
+    private fun assessAcousticImpedance(): String {
+        return if (contaminationIndex > 0.4f) "ХАОС / ВЗВЕСЬ (Плотный отклик)" else "СТАБИЛЬНО / ОСАДОК СФОРМИРОВАН"
+    }
+
+    private fun calculateHarmonyDeterminantMock(tick: Int): Float {
+        return min(0.999f, 0.75f + (tick * 0.05f))
+    }
+}
+
+// Утилита для красивого вывода разделителей
+private infix fun String.times(n: Int): String = this.repeat(n)
+
+// Точка входа для проверки работы фильтра
+fun main() {
+    val filterEngine = TensorWaterFilterEngine(waterVolumeMl = 250)
+    filterEngine.executePurificationCycle()
+}
