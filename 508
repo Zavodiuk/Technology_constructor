@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""
+Section 508 & WCAG Accessibility Auditor
+Author: Vladimir Zavodiuk / Automated Compliance Suite
+Description: Single-file Python scanner for web accessibility compliance.
+"""
+
+import sys
+import argparse
+from bs4 import BeautifulSoup
+import requests
+
+def audit_url(url):
+    print(f"\n[INFO] Запуск проверки доступности для: {url}")
+    print("-" * 60)
+    
+    try:
+        response = requests.get(url, timeout=15, headers={'User-Agent': 'A11yAuditor/1.0'})
+        response.raise_for_status()
+    except Exception as e:
+        print(f"[ERROR] Не удалось подключиться к ресурсу: {e}")
+        return False
+
+    soup = BeautifulSoup(response.text, 'html.parser')
+    violations = 0
+    warnings = 0
+
+    # 1. Проверка языка страницы (WCAG / Section 508 requirement)
+    html_tag = soup.find('html')
+    if not html_tag or not html_tag.get('lang'):
+        print("[!] КРИТИЧНО: У тега <html> отсутствует атрибут 'lang'. Скринридеры не смогут корректно выбрать язык чтения.")
+        violations += 1
+    else:
+        print(f"[OK] Язык страницы задан: lang='{html_tag.get('lang')}'")
+
+    # 2. Проверка заголовка первого уровня (H1)
+    h1_tags = soup.find_all('h1')
+    if len(h1_tags) == 0:
+        print("[!] ОШИБКА: На странице нет тега <h1>. Нарушена структура навигации для незрячих пользователей.")
+        violations += 1
+    elif len(h1_tags) > 1:
+        print(f"[!] ВНИМАНИЕ: Найдено несколько тегов <h1> ({len(h1_tags)}). Рекомендуется использовать только один H1.")
+        warnings += 1
+    else:
+        print("[OK] Структура заголовка H1 корректна.")
+
+    # 3. Проверка изображений на наличие alt-описаний
+    images = soup.find_all('img')
+    images_without_alt = [img for img in images if not img.get('alt')]
+    print(f"[*] Всего изображений: {len(images)}")
+    if images_without_alt:
+        print(f"[!] ОШИБКА: Обнаружено изображений без alt-текста: {len(images_without_alt)}")
+        violations += len(images_without_alt)
+    else:
+        print("[OK] Все изображения имеют альтернативный текст.")
+
+    # 4. Проверка интерактивных элементов (кнопки и ссылки)
+    interactive_elements = soup.find_all(['button', 'a'])
+    empty_elements = []
+    for el in interactive_elements:
+        text = el.get_text(strip=True)
+        aria_label = el.get('aria-label')
+        title = el.get('title')
+        if not text and not aria_label and not title:
+            empty_elements.append(el)
+
+    if empty_elements:
+        print(f"[!] ОШИБКА: Найдено интерактивных элементов (кнопок/ссылок) без текста и aria-меток: {len(empty_elements)}")
+        violations += len(empty_elements)
+    else:
+        print("[OK] Интерактивные элементы имеют текстовое описание.")
+
+    # Итоговый вердикт
+    print("-" * 60)
+    print(f"РЕЗУЛЬТАТ АУДИТА:")
+    print(f" - Критических нарушений стандартов: {violations}")
+    print(f" - Предупреждений: {warnings}")
+    
+    if violations == 0:
+        print("\n[SUCCESS] Сайт соответствует базовым требованиям доступности!")
+        return True
+    else:
+        print("\n[FAIL] Обнаружены несоответствия требованиям Section 508 / WCAG.")
+        return False
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Python WCAG & Section 508 Accessibility Auditor")
+    parser.add_argument("url", nargs="?", default="https://example.com", help="URL сайта для проверки")
+    args = parser.parse_args()
+    
+    audit_url(args.url)
+    
