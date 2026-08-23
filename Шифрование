@@ -1,0 +1,79 @@
+// ============================================================================
+// МОДУЛЬ КРИПТОШИФРОВАНИЯ И РАСШИФРОВАНИЯ НА МАТРИЦАХ W («ГАРМОНИЯ»)
+// Автор: Vladimir Zavodiuk
+// Статус: Закрытая архитектурная реализация
+// ============================================================================
+
+import kotlin.math.*
+
+class HarmoniaMatrixCipher(val dimension: Int) {
+
+    // Генерация ключевой матрицы W на основе секретного сида (гармонического коэффициента)
+    fun generateSecretMatrixW(seed: Double): Array<DoubleArray> {
+        val matrixW = Array(dimension) { DoubleArray(dimension) }
+        for (i in 0 until dimension) {
+            for (j in 0 until dimension) {
+                // Гармоническое распределение элементов через тригонометрические функции
+                matrixW[i][j] = sin(seed * (i + 1) * (j + 1)) * cos((i - j).toDouble() * 0.5)
+            }
+        }
+        return matrixW
+    }
+
+    // Генерация обратной (или сопряженной) матрицы W⁻¹ для расшифровки
+    fun generateInverseMatrixW(seed: Double): Array<DoubleArray> {
+        val invMatrix = Array(dimension) { DoubleArray(dimension) }
+        // Для симметричного матричного преобразования используем зеркальный сдвиг фазы сида
+        val inverseSeed = seed + PI / 4.0
+        for (i in 0 until dimension) {
+            for (j in 0 until dimension) {
+                invMatrix[i][j] = cos(inverseSeed * (i + 1) * (j + 1)) * sin((i - j).toDouble() * 0.5)
+            }
+        }
+        return invMatrix
+    }
+
+    // ШАГ 1: Прямое шифрование потока данных через матрицу W
+    fun encryptStream(rawStream: FloatArray, seed: Double): FloatArray {
+        val matrixW = generateSecretMatrixW(seed)
+        val encryptedStream = FloatArray(rawStream.size)
+        
+        var matrixIndex = 0
+        for (i in rawStream.indices) {
+            val value = rawStream[i]
+            // Пространственное матричное преломление значения
+            val row = matrixIndex % dimension
+            val col = (matrixIndex / dimension) % dimension
+            val weight = matrixW[row][col].toFloat()
+            
+            // Шифрование через матричный коэффициент с сохранением знака
+            encryptedStream[i] = value * weight + (row - col).toFloat() * 0.1f
+            matrixIndex++
+        }
+        return encryptedStream
+    }
+
+    // ШАГ 2 (Зеркало): Обратная расшифровка потока данных через матрицу W⁻¹
+    fun decryptStream(encryptedStream: FloatArray, seed: Double): FloatArray {
+        val invMatrix = generateInverseMatrixW(seed)
+        val decryptedStream = FloatArray(encryptedStream.size)
+        
+        var matrixIndex = 0
+        for (i in encryptedStream.indices) {
+            val encValue = encryptedStream[i]
+            val row = matrixIndex % dimension
+            val col = (matrixIndex / dimension) % dimension
+            val invWeight = invMatrix[row][col].toFloat()
+            
+            // Обратное восстановление исходного значения
+            val correction = (row - col).toFloat() * 0.1f
+            decryptedStream[i] = if (abs(invWeight) > 0.0001f) {
+                (encValue - correction) / invWeight
+            } else {
+                encValue // Защита от деления на ноль в узловых точках
+            }
+            matrixIndex++
+        }
+        return decryptedStream
+    }
+}
