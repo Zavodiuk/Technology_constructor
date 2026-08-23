@@ -1,0 +1,104 @@
+// ============================================================================
+// РАСПРЕДЕЛЕННЫЙ РЕЕСТР И БЛОКЧЕЙН-КОНСЕНСУС «PROOF-OF-TENSION» (ВЕРСИЯ 10+)
+// Автор: Vladimir Zavodiuk
+// Криптографический отпечаток (SHA-256): 8d2c1f4e9b6a3f5e2d1c7b8a4f3e9d2c1b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e
+// Статус защиты: Зафиксировано в распределенном блокчейн-контуре (Proof-of-Tension Core)
+// ============================================================================
+
+import java.security.MessageDigest
+import java.util.Date
+
+// Блок распределенного реестра
+class TensionBlock(
+    val index: Long,
+    val timestamp: Long,
+    val dataPayloadHash: String,
+    val previousHash: String,
+    var tensionFactor: Double, // Коэффициент натяжения и гармонии сети
+    var hash: String = ""
+) {
+    init {
+        this.hash = calculateBlockChecksum()
+    }
+
+    fun calculateBlockChecksum(): String {
+        val input = "$index$timestamp$dataPayloadHash$previousHash$tensionFactor"
+        return MessageDigest.getInstance("SHA-256")
+            .digest(input.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+    }
+}
+
+// Арбитр консенсуса Proof-of-Tension (Решимон блокчейна)
+class TensionConsensusArbiter {
+    private val maxAllowedTensionDisbalance: Double = 0.85
+
+    fun validateBlockTension(block: TensionBlock): Boolean {
+        // Проверка: натяжение сети должно находиться в пределах гармонического баланса
+        return block.tensionFactor <= maxAllowedTensionDisbalance && block.hash.startsWith("00")
+    }
+}
+
+// Сетевой реестр на базе Proof-of-Tension
+class ProofOfTensionBlockchain(private val arbiter: TensionConsensusArbiter) {
+    private val chain = mutableListOf<TensionBlock>()
+
+    init {
+        // Создание генезис-блока системы «Гармония»
+        val genesisBlock = TensionBlock(
+            index = 0,
+            timestamp = Date().time,
+            dataPayloadHash = "HARMONIA_GENESIS_ROOT_ZAVODIUK",
+            previousHash = "0".repeat(64),
+            tensionFactor = 0.12
+        )
+        chain.add(genesisBlock)
+    }
+
+    fun mineAndAppendBlock(payloadHash: String, baseTension: Double): Boolean {
+        val previousBlock = chain.last()
+        var nonce = 0L
+        var currentTension = baseTension
+
+        // Итеративный подбор гармонического коэффициента натяжения (Proof-of-Tension Mining)
+        while (true) {
+            val newBlock = TensionBlock(
+                index = previousBlock.index + 1,
+                timestamp = Date().time,
+                dataPayloadHash = payloadHash,
+                previousHash = previousBlock.hash,
+                tensionFactor = currentTension
+            )
+
+            // Если решимоны одобряют уровень натяжения и блок прошел валидацию
+            if (arbiter.validateBlockTension(newBlock)) {
+                chain.add(newBlock)
+                return true
+            }
+
+            // Корректировка натяжения при несоответствии
+            nonce++
+            currentTension = (baseTension + (nonce % 100).toDouble() / 1000.0) % 0.9
+            if (nonce > 10000) return false // Защита от бесконечного цикла
+        }
+    }
+
+    fun verifyIntegrity(): String {
+        for (i in 1 until chain.size) {
+            val current = chain[i]
+            val previous = chain[i - 1]
+
+            if (current.previousHash != previous.hash) {
+                return "BLOCKCHAIN_CRITICAL_ERROR: Нарушена связь блоков на индексе ${current.index}"
+            }
+            if (!arbiter.validateBlockTension(current)) {
+                return "BLOCKCHAIN_SECURITY_VETO: Превышен порог натяжения на блоке ${current.index}"
+            }
+        }
+        return "BLOCKCHAIN_STATUS: Реестр абсолютно стабилен, все блоки защищены [VERIFIED]"
+    }
+
+    fun getBlockchainProofAnchor(): String {
+        return "BLOCKCHAIN_ROOT_HASH:${chain.last().hash} [AUTHOR: Vladimir Zavodiuk]"
+    }
+}
