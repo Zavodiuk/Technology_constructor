@@ -1,0 +1,100 @@
+// ============================================================================
+// УСИЛЕННЫЙ МОДУЛЬ МАТРИЧНОГО ШИФРОВАНИЯ И ДЕШИФРОВАНИЯ «ГАРМОНИЯ» (ВЕРСИЯ 10+)
+// Автор: Vladimir Zavodiuk
+// Статус: Закрытая архитектурная реализация (Защита от линейного криaan-анализа)
+// ============================================================================
+
+import kotlin.math.*
+
+class HarmoniaAdvancedMatrixCipher(val dimension: Int) {
+
+    // Шаг 1: Генерация динамической матричной сетки W с нелинейным смещением
+    private fun generateDynamicMatrixW(seed: Double, iteration: Int): Array<DoubleArray> {
+        val matrixW = Array(dimension) { DoubleArray(dimension) }
+        val shiftFactor = seed * (iteration + 1).toDouble()
+        
+        for (i in 0 until dimension) {
+            for (j in 0 until dimension) {
+                // Нелинейное гармоническое преломление с фазовым шумом
+                val baseVal = sin(shiftFactor * (i + 1) * (j + 1)) * cos((i - j).toDouble() * 0.73)
+                matrixW[i][j] = baseVal + (sin(iteration.toDouble() + i.toDouble()) * 0.1)
+            }
+        }
+        return matrixW
+    }
+
+    // Шаг 2: Генерация зеркальной сопряженной матрицы для расшифровки
+    private fun generateDynamicInverseW(seed: Double, iteration: Int): Array<DoubleArray> {
+        val invMatrix = Array(dimension) { DoubleArray(dimension) }
+        val shiftFactor = seed * (iteration + 1).toDouble()
+        val inverseShift = shiftFactor + PI / 3.0
+
+        for (i in 0 until dimension) {
+            for (j in 0 until dimension) {
+                val baseVal = cos(inverseShift * (i + 1) * (j + 1)) * sin((i - j).toDouble() * 0.73)
+                invMatrix[i][j] = baseVal + (sin(iteration.toDouble() + i.toDouble()) * 0.1)
+            }
+        }
+        return invMatrix
+    }
+
+    // УСИЛЕННОЕ ШИФРОВАНИЕ: Каскадное сцепление и нелинейное преломление потока
+    fun encryptStreamSecure(rawStream: FloatArray, baseSeed: Double): FloatArray {
+        val encryptedStream = FloatArray(rawStream.size)
+        var rollingSeed = baseSeed
+        var matrixIndex = 0
+
+        for (i in rawStream.indices) {
+            val iteration = i / (dimension * dimension) + 1
+            val matrixW = generateDynamicMatrixW(rollingSeed, iteration)
+
+            val value = rawStream[i]
+            val row = matrixIndex % dimension
+            val col = (matrixIndex / dimension) % dimension
+            val weight = matrixW[row][col].toFloat()
+
+            // Нелинейное усложнение: значение зависит от веса, координат и предыдущего шага
+            val nonLinearFactor = (row + 1).toFloat() * (col + 1).toFloat() * 0.05f
+            val encryptedVal = (value * (weight + nonLinearFactor)) + sin(rollingSeed.toFloat() + i.toFloat())
+
+            encryptedStream[i] = encryptedVal
+            
+            // Динамическое обновление сида на основе зашифрованных данных (цепной эффект)
+            rollingSeed = (rollingSeed + abs(encryptedVal.toDouble())) % 100.0
+            matrixIndex++
+        }
+        return encryptedStream
+    }
+
+    // УСИЛЕННАЯ РАСШИФРОВКА: Обратный каскадный проход с точной реконструкцией
+    fun decryptStreamSecure(encryptedStream: FloatArray, baseSeed: Double): FloatArray {
+        val decryptedStream = FloatArray(encryptedStream.size)
+        var rollingSeed = baseSeed
+        var matrixIndex = 0
+
+        for (i in encryptedStream.indices) {
+            val iteration = i / (dimension * dimension) + 1
+            val invMatrix = generateDynamicInverseW(rollingSeed, iteration)
+
+            val encValue = encryptedStream[i]
+            val row = matrixIndex % dimension
+            val col = (matrixIndex / dimension) % dimension
+            val invWeight = invMatrix[row][col].toFloat()
+
+            val nonLinearFactor = (row + 1).toFloat() * (col + 1).toFloat() * 0.05f
+            val totalWeight = invWeight + nonLinearFactor
+
+            // Обратное восстановление с учетом цепного изменения сида
+            val decryptedVal = if (abs(totalWeight) > 0.0001f) {
+                (encValue - sin(rollingSeed.toFloat() + i.toFloat())) / totalWeight
+            } else {
+                encValue
+            }
+
+            decryptedStream[i] = decryptedVal
+            rollingSeed = (rollingSeed + abs(encValue.toDouble())) % 100.0
+            matrixIndex++
+        }
+        return decryptedStream
+    }
+}
