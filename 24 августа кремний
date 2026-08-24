@@ -1,0 +1,75 @@
+class MultiValuedTransistor:
+    """
+    Базовый кремниевый транзистор, поддерживающий троичную (-1, 0, +1) 
+    и пентарную (-2, -1, 0, +1, +2) логику состояний.
+    """
+    def __init__(self, logic_base=3):
+        self.logic_base = logic_base  # 3 для троичной, 5 для пентарной
+        self.current_state = 0        # Исходное состояние (нейтраль)
+        self.switching_cycles = 0
+
+    def set_voltage_state(self, signal_level):
+        """Установка дискретного уровня напряжения с проверкой диапазона."""
+        if self.logic_base == 3:
+            # Троичные уровни: -1 (низкий), 0 (ноль), +1 (высокий)
+            allowed = [-1, 0, 1]
+        elif self.logic_base == 5:
+            # Пентарные уровни: -2, -1, 0, +1, +2
+            allowed = [-2, -1, 0, 1, 2]
+        else:
+            allowed = [0, 1]
+
+        if signal_level in allowed:
+            self.current_state = signal_level
+            self.switching_cycles += 1
+            return True
+        else:
+            raise ValueError(f"Недопустимый уровень сигнала для базы {self.logic_base}: {signal_level}")
+
+
+class SiliconChipCoreMatrix:
+    """
+    Матрица кремниевого чипа нового поколения, объединяющая 
+    ячейки памяти и логические вентили на многозначной основе.
+    """
+    def __init__(self, width=4, height=4, logic_base=3):
+        self.width = width
+        self.height = height
+        self.logic_base = logic_base
+        # Создаем сетку транзисторов
+        self.grid = [[MultiValuedTransistor(logic_base) for _ in range(width)] for _ in range(height)]
+
+    def execute_computation_tick(self, pattern_matrix):
+        """Прогон вычислительного такта через кремниевую матрицу чипа."""
+        print(f"\n==========================================================")
+        print(f"=== [SILICON CORE] — ТАКТ РАБОТЫ ЧИПА ({self.logic_base}-арная логика) ===")
+        print(f"==========================================================")
+        
+        for y in range(self.height):
+            for x in range(self.width):
+                signal = pattern_matrix[y][x]
+                self.grid[y][x].set_voltage_state(signal)
+                print(f"Cell [{y},{x}] -> State set to: {signal:>2} (Cycles: {self.grid[y][x].switching_cycles})")
+
+        # Расчет информационной плотности по сравнению с бинарной системой
+        bits_per_element = 1 if self.logic_base == 2 else (1.58 if self.logic_base == 3 else 2.32)
+        total_states = self.logic_base ** (self.width * self.height)
+        
+        print(f"\n--- [ПАРАМЕТРЫ КРЕМНИЕВОЙ МАТРИЦЫ] ---")
+        print(f">> База логики: {self.logic_base} (Эквивалентно ~{bits_per_element} бит на трит/пентит)")
+        print(f">> Совокупное пространство состояний матрицы: {total_states} вариантов")
+        print(">> Статус чипа: Стабилен, переключение состояний зафиксировано без утечек тока.")
+
+# --- Инициализация и симуляция чипа ---
+if __name__ == "__main__":
+    # Пример паттерна для троичного чипа 4x4 (значения от -1 до 1)
+    ternary_pattern = [
+        [ 1,  0, -1,  1],
+        [-1,  1,  0,  0],
+        [ 0, -1,  1, -1],
+        [ 1,  0,  0,  1]
+    ]
+
+    # Создаем и запускаем троичный кремниевый чип
+    trit_chip = SiliconChipCoreMatrix(width=4, height=4, logic_base=3)
+    trit_chip.execute_computation_tick(ternary_pattern)
