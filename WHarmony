@@ -1,0 +1,365 @@
+WHARMONY — UNIFIED W/V5 SOURCE BUNDLE
+AUTHOR: Vladimir Zavodiuk
+VERSION: 5.0
+STATUS: ACTIVE / PROTECTED / LOCK / RED_FLAG_ACTIVE
+
+IMPORTANT:
+The following source fragments are preserved in the formats and syntaxes in which they were supplied. No conversion into Python or another common language has been applied. The separators BEGIN_FILE and END_FILE are packaging markers for this unified GitHub block.
+
+=====================================================================
+BEGIN_FILE: MODULE_04_MULTI_VALUED_LOGIC/Ternary_Logic_v3.logic
+=====================================================================
+# ==========================================
+# COMPONENT: Ternary_Logic_v3.logic
+# MODULE: 04_MULTI_VALUED_LOGIC
+# STATUS: ACTIVE / PROTECTED (RED_FLAG_ACTIVE)
+# ==========================================
+
+[AXIOM_BASE]
+STATE_DOMAIN = {-1, 0, +1}
+NULL_STATE = 0
+NEG_POLARITY = -1
+POS_POLARITY = +1
+
+[OPERATORS]
+TRIPLET_NEGATION(x) := -x
+BALANCED_MIN(a, b) := sign(a) * min(|a|, |b|)
+BALANCED_MAX(a, b) := sign(a) * max(|a|, |b|)
+CONSENSUS_OP(a, b) := if a == b then a else 0
+
+[TRANSITION_MATRIX]
+# Input A x Input B -> Result
+#   -1    0   +1
+# -1  [-1,  -1,   0 ]
+#  0  [-1,   0,  +1 ]
+# +1  [ 0,  +1,  +1 ]
+EXECUTE_TERNARY_GATE(A, B) -> STATE_DOMAIN
+=====================================================================
+END_FILE: MODULE_04_MULTI_VALUED_LOGIC/Ternary_Logic_v3.logic
+=====================================================================
+
+=====================================================================
+BEGIN_FILE: MODULE_04_MULTI_VALUED_LOGIC/Pentary_Logic_v5.logic
+=====================================================================
+# =====================================================================
+# COMPONENT: Pentary_Logic_v5.logic
+# MODULE: 04_MULTI_VALUED_LOGIC
+# STATUS: ACTIVE / EXPANDED_VECTOR
+# =====================================================================
+
+[AXIOM_BASE]
+PENTARY_DOMAIN = {-2, -1, 0, +1, +2}
+DEEP_NEG = -2
+MOD_NEG = -1
+NEUTRAL = 0
+MOD_POS = +1
+DEEP_POS = +2
+
+[OPERATORS]
+PENT_SHIFT(val, delta) := clamp(val + delta, -2, +2)
+RESOLVE_CONFLICT(x, y) := median(x, y, 0)
+RESONANCE_CHECK(state_matrix) := sum(state_matrix) / length(state_matrix)
+
+[GATES]
+FLEXI_GATE(p1, p2) -> PENTARY_DOMAIN:
+    IF abs(p1 - p2) <= 1 THEN return CONSENSUS
+    ELSE return NEUTRAL
+=====================================================================
+END_FILE: MODULE_04_MULTI_VALUED_LOGIC/Pentary_Logic_v5.logic
+=====================================================================
+
+=====================================================================
+BEGIN_FILE: MODULE_05_MATRICES_AND_TENSORS/Ternary_Incidence_Matrix.mat
+=====================================================================
+% =====================================================================
+% COMPONENT: Ternary_Incidence_Matrix.mat
+% MODULE: 05_MATRICES_AND_TENSORS
+% STRUCTURE: A3 = N x L x T3
+% STATUS: ACTIVE / PROTECTED
+% =====================================================================
+
+[DIMENSIONS]
+NODES_N = 40
+LINKS_L = 120
+LOGIC_STATES = 3
+
+[MATRIX_INITIALIZATION]
+A3 = zeros(NODES_N, LINKS_L, LOGIC_STATES);
+
+% Populate baseline ternary incidence values {-1, 0, +1}
+FOR i = 1:NODES_N
+    FOR j = 1:LINKS_L
+        A3(i, j, 1) = -1; % Negative resistance vector
+        A3(i, j, 2) =  0; % Neutral propagation node
+        A3(i, j, 3) = +1; % Active synchronization vector
+    ENDFOR
+ENDFOR
+
+[CONSTRAINTS]
+NORM_CHECK = sum(abs(A3), [1 2 3]) <= MAX_CAPACITY_LIMIT
+=====================================================================
+END_FILE: MODULE_05_MATRICES_AND_TENSORS/Ternary_Incidence_Matrix.mat
+=====================================================================
+
+=====================================================================
+BEGIN_FILE: MODULE_05_MATRICES_AND_TENSORS/Pentary_State_Matrix.mat
+=====================================================================
+% =====================================================================
+% COMPONENT: Pentary_State_Matrix.mat
+% MODULE: 05_MATRICES_AND_TENSORS
+% STRUCTURE: P_Matrix [N x N x 5]
+% STATUS: ACTIVE / PROTECTED
+% =====================================================================
+
+[DIMENSIONS]
+STATE_LEVELS = 5
+GRID_SIZE = 40
+
+[MATRIX_DEFINITION]
+P_Matrix = zeros(GRID_SIZE, GRID_SIZE, STATE_LEVELS);
+
+ASSIGN_WEIGHTS(P_Matrix) -> {
+    P_Matrix(:,:,1) = CORE_OP_MINUS_2;
+    P_Matrix(:,:,2) = STABLE_MINUS_1;
+    P_Matrix(:,:,3) = EQUILIBRIUM_0;
+    P_Matrix(:,:,4) = STABLE_PLUS_1;
+    P_Matrix(:,:,5) = CORE_OP_PLUS_2;
+}
+
+[VERIFICATION]
+ASSERT(size(P_Matrix, 3) == STATE_LEVELS);
+CALCULATE_GLOBAL_STATE_VECTOR(P_Matrix);
+=====================================================================
+END_FILE: MODULE_05_MATRICES_AND_TENSORS/Pentary_State_Matrix.mat
+=====================================================================
+
+=====================================================================
+BEGIN_FILE: MODULE_05_MATRICES_AND_TENSORS/Tensor_Stress_Field.tensor
+=====================================================================
+# =====================================================================
+# COMPONENT: Tensor_Stress_Field.tensor
+# MODULE: 05_MATRICES_AND_TENSORS
+# IDENTIFIER: T_μν (Strategic Stress Field)
+# STATUS: ACTIVE / CRITICAL_MONITORING
+# =====================================================================
+
+[METRIC_TENSOR_DEFINITION]
+SIGNATURE = (+, -, -, -)
+COMPONENTS_RANK = 2
+DIMENSION = 4 # [Space_X, Space_Y, Time_T, Potential_P]
+METRIC_DETERMINANT_LIMIT = -1.0
+
+[STRESS_TENSOR_EQUATIONS]
+T_mu_nu(x, t) := D_mu(Potential_P) * D_nu(Sync_T) - g_mu_nu * LAGRANGIAN_HARMONY_DENSITY
+CRITICAL_STRESS_THRESHOLD = 0.895
+MAX_ALLOWABLE_GRADIENT = 1.618
+
+[TENSOR_COMPONENTS_MATRIX]
+# T_00: Temporal stress density
+# T_0i: Momentum flux vectors
+# T_ij: Spatial stress tensor (triadic shear components)
+T_00 = EVALUATE_TEMPORAL_DENSITY(Stream_Flow_Rate);
+T_11 = COMPUTE_SHEAR_STRESS(Node_Array_X);
+T_22 = COMPUTE_SHEAR_STRESS(Node_Array_Y);
+T_33 = COMPUTE_POTENTIAL_STRESS(Gateway_Buffers);
+
+[TRIGGER_CONDITIONS]
+IF T_mu_nu.MAX_EIGENVALUE() > CRITICAL_STRESS_THRESHOLD THEN
+    ENGAGE_LOCK_SHIELD = TRUE
+    ACTIVATION_FLAG = RED_FLAG_ACTIVE
+    EMIT_CRITICAL_LOG("TENSOR_STRESS_EXCEEDED_SAFE_LIMIT")
+ELSE
+    MAINTAIN_EQUILIBRIUM_FIELD = TRUE
+ENDIF
+
+[VERIFICATION_BLOCK]
+VALIDATE_TENSOR_SYMMETRY(T_mu_nu);
+CHECK_ENERGY_CONDITION(WEAK_ENERGY_CONDITION, STRONG_ENERGY_CONDITION);
+=====================================================================
+END_FILE: MODULE_05_MATRICES_AND_TENSORS/Tensor_Stress_Field.tensor
+=====================================================================
+
+=====================================================================
+BEGIN_FILE: MODULE_05_MATRICES_AND_TENSORS/Quantum_Superposition.qsys
+=====================================================================
+# =====================================================================
+# COMPONENT: Quantum_Superposition.qsys
+# MODULE: 05_MATRICES_AND_TENSORS
+# STATES: LOCK | RED_FLAG | EVOLUTION
+# STATUS: ACTIVE / PROTECTED
+# =====================================================================
+
+[SYSTEM_MODES]
+MODE_A = "LOCK"
+MODE_B = "RED_FLAG"
+MODE_C = "EVOLUTION"
+
+[SUPERPOSITION_VECTOR]
+PSI = alpha * |LOCK> + beta * |RED_FLAG> + gamma * |EVOLUTION>
+NORMALIZATION_CONDITION = abs(alpha)^2 + abs(beta)^2 + abs(gamma)^2 == 1.0
+
+[PROBABILITY_AMPLITUDES]
+ALPHA_INIT = 0.333
+BETA_INIT = 0.333
+GAMMA_INIT = 0.334
+
+[STATE_CONTROLLER_ROUTINE]
+FUNCTION EVALUATE_SUPERPOSITION(sensor_input) -> Target_Mode:
+    LOCAL_THREAT = sensor_input.threat_level
+    LOCAL_STABILITY = sensor_input.stable_flag
+    
+    IF LOCAL_THREAT > HIGH_THRESHOLD THEN
+        COLLAPSE_TO = |RED_FLAG>
+        ACTIVATION_FLAG = RED_FLAG_ACTIVE
+    ELSEIF LOCAL_STABILITY == TRUE THEN
+        COLLAPSE_TO = |EVOLUTION>
+    ELSE
+        COLLAPSE_TO = |LOCK>
+    ENDIF
+    
+    APPLY_WAVE_FUNCTION_COLLAPSE(COLLAPSE_TO)
+    RETURN COLLAPSE_TO
+END FUNCTION
+
+[VERIFICATION_BLOCK]
+ASSERT(NORMALIZATION_CONDITION == TRUE);
+LOG_SUPERPOSITION_STATE(PSI);
+=====================================================================
+END_FILE: MODULE_05_MATRICES_AND_TENSORS/Quantum_Superposition.qsys
+=====================================================================
+
+=====================================================================
+BEGIN_FILE: MODULE_07_MULTI_DIMENSIONAL_SYNTHESIS/Rassimon_Matrix.mat
+=====================================================================
+% =====================================================================
+% COMPONENT: Rassimon_Matrix.mat
+% MODULE: 07_MULTI_DIMENSIONAL_SYNTHESIS
+% PURPOSE: Parallel Cross-Contextual State Resolution
+% STATUS: ACTIVE / PROTECTED
+% =====================================================================
+
+[RASSIMON_INIT]
+PERSPECTIVE_AXES = 5
+CONFLICT_RESOLUTION_MODE = "BALANCED_MEDIAN"
+WEIGHT_DISTRIBUTION = "UNIFORM_TERNARY"
+
+[ROUTINE_RASSIMON_RESOLVE]
+FUNCTION RESOLVE_PARALLEL_STATES(Input_Perspectives_Tensor)
+    % Input dimensions: [Perspective_Axis x State_Vector x Time_T]
+    [Axes, States, TimeSteps] = SIZE(Input_Perspectives_Tensor);
+
+    RESOLVED_STATE_MATRIX = zeros(States, TimeSteps);
+    
+    FOR t = 1 : TimeSteps
+        FOR s = 1 : States
+            VECTOR_SLICE = Input_Perspectives_Tensor(:, s, t);
+            % Apply balanced ternary consensus across competing perspectives
+            MEDIAN_VAL = median(VECTOR_SLICE);
+            DIVERGENCE = var(VECTOR_SLICE);
+            
+            IF DIVERGENCE > CRITICAL_DIVERGENCE_LIMIT THEN
+                % Mark as state requiring protective lock
+                RESOLVED_STATE_MATRIX(s, t) = 0; % Neutral fallback
+                EMIT_WARNING("RASSIMON_CONFLICT_DIVERGENCE_HIGH");
+            ELSE
+                RESOLVED_STATE_MATRIX(s, t) = MEDIAN_VAL;
+            ENDIF
+        ENDFOR
+    ENDFOR
+    
+    RETURN RESOLVED_STATE_MATRIX
+END FUNCTION
+=====================================================================
+END_FILE: MODULE_07_MULTI_DIMENSIONAL_SYNTHESIS/Rassimon_Matrix.mat
+=====================================================================
+
+=====================================================================
+BEGIN_FILE: MODULE_07_SYNTHESIS_AND_TOPOLOGY/BUILD_LOMONOSOV_TREE
+=====================================================================
+# =====================================================================
+# SYSTEM: W-ARCHITECTURE (VERSION 5.0)
+# SUBSYSTEM: MODULE_07_SYNTHESIS_AND_TOPOLOGY
+# CLASSIFICATION: RESTRICTED / CORE ARCHITECTURE
+# STATUS: ACTIVE / PROTECTED
+# =====================================================================
+
+[SYNTHESIS_PARAMETERS]
+MAX_HIERARCHY_LEVELS = 7
+BRANCHING_FACTOR_BASE = 3
+TOPOLOGY_TYPE = "HYPERBOLIC_TRIADIC"
+
+[ALGORITHM_TREE_CONSTRUCTION]
+FUNCTION BUILD_LOMONOSOV_TREE(Root_Node, Depth) -> SubGraph:
+    IF Depth > MAX_HIERARCHY_LEVELS THEN
+        RETURN TERMINATE_BRANCH(Root_Node)
+    ENDIF
+    
+    LOCAL_BRANCH_SET = INITIALIZE_ARRAY(BRANCHING_FACTOR_BASE)
+    
+    FOR i = 1 TO BRANCHING_FACTOR_BASE DO
+        CHILD_NODE = CREATE_NODE(Root_Node.ID, i, DEPTH = Depth + 1)
+        CHILD_NODE.POLARITY = ASSIGN_TERNARY_POLARITY(i)
+        CHILD_NODE.METRIC_TENSOR = COMPUTE_LOCAL_TENSOR(Root_Node, CHILD_NODE)
+        
+        IF CHECK_STRESS_TENSOR(CHILD_NODE.METRIC_TENSOR) == SAFE THEN
+            LOCAL_BRANCH_SET[i] = BUILD_LOMONOSOV_TREE(CHILD_NODE, Depth + 1)
+        ELSE
+            LOCAL_BRANCH_SET[i] = ISOLATE_BRANCH_WITH_LOCK(CHILD_NODE)
+        ENDIF
+    ENDFOR
+    
+    RETURN INTEGRATE_BRANCHES(Root_Node, LOCAL_BRANCH_SET)
+END FUNCTION
+=====================================================================
+END_FILE: MODULE_07_SYNTHESIS_AND_TOPOLOGY/BUILD_LOMONOSOV_TREE
+=====================================================================
+
+=====================================================================
+BEGIN_PATCH: kernel/rhythm_core.kernel
+=====================================================================
+--- a/kernel/rhythm_core.kernel
++++ b/kernel/rhythm_core.kernel
+@@ -102,14 +102,18 @@
+-    CLOCK_TICK_RATE = STATIC_1024_HZ;
++    CLOCK_TICK_RATE = DYNAMIC_ADAPTIVE_PULSE_HZ;
++    RHYTHM_COEFFICIENT = EVALUATE_HARMONY_INDEX();
++    
+     IF RHYTHM_COEFFICIENT < TOLERANCE_LIMIT THEN
+-        TRIGGER_EVENT(SYSTEM_STUTTER);
++        APPLY_TRIADIC_ACCELERATION_PULSE();
++        CALIBRATE_NODE_TEMPO(ALL_NODES, RHYTHM_COEFFICIENT);
++        EMIT_LOG("RHYTHM_SYNCHRONIZED_SUCCESS");
+     ELSE
+         MAINTAIN_STABLE_FLOW();
+     ENDIF;
+=====================================================================
+END_PATCH: kernel/rhythm_core.kernel
+=====================================================================
+
+=====================================================================
+BEGIN_PATCH: security/gateway_guard.sec
+=====================================================================
+--- a/security/gateway_guard.sec
++++ b/security/gateway_guard.sec
+@@ -15,8 +15,14 @@
+-    GATEWAY_STATUS = STANDARD_PROXY;
++    GATEWAY_STATUS = ARMORED_TRIADIC_GATEWAY;
++    
+     ON_BUFFER_OVERFLOW() -> {
+-        DROP_CONNECTIONS();
++        ISOLATE_PERIMETER();
++        TRIGGER_RED_FLAG_ACTIVE = TRUE;
++        PRESERVE_ROOT_KERNEL();
++        ABORT_EXTERNAL_PARSING();
++        EMIT_LOG("GATEWAY_SHIELD_LOCKED_SUCCESS");
+     }
+=====================================================================
+END_PATCH: security/gateway_guard.sec
+=====================================================================
+
+=====================================================================
+END_WHARMONY_UNIFIED_SOURCE_BUNDLE
+=====================================================================
+
+PROVENANCE_STATUS:
+Ternary_Logic_v3.logic was reported as NOT_FOUND in the persistent source store. The material above is preserved supplied material and specification fragments. It is not independently authenticated as the original source repository.
