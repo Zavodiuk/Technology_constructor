@@ -1,0 +1,351 @@
+// HARMONY3 — PUBLIC GITHUB CODE/DOCUMENTATION FILE
+// Author: Vladimir Zavodiuk
+// Contact: +359877724745 | glovesandfactories@gmail.com
+// Copyright © 2026 Vladimir Zavodiuk. All Rights Reserved.
+// Date: 26 August 2026 / 26 августа 2026 года
+// The following documentation is embedded as comments for one-block copying.
+// Public examples are illustrative and do not contain the proprietary core.
+// # Harmony3
+// **Author:** Vladimir Zavodiuk  
+// **Contact:** +359877724745 · glovesandfactories@gmail.com  
+// **Copyright:** © 2026 Vladimir Zavodiuk. All Rights Reserved.  
+// **Date:** 26 August 2026  
+// **Дата фиксации:** 26 августа 2026 года  
+// > This repository description is public documentation. It does not grant permission to copy, modify, redistribute, or commercially use the proprietary Harmony implementation.
+// ## Публичное описание
+// Harmony3 — рабочая архитектура ядра искусственного интеллекта и его управляющих слоёв.
+// Она предназначена для управления маршрутом AI-задачи.
+// Harmony3 не заставляет каждый запрос проходить одинаковую глубину обработки.
+// Она сначала оценивает тип, сложность, риск и неопределённость.
+// Затем выбирает минимально достаточный путь.
+// Простые задачи получают быстрый маршрут.
+// Сложные задачи получают последовательное усиление.
+// Критические задачи переходят в контрольный режим.
+// ## Главная формула
+// > Harmony3 — ядро искусственного интеллекта и его управляющие слои против обычного ИИ.
+// Формулировка описывает архитектурную роль системы.
+// Она не является заявлением о превосходстве над каждым внешним AI-сервисом.
+// Конкретное сравнение должно проводиться на одинаковом корпусе и одинаковой методике.
+// ## Ступенчатая глубина
+// Публичная модель Harmony3 состоит из нескольких уровней.
+// Первый уровень — Троичная логика.
+// Она предназначена для быстрого предварительного решения.
+// Второй уровень — Пентарная логика.
+// Она добавляет более тонкую градацию состояния.
+// Третий уровень — Троичные матрицы.
+// Они описывают структурные связи.
+// Четвёртый уровень — Пентарные матрицы.
+// Они расширяют состояние и конфигурацию связей.
+// Пятый уровень — Тензорные поля.
+// Они обозначают глубокий контекст и многопараметрическое состояние.
+// Публичное описание не раскрывает конкретные формулы и пороги переходов.
+// ## Kotlin-граф
+// Kotlin-граф — публичное название быстрого навигатора Harmony3.
+// Он помогает выбирать переход между уровнями.
+// Он должен уменьшать лишние проходы через тяжёлые контуры.
+// Он особенно важен для ветвлений и локального управляющего hot path.
+// Kotlin используется там, где полезны типизированные состояния и быстрые переходы.
+// Другие языки могут оставаться в аналитических или прикладных частях.
+// ## Два оркестратора
+// Harmony3 использует образ двух внутренних дирижёров.
+// Первый оркестратор работает с входным контекстом.
+// Он определяет тип задачи и предварительную сложность.
+// Второй оркестратор выбирает внутренние ресурсы Harmony Core.
+// Он решает, какие уровни следует подключить.
+// Имена и границы внутренних модулей могут изменяться.
+// Публичная схема показывает только роль разделения ответственности.
+// ## Секретариат
+// Секретариат подготавливает входной поток.
+// Это образ очистки, классификации и удаления служебного шума.
+// Он не является самостоятельным AI-ответчиком.
+// Он готовит данные к дальнейшему решению.
+// Историческое название сохранено как часть языка проекта.
+// Конкретные правила очистки не публикуются.
+// ## Рашомон
+// Рашомон обозначает сравнение нескольких перспектив.
+// Он помогает заметить расхождения между оценками.
+// Расхождение может повысить глубину проверки.
+// Triple Rashomon использует образ Директора, Сценариста и Оператора.
+// Директор отвечает за направление.
+// Сценарист отвечает за связность.
+// Оператор отвечает за практическую проверку выбранного маршрута.
+// Эта тройка является публичной метафорой консенсуса.
+// Она не раскрывает внутренние веса или реализацию.
+// ## Pre-BXOS и BXOS
+// Pre-BXOS — контрольный пост перед выпуском результата.
+// BXOS — публичное название финальной контрольной границы.
+// Результат может пройти.
+// Результат может быть удержан.
+// Результат может быть заблокирован.
+// Harmony3 сохраняет simulation-only политику.
+// Внешнее исполнение не является частью этого публичного контура.
+// ## Принцип безопасности
+// Система предпочитает удержание сомнительного состояния автоматическому разрешению.
+// Критический маршрут не должен маскироваться под быстрый.
+// Неподтверждённое состояние не считается доказанным.
+// Simulation-only режим отделяет исследование от реального действия.
+// Аудит должен фиксировать маршрут и итоговый статус.
+// ## Benchmark-подход
+// Harmony3 проверяется на воспроизводимых фиксированных сценариях.
+// Измеряются локальная задержка, распределение маршрутов и контрольные статусы.
+// Отдельно оцениваются быстрый путь и полный управляющий проход.
+// Презентационные ориентиры старых версий не считаются автоматически идентичным экспериментом.
+// Публичные цифры должны сопровождаться методологическими ограничениями.
+// ## Практическое назначение
+// Harmony3 может использоваться как внутреннее ядро управления AI-потоком.
+// Она подходит для предварительной классификации задач.
+// Она подходит для адаптивной глубины анализа.
+// Она подходит для структурного контроля и simulation-only проверки.
+// Она не является самостоятельной гарантией качества внешней модели.
+// ## Исторические образы
+// В языке проекта могут использоваться Дерево Ломоносова и спираль опыта.
+// Они обозначают накопление и ветвление контекста.
+// Могут использоваться образы студии, офиса и кукловода.
+// Они помогают объяснять архитектуру людям.
+// Они не являются обязательными именами программных интерфейсов.
+// ## Публичная граница
+// Этот файл не содержит исходный код Harmony3.
+// Он не содержит полные исторические W-версии.
+// Он не содержит внутренние пороги маршрутизации.
+// Он не содержит веса консенсуса.
+// Он не содержит закрытые тестовые данные.
+// Он не содержит прикладные решения из Applied Solutions.
+// Он не содержит секреты интеграции.
+// ## Статус
+// Harmony3 — закреплённая рабочая версия проекта.
+// Её полный архив хранится отдельно.
+// Публичный GitHub-файл является кратким описанием архитектурной идеи.
+// Перед публикацией необходимо проверить, что в репозиторий попали только разрешённые материалы.
+// ## Лицензия
+// Лицензия, авторство и права публикации определяются владельцем проекта.
+// Этот текст сам по себе не лицензирует исходный код.
+// ## Краткий итог
+// Harmony3 объединяет адаптивную маршрутизацию, Kotlin-граф и ступенчатую глубину.
+// Она связывает Троичную и Пентарную логику с матрицами и тензорными полями.
+// Она использует Секретариат, Рашомон и BXOS как понятные публичные образы.
+// Она остаётся simulation-only архитектурой ядра и управляющих слоёв AI.
+// ## Публичный словарь
+// | Термин | Публичный смысл |
+// |---|---|
+// | Fast-Path | Минимально достаточный маршрут |
+// | Deep-Path | Углублённый маршрут проверки |
+// | Секретариат | Подготовка входного потока |
+// | Рашомон | Сравнение перспектив |
+// | BXOS | Контрольная граница выпуска |
+// | Дерево Ломоносова | Образ ветвления опыта |
+// | Тензорное поле | Образ многопараметрического контекста |
+// | LOCK | Удержание небезопасного состояния |
+// ## Правила чтения
+// Названия следует понимать как инженерные метафоры.
+// Они помогают обсуждать архитектуру без публикации исходной реализации.
+// Публичный термин не означает наличие одноимённого открытого класса.
+// Публичный термин не фиксирует внутреннюю структуру данных.
+// Публичный термин не раскрывает порядок вычислений.
+// Публичный термин не гарантирует одинаковое поведение во всех интеграциях.
+// Каждый производственный сценарий должен иметь собственные тесты.
+// Каждая интеграция должна иметь отдельный контроль доступа.
+// Любой внешний исполнитель должен быть отключаемым.
+// Симуляция должна оставаться отделённой от реального действия.
+// ## Ожидаемый результат
+// Система должна делать маршрут задачи наблюдаемым.
+// Она должна объяснять выбор быстрого или глубокого пути.
+// Она должна показывать переход в контрольный статус.
+// Она должна сохранять возможность повторной проверки.
+// Она должна позволять заменить внешний AI-компонент.
+// Она должна оставаться компактной основой для последующих версий.
+// ## Ответственность интегратора
+// Интегратор отвечает за границы доступа.
+// Интегратор отвечает за журналы и контроль данных.
+// Интегратор отвечает за правовые ограничения применения.
+// Harmony сама по себе не является регулятором.
+// ## Финальная формулировка
+// Публичное описание показывает направление проекта.
+// Полная реализация сохраняется в защищённом архиве.
+// ## Public code fragment
+// The following code is a non-proprietary example of staged routing.
+// It is documentation code, not the Harmony3 implementation.
+// 
+// enum class Depth { FAST, STRUCTURED, DEEP }
+// data class RouteDecision(
+//     val depth: Depth,
+//     val simulationOnly: Boolean,
+//     val reason: String
+// )
+// fun chooseDepth(complexity: Int): RouteDecision {
+//     val depth = when {
+//         complexity < 3 -> Depth.FAST
+//         complexity < 7 -> Depth.STRUCTURED
+//         else -> Depth.DEEP
+//     }
+//     return RouteDecision(depth, true, "public demonstration")
+// }
+// 
+// The values in this sample are illustrative and are not Harmony3 thresholds.
+// 
+// def bxos_preview(status: str) -> dict:
+//     return {"status": status, "external_execution": False}
+// 
+// No proprietary weights, prompts, routing tables, or closed modules are included.
+// 
+// ## Authorship and provenance
+// 
+// This Harmony documentation and the associated architecture descriptions were authored by Vladimir Zavodiuk.
+// 
+// The names Harmony2, Harmony3 and Harmony4.1 Fixed Harmony identify distinct development milestones.
+// 
+// The historical names used in this project are part of the author’s conceptual vocabulary.
+// 
+// They may include Secretariat, Rashomon, Triple Rashomon, Lomonosov Tree, Director, Screenwriter, Operator, Puppeteer and BXOS.
+// 
+// These names are used to describe responsibilities, relationships or explanatory metaphors.
+// 
+// They do not grant permission to reproduce the protected implementation.
+// 
+// They do not constitute a transfer of ownership.
+// 
+// They do not constitute an open-source license.
+// 
+// ## Copyright notice
+// 
+// Copyright © 2026 Vladimir Zavodiuk.
+// 
+// All Rights Reserved.
+// 
+// No permission is granted to copy, modify, merge, publish, distribute, sublicense, sell, or create derivative works from the proprietary Harmony implementation.
+// 
+// No permission is granted to use the architecture, documentation, naming system, or code fragments for a competing commercial product without written authorization.
+// 
+// The contact details below are supplied for rights, licensing and partnership enquiries.
+// 
+// **Rights holder:** Vladimir Zavodiuk
+// 
+// **Phone:** +359877724745
+// 
+// **Email:** glovesandfactories@gmail.com
+// 
+// ## Demonstration-code policy
+// 
+// Code blocks marked as public examples are illustrative only.
+// 
+// They show naming, data-shape or control-flow concepts.
+// 
+// They are not extracts from the protected core.
+// 
+// They do not reproduce internal algorithms.
+// 
+// They do not contain production routing tables.
+// 
+// They do not contain private prompts.
+// 
+// They do not contain model weights.
+// 
+// They do not contain confidential thresholds.
+// 
+// They do not contain private keys or credentials.
+// 
+// They do not imply permission to reconstruct the protected system.
+// 
+// A reader may study the examples as documentation.
+// 
+// Any other use requires written permission from the rights holder.
+// 
+// ## Recommended repository layout
+// 
+// A public repository should contain only the approved README, public examples and explicitly released assets.
+// 
+// The complete fixed archive should be stored separately.
+// 
+// Private benchmarks should remain outside the public repository.
+// 
+// Internal manifests should be published only when the author approves them.
+// 
+// Credentials, tokens, private endpoints and deployment secrets must never be committed.
+// 
+// Experimental branches should be clearly separated from Fixed releases.
+// 
+// Applied solutions should not be mixed with the core architecture unless explicitly approved.
+// 
+// ## Suggested GitHub attribution file
+// 
+// The following text may be placed in `AUTHORS.md` or `NOTICE.md`.
+// 
+// 
+// Harmony AI Core Series
+// 
+// Author and rights holder:
+// Vladimir Zavodiuk
+// 
+// Contact:
+// +359877724745
+// glovesandfactories@gmail.com
+// 
+// Copyright © 2026 Vladimir Zavodiuk.
+// All Rights Reserved.
+// 
+// The Harmony implementation and architecture are proprietary.
+// Public documentation and examples do not grant a license to use,
+// copy, modify, redistribute, or commercially exploit the protected work.
+// 
+// 
+// ## Suggested repository disclaimer
+// 
+// The following text may be placed in the root `README.md`.
+// 
+// 
+// This repository contains public documentation and selected demonstration
+// examples only. It does not contain the complete Harmony source code.
+// All rights are reserved by Vladimir Zavodiuk.
+// For licensing or authorized technical access, contact:
+// +359877724745
+// glovesandfactories@gmail.com
+// 
+// 
+// ## Publication checklist
+// 
+// Before publishing, inspect the complete commit contents.
+// 
+// Confirm that only approved files are included.
+// 
+// Search for private keys and access tokens.
+// 
+// Search for internal hostnames and unpublished endpoints.
+// 
+// Search for weights, thresholds and confidential benchmark inputs.
+// 
+// Confirm that all public code blocks are labelled as examples.
+// 
+// Confirm that the author and copyright notice appear in the repository root.
+// 
+// Tag the approved public snapshot after review.
+// 
+// Keep the corresponding private archive immutable.
+// 
+// Record the publication date and commit identifier.
+// 
+// ## Contact and licensing
+// 
+// Requests for commercial use, integration, licensing or authorized source access should be sent to the rights holder.
+// 
+// The contact channel is `glovesandfactories@gmail.com`.
+// 
+// The telephone contact is `+359877724745`.
+// 
+// No response to a public README should be interpreted as implied permission.
+// 
+// No public code fragment should be interpreted as a license for the proprietary core.
+// 
+// ## Final rights statement
+// 
+// Harmony is presented publicly to explain a research direction and selected engineering principles.
+// 
+// The public presentation is intentionally narrower than the complete protected work.
+// 
+// All rights in the proprietary architecture, implementation, naming system and unpublished materials are reserved.
+// 
+// Copyright © 2026 Vladimir Zavodiuk. All Rights Reserved.
+
+enum class Harmony3Depth { FAST, STRUCTURED, DEEP }
+data class Harmony3Decision(val depth: Harmony3Depth, val simulationOnly: Boolean = true)
+fun harmony3Preview(complexity: Int): Harmony3Decision {
+    val depth = when { complexity < 3 -> Harmony3Depth.FAST; complexity < 7 -> Harmony3Depth.STRUCTURED; else -> Harmony3Depth.DEEP }
+    return Harmony3Decision(depth
