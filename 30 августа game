@@ -1,0 +1,119 @@
+"""
+SYSTEM DUMP: BXOS COGNITIVE GAME LAYER (BLOCK GAME)
+AUTHOR: Vladimir Zavodyuk
+LOCATION: Varna, Bulgaria
+DESCRIPTION: Специализированный блок моделирования нестандартных логических сред:
+             Деревья Ломоносова, Многомерные Кубики Рубика и Агенты "Пьяные Расимоны".
+"""
+
+import numpy as np
+
+class LomonosovTree:
+    """
+    Деревья Ломоносова.
+    В отличие от бинарных деревьев, каждый узел ветвится на основе 
+    симметричного пентарного исхода {-2, -1, 0, 1, 2}.
+    """
+    def __init__(self, depth=3):
+        self.depth = depth
+        print(f"[GAME] Выращено Дерево Ломоносова с глубиной {depth} и пентарным ветвлением.")
+
+    def evaluate_path(self, pentayt_vector):
+        """Проход суждения по ветвям дерева на основе фаз пентайта"""
+        path_summary = 0
+        for step in pentayt_vector:
+            # Каждый разряд пентайта определяет вектор поворота на развилке дерева
+            path_summary += step
+        return path_summary
+
+
+class PentaryRubikCube:
+    """
+    Кубик Рубика в пространстве BXOS.
+    Представляет собой трехмерный тензор (матричный ансамбль), 
+    где грани вращаются через умножение на инверсные пентарные операторы.
+    """
+    def __init__(self):
+        # Куб 3x3x3, заполненный базовыми троично-пентарными смыслами
+        self.state = np.random.choice([-1, 0, 1], size=(3, 3, 3))
+        print("[GAME] Инициализирован логический Кубик Рубика в пространстве BXOS.")
+
+    def rotate_layer(self, axis, layer_index, pentary_weight):
+        """
+        Вращение грани куба. 
+        Вес пентарной матрицы (±2) задает силу трансформации и сдвига фаз.
+        """
+        if axis == 0:
+            self.state[layer_index, :, :] = np.rot90(self.state[layer_index, :, :], k=pentary_weight)
+        elif axis == 1:
+            self.state[:, layer_index, :] = np.rot90(self.state[:, layer_index, :], k=pentary_weight)
+        
+        # Накладываем функцию сатурации BXOS при экстремальном кручении
+        self.state = np.clip(self.state, -2, 2)
+        print(f"[GAME] Поворот оси {axis} на слое {layer_index} с пентарным импульсом {pentary_weight}.")
+
+
+class DrunkenRashomon:
+    """
+    Пьяные Расимоны.
+    Агенты, блуждающие по пентарной матрице. Моделируют множественность истины.
+    Их логика "пьяна", так как шаг определяется стохастическим резонансом знаков.
+    """
+    def __init__(self, agent_id):
+        self.id = agent_id
+        self.position = [0, 0]
+        self.subjective_truth_trace = []
+
+    def walk_step(self, pentary_matrix):
+        """Один шаг блуждания Расимона по матрице суждений"""
+        rows, cols = pentary_matrix.shape
+        r, c = self.position
+        
+        # Текущее значение матрицы в точке нахождения агента
+        current_weight = pentary_matrix[r, c]
+        self.subjective_truth_trace.append(current_weight)
+        
+        # "Пьяный" сдвиг позиции: агент выбирает направление на основе знака веса
+        if current_weight > 0:
+            # Движение вперед/вправо при одобрении
+            self.position[0] = (r + 1) % rows
+        elif current_weight < 0:
+            # Откат назад при торможении системы
+            self.position[1] = (c + 1) % cols
+        else:
+            # Хаотичный шаг в нейтральном состоянии (0)
+            self.position[0] = (r - 1) % rows
+            
+        print(f"[RASHOMON {self.id}] Переместился в координаты {self.position}. Внутренняя истина: {current_weight}")
+
+
+# --- ТОЧКА ЗАПУСКА БЛОКА GAME ---
+if __name__ == "__main__":
+    print("=== ЗАПУСК ВЫЧИСЛИТЕЛЬНОЙ СРЕДЫ 'GAME' В BXOS ===")
+    
+    # 1. Тестируем Дерево Ломоносова
+    тестовый_пентайт = [2, -1, 0, 1, -2]
+    tree = LomonosovTree(depth=5)
+    decision = tree.evaluate_path(тестовый_пентайт)
+    print(f"[РЕЗУЛЬТАТ ДЕРЕВА]: Интегральный итог ветвления = {decision}\n")
+    
+    # 2. Тестируем Кубик Рубика
+    cube = PentaryRubikCube()
+    cube.rotate_layer(axis=0, layer_index=1, pentary_weight=2) # Сильный пентарный поворот
+    print(f"[СОСТОЯНИЕ КУБА (Срез)]:\n{cube.state[1, :, :]}\n")
+    
+    # 3. Тестируем Пьяных Расимонов
+    # Создаем игровое поле из пентарной матрицы
+    игровое_поле = np.array([
+        [ 2, -1,  0],
+        [-2,  1,  2],
+        [ 0, -2, -1]
+    ])
+    
+    расимон_1 = DrunkenRashomon(agent_id="Акира")
+    print("Старт блуждания агента Расимона:")
+    for такт in range(3):
+        расимон_1.walk_step(игровое_поле)
+        
+    print(f"\n[ИСТОРИЯ СУЖДЕНИЙ РАСИМОНА]: {расимон_1.subjective_truth_trace}")
+    print("=== БЛОК GAME УСПЕШНО СВЕРНУТ ===")
