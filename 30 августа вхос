@@ -1,0 +1,208 @@
+"""
+================================================================================
+                    OPERATING SYSTEM: BXOS (БИКС ОС)
+================================================================================
+AUTHOR: Vladimir Zavodyuk
+LOCATION: Varna, Bulgaria
+CORE ARCHITECTURE: Многоуровневая система суждений (от Троичного к Пентарному)
+================================================================================
+"""
+
+import numpy as np
+
+# ------------------------------------------------------------------------------
+# СЛОЙ 1 и 4: Базовые алфавиты и пространства состояний
+# ------------------------------------------------------------------------------
+TERNARY_SPACE = {-1, 0, 1}
+PENTARY_SPACE = {-2, -1, 0, 1, 2}
+
+
+# ------------------------------------------------------------------------------
+# СЛОЙ 2 и 5: Управление памятью и дескрипторами контекста
+# ------------------------------------------------------------------------------
+class BXOSContextDescriptor:
+    """Дескриптор контекста (Трайт / Пентайт). Хранит вектор состояния ядра."""
+    def __init__(self, size=5):
+        self.size = size
+        self.mode = "T"  # Текущий режим ядра: 'T' (Троичный) или 'P' (Пентарный)
+        self.register = np.zeros(size, dtype=int)
+        self.history = []
+
+    def switch_mode(self, target_mode, data):
+        """Алгоритм переключения контекста (Context Switch) на лету"""
+        self.mode = target_mode
+        if target_mode == "T":
+            # Принудительное сжатие в рамки брусенцовского троичного базиса
+            self.register = np.clip(np.array(data, dtype=int), -1, 1)
+        else:
+            # Расширение до пентарного базиса нижнего слоя
+            self.register = np.clip(np.array(data, dtype=int), -2, 2)
+        
+        self.history.append(target_mode)
+        print(f"[BXOS SWITCH] Переключение в {target_mode}-Mode. Регистр: {self.register}")
+
+
+# ------------------------------------------------------------------------------
+# СЛОЙ 4: Модуль расширенной пентарной арифметики
+# ------------------------------------------------------------------------------
+class PentaryArithmetic:
+    """Математические операции нижнего слоя с кольцевыми переносами по базе 5"""
+    
+    @staticmethod
+    def add_digits(a, b, carry_in=0):
+        """Сложение разрядов с петлей переполнения: a + b + carry_in = sum + 5*carry_out"""
+        raw_sum = a + b + carry_in
+        if raw_sum > 2:
+            return (raw_sum - 5), 1
+        elif raw_sum < -2:
+            return (raw_sum + 5), -1
+        return raw_sum, 0
+
+    @classmethod
+    def add_vectors(cls, vec_a, vec_b):
+        """Поразрядное сложение двух пентайтов с распространением переноса"""
+        size = len(vec_a)
+        result = np.zeros(size, dtype=int)
+        carry = 0
+        for i in reversed(range(size)):
+            sum_digit, carry = cls.add_digits(vec_a[i], vec_b[i], carry)
+            result[i] = sum_digit
+        return result, carry
+
+
+# ------------------------------------------------------------------------------
+# СЛОЙ 3 и 6: Высшие матричные операторы трансформации
+# ------------------------------------------------------------------------------
+class PentaryMatrixOperator:
+    """Пентарная матрица связей суждений БИКС ОС"""
+    def __init__(self, matrix_data):
+        self.matrix = np.clip(np.array(matrix_data, dtype=int), -2, 2)
+        self.rows, self.cols = self.matrix.shape
+
+    @staticmethod
+    def sat_function(value):
+        """Нелинейная функция насыщения BXOS sat(x) с порогом доминанты"""
+        if value > 2:  return 2, True
+        if value < -2: return -2, True
+        return value, False
+
+    def transform(self, input_vector):
+        """Умножение вектора на матрицу с использованием фазового резонанса знаков"""
+        output = np.zeros(self.rows, dtype=int)
+        any_overflow = False
+        
+        for i in range(self.rows):
+            # Поразрядный резонанс (умножение знаков фаз) и кумулятивное накопление
+            raw_accumulation = np.dot(input_vector, self.matrix[i, :])
+            final_digit, overflow = self.sat_function(raw_accumulation)
+            output[i] = final_digit
+            if overflow:
+                any_overflow = True
+        return output, any_overflow
+
+
+# ------------------------------------------------------------------------------
+# ВЕРХНИЙ УРОВЕНЬ: Мета-анализатор и оркестрация вычислений
+# ------------------------------------------------------------------------------
+class BXOSMetaAnalyzer:
+    """Входной ценз задач операционной системы"""
+    @staticmethod
+    def analyze(matrix_task):
+        max_val = np.max(np.abs(matrix_task))
+        # Если в условиях задачи изначально есть критические веса ±2
+        if max_val >= 2:
+            return "HIGH_ENTROPY"
+        # Если структура плоская и веса не превышают троичный базис
+        return "LOW_ENTROPY"
+
+
+class BXOSCore:
+    """Главное вычислительное ядро операционной системы BXOS"""
+    def __init__(self, size=5):
+        self.size = size
+        self.context = BXOSContextDescriptor(size=size)
+
+    def short_orchestrator(self, task_vector, complexity):
+        """КОРОТКИЙ ОРКЕСТРАТОР: Статический роутинг простых и линейных задач"""
+        print(f"\n[ORCHESTRATOR] Активирован КОРОТКИЙ оркестратор. Тип: {complexity}")
+        if complexity == "LOW_ENTROPY":
+            self.context.switch_mode("T", task_vector)
+            print("[BXOS EXEC] Задача статически решена на экономичном Троичном слое.")
+        else:
+            self.context.switch_mode("P", task_vector)
+            print("[BXOS EXEC] Задача линейна, но выполнена в стабильном Пентарном базисе.")
+        return self.context.register
+
+    def long_orchestrator(self, complex_matrix):
+        """ДЛИННЫЙ ОРКЕСТРАТОР: Динамический когнитивный цикл суждений"""
+        print(f"\n[ORCHESTRATOR] Активирован ДЛИННЫЙ оркестратор (Высокая сложность задач)")
+        
+        # Шаг 1: Старт вычислений в экономном троичном T-Mode
+        print("[STAGE 1] Старт логического синтеза в троичном базисе...")
+        self.context.switch_mode("T", np.ones(self.size, dtype=int)) # Инициализация единичным трайтом
+        
+        # Шаг 2: Выполнение каскада и оценка промежуточного состояния суждения
+        operator = PentaryMatrixOperator(complex_matrix)
+        provisional_result, overflow_detected = operator.transform(self.context.register)
+        
+        print(f"[MONITOR] Промежуточный вектор рассуждений: {provisional_result}")
+        
+        # Шаг 3: Проверка лимитов троичного ядра (Мониторинг переполнения)
+        if overflow_detected or np.max(np.abs(provisional_result)) > 1:
+            print("[STAGE 2] Внимание! Троичный слой перегружен парадоксами. Запуск КВАНТОВОГО РАСШИРЕНИЯ.")
+            
+            # ШАГ 4: Context Switch в Пентарный P-Mode (Нижний слой)
+            self.context.switch_mode("P", provisional_result)
+            
+            # ШАГ 5: Разрешение противоречий за счет силовых весов ±2 и фазового резонанса
+            refined_result, _ = operator.transform(self.context.register)
+            self.context.switch_mode("P", refined_result)
+            
+            # ШАГ 6: Сжатие и релиз контекста обратно в троичное ядро
+            print("[STAGE 3] Противоречия устранены. Обратное сжатие вектора суждений (P -> T).")
+            final_troits = np.clip(self.context.register, -1, 1)
+            
+            # Генерация скрытых системных флагов важности для мета-анализатора
+            meta_flags = [f"DOMINANT_PROJECTION_AT_{i}" for i, v in enumerate(self.context.register) if abs(v) == 2]
+            print(f"[BXOS META FLAGS] Сгенерированы маркеры важности: {meta_flags}")
+            
+            self.context.switch_mode("T", final_troits)
+        else:
+            print("[STAGE 2] Переполнения не обнаружено. Задача завершена в T-Mode.")
+            self.context.switch_mode("T", provisional_result)
+            
+        print("--- ДИНАМИЧЕСКИЙ ЦИКЛ BXOS ЗАВЕРШЕН ---")
+        return self.context.register
+
+
+# ==============================================================================
+# ТОЧКА КОМПИЛЯЦИИ И ЗАПУСКА ПОЛНОЙ СТРУКТУРЫ BXOS
+# ==============================================================================
+if __name__ == "__main__":
+    # Инициализируем ядро операционной системы на разрядность слова = 5
+    bxos_kernel = BXOSCore(size=5)
+    
+    # --------------------------------------------------------------------------
+    # СЦЕНАРИЙ 1: Поток легких задач (Короткий Оркестратор)
+    # --------------------------------------------------------------------------
+    simple_task = np.array([1, 0, -1, 0, 1])
+    complexity_type = BXOSMetaAnalyzer.analyze(simple_task)
+    bxos_kernel.short_orchestrator(simple_task, complexity_type)
+    
+    print("\n" + "="*80)
+    
+    # --------------------------------------------------------------------------
+    # СЦЕНАРИЙ 2: Поток сложных взаимосвязанных суждений (Длинный Оркестратор)
+    # --------------------------------------------------------------------------
+    # В этой матрице Уровня 6 скрыты экстремальные веса ±2 (силовые центры)
+    complex_brain_matrix = [
+        [ 1,  0,  2, -1,  0],
+        [ 0, -2,  1,  0,  1],
+        [ 1,  1,  0,  2, -2],
+        [-1,  0,  1,  1,  0],
+        [ 2, -1,  0,  0,  1]
+    ]
+    
+    final_judgment = bxos_kernel.long_orchestrator(complex_brain_matrix)
+    print(f"\n[ИТОГОВОЕ СИНТЕЗИРОВАННОЕ СУЖДЕНИЕ BXOS]: {final_judgment}")
+    print(f"[ПОЛНЫЙ ТРЕК КОНТЕКСТА ОС]: {' -> '.join(bxos_kernel.context.history)}")
