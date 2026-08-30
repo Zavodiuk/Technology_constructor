@@ -1,0 +1,102 @@
+"""
+SYSTEM DUMP: BXOS MATRIX LAYER (LEVEL 6 / PENTARY MATRIX OPERATOR)
+AUTHOR: Vladimir Zavodyuk
+LOCATION: Varna, Bulgaria
+DESCRIPTION: Реализация пентарного матричного оператора для многомерных суждений.
+             Включает функции симметричного насыщения (sat) и фазового резонанса.
+"""
+
+import numpy as np
+
+class PentaryMatrixOperator:
+    """Высший оператор трансформации полей суждений нижнего слоя BXOS"""
+    
+    def __init__(self, rows, cols):
+        self.rows = rows
+        self.cols = cols
+        # Инициализируем матрицу связей ядра BXOS в симметричном базисе
+        self.matrix = np.zeros((rows, cols), dtype=int)
+
+    def load_matrix_data(self, data):
+        """Загрузка структуры связей. Значения строго валидируются по базису {-2..2}"""
+        validated_data = np.clip(np.array(data, dtype=int), -2, 2)
+        if validated_data.shape == (self.rows, self.cols):
+            self.matrix = validated_data
+            print(f"[MATRIX_LOAD] Пентарная матрица {self.rows}x{self.cols} успешно развернута в ядре.")
+        else:
+            raise ValueError(
+                f"Несоответствие размерности. Ожидалось ({self.rows}, {self.cols}), получено {validated_data.shape}"
+            )
+
+    @staticmethod
+    def sat_function(value):
+        """
+        Нелинейная функция насыщения BXOS sat(x).
+        Удерживает энергию суждения в рамках симметричного пентарного базиса.
+        Возвращает: (значение разряда, флаг триггера переполнения)
+        """
+        if value > 2:
+            return 2, True  # Максимальное возбуждение / Сильное утверждение
+        if value < -2:
+            return -2, True # Глубокое торможение / Сильное отрицание
+        return value, False
+
+    def transform_pentayt(self, input_pentayt):
+        """
+        Матричное умножение вектора суждения (пентайта) на оператор связей.
+        Реализует поразрядный фазовый резонанс с одновременным контролем насыщения.
+        """
+        if len(input_pentayt) != self.cols:
+            raise ValueError("Размерность входного пентайта должна совпадать с количеством столбцов матрицы.")
+            
+        output_vector = np.zeros(self.rows, dtype=int)
+        global_overflow_flag = False
+        
+        print("\n[OPERATOR_EXEC] Запуск пентарной трансформации вектора суждений...")
+        
+        for i in range(self.rows):
+            raw_accumulation = 0
+            # Вычисление поразрядного резонанса для i-й строки матрицы
+            for j in range(self.cols):
+                x = input_pentayt[j]
+                w = self.matrix[i, j]
+                
+                # Правило фазового резонанса BXOS
+                resonance_product = x * w
+                raw_accumulation += resonance_product
+            
+            # Пропускаем накопленный сигнал через функцию насыщения
+            final_digit, overflow = self.sat_function(raw_accumulation)
+            output_vector[i] = final_digit
+            
+            if overflow:
+                global_overflow_flag = True
+                print(f"  -> Строка [{i}]: Обнаружена доминанта насыщения. Результат зафиксирован на {final_digit}")
+                
+        return output_vector, global_overflow_flag
+
+
+# --- ТОЧКА ТЕСТИРОВАНИЯ МАТРИЧНОГО ОПЕРАТОРА ---
+if __name__ == "__main__":
+    # Шаг 1: Создаем входной вектор-пентайт (например, результат работы троичного слоя)
+    # Содержит базовое утверждение, нейтраль и умеренное отрицание
+    входной_пентайт = np.array([1, 0, -1, 1, 0]) 
+    print(f"Входной вектор суждения (Пентайт): {входной_пентайт}")
+    
+    # Шаг 2: Инициализируем 3x5 пентарную матрицу (3 выхода, 5 входов)
+    # Задаем структуру сильных связей (±2) и умеренных троичных связей (±1)
+    структура_связей = [
+        [ 2,  1,  0, -1, -2],  # Строка 1: Сильный резонанс по краям
+        [ 0,  2,  2,  0, -1],  # Строка 2: Центрированные веса
+        [-2, -2,  1,  1,  2]   # Строка 3: Инвертированная силовая структура
+    ]
+    
+    operator = PentaryMatrixOperator(rows=3, cols=5)
+    operator.load_matrix_data(структура_связей)
+    
+    # Шаг 3: Выполняем трансформацию
+    выходной_пентайт, переполнение = operator.transform_pentayt(входной_пентайт)
+    
+    print("\n--- РЕЗУЛЬТАТ МАТРИЧНОГО ВЗАИМОДЕЙСТВИЯ BXOS ---")
+    print(f"Выходной трансформированный пентайт: {выходной_пентайт}")
+    print(f"Сигнал переполнения для Длинного Оркестратора: {переполнение}")
