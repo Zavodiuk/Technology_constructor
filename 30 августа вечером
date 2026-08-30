@@ -1,0 +1,380 @@
+import numpy as np
+
+def trit_to_int(trit: str) -> int:
+    """Преобразует символьный трит Брусенцова в целое число."""
+    mapping = {'+': 1, '0': 0, '-': -1}
+    if trit not in mapping:
+        raise ValueError(f"Недопустимый трит: {trit}. Используйте только '+', '0' или '-'.")
+    return mapping[trit]
+
+def tryte_to_decimal(tryte_str: str) -> int:
+    """Переводит 6-тритовый трайт в десятичную систему (старший трит слева)."""
+    if len(tryte_str) != 6:
+        raise ValueError("Длина трайта должна быть строго 6 тритов.")
+        
+    weights = [243, 81, 27, 9, 3, 1]  # Веса разрядов троичной системы
+    decimal_value = 0
+    
+    for trit, weight in zip(tryte_str, weights):
+        decimal_value += trit_to_int(trit) * weight
+        
+    return decimal_value
+
+def process_ternary_stream(stream: str, rows: int, cols: int):
+    """
+    Разбивает поток тритов на трайты и формирует:
+    1. Матрицу символьных трайтов.
+    2. Матрицу их десятичных значений.
+    """
+    # Удаляем пробелы, если они есть
+    stream = stream.replace(" ", "")
+    
+    # Проверяем, хватает ли тритов для заполнения матрицы
+    required_trytes = rows * cols
+    required_trits = required_trytes * 6
+    
+    if len(stream) < required_trits:
+        raise ValueError(f"Поток слишком короткий. Нужно минимум {required_trits} тритов.")
+    
+    # 1. Извлекаем трайты из потока
+    trytes = [stream[i:i+6] for i in range(0, required_trits, 6)]
+    
+    # 2. Вычисляем десятичные значения для каждого трайта
+    decimals = [tryte_to_decimal(t) for t in trytes]
+    
+    # 3. Преобразуем в матрицы нужной размерности
+    tryte_matrix = np.array(trytes).reshape(rows, cols)
+    decimal_matrix = np.array(decimals).reshape(rows, cols)
+    
+    return tryte_matrix, decimal_matrix
+
+# ==========================================
+# ПРИМЕР ИСПОЛЬЗОВАНИЯ (Наша канва суждений)
+# ==========================================
+if __name__ == "__main__":
+    # Наш поток из 24 тритов
+    trit_stream = "++-00-+0-++-000+++--00-+"
+    
+    # Параметры целевой троичной матрицы (2х2)
+    matrix_rows = 2
+    matrix_cols = 2
+    
+    try:
+        print(f"Исходный троичный поток: {trit_stream}\n")
+        
+        t_matrix, d_matrix = process_ternary_stream(trit_stream, matrix_rows, matrix_cols)
+        
+        print("1. Матрица символьных трайтов Брусенцова:")
+        print(t_matrix)
+        print("\n2. Матрица десятичных эквивалентов:")
+        print(d_matrix)
+        
+    except ValueError as e:
+        print(f"Ошибка: {e}")
+import numpy as np
+
+def pentait_to_decimal(pentait_elements) -> int:
+    """
+    Переводит 6-разрядный пентаит в десятичную систему.
+    Элементы пентаита должны быть числами от -2 до 2.
+    Старший разряд находится слева (индекс 0).
+    """
+    if len(pentait_elements) != 6:
+        raise ValueError("Длина пентаита должна быть строго 6 разрядов.")
+        
+    # Веса разрядов пятиричной системы (5^5, 5^4, 5^3, 5^2, 5^1, 5^0)
+    weights = [3125, 625, 125, 25, 5, 1]
+    
+    decimal_value = 0
+    for digit, weight in zip(pentait_elements, weights):
+        if digit not in [-2, -1, 0, 1, 2]:
+            raise ValueError(f"Недопустимый элемент в пентарном коде: {digit}")
+        decimal_value += digit * weight
+        
+    return decimal_value
+
+def parse_string_stream(stream_str: str) -> list:
+    """
+    Вспомогательная функция. Преобразует символьную строку вида "= - 0 1 2" 
+    в числовой массив, где '=' означает -2, а '-' означает -1.
+    """
+    mapping = {'=': -2, '-': -1, '0': 0, '1': 1, '2': 2}
+    # Удаляем пробелы
+    clean_str = stream_str.replace(" ", "")
+    
+    parsed_code = []
+    for char in clean_str:
+        if char not in mapping:
+            raise ValueError(f"Неизвестный символ в пентарном потоке: {char}")
+        parsed_code.append(mapping[char])
+    return parsed_code
+
+def process_pentary_stream(stream, rows: int, cols: int):
+    """
+    Разбивает поток пентарного кода на пентаиты (по 6 элементов) 
+    и формирует пентарную матрицу.
+    """
+    # Если на вход подали строку символов, переводим её в список чисел
+    if isinstance(stream, str):
+        pentary_code = parse_string_stream(stream)
+    else:
+        pentary_code = list(stream)
+        
+    required_pentaites = rows * cols
+    required_elements = required_pentaites * 6
+    
+    if len(pentary_code) < required_elements:
+        raise ValueError(f"Поток короткий. Нужно {required_elements} элементов, получено {len(pentary_code)}.")
+        
+    # 1. Группируем по 6 разрядов в пентаиты
+    pentaites = [pentary_code[i:i+6] for i in range(0, required_elements, 6)]
+    
+    # 2. Считаем десятичные значения Брусенцовского типа для каждого пентаита
+    decimals = [pentait_to_decimal(p) for p in pentaites]
+    
+    # 3. Упаковываем в матрицы
+    # Символьное представление для красивого вывода
+    inv_mapping = {-2: '=', -1: '-', 0: '0', 1: '1', 2: '2'}
+    pentaites_str = ["".join([inv_mapping[d] for d in p]) for p in pentaites]
+    
+    pent_matrix_str = np.array(pentaites_str).reshape(rows, cols)
+    pent_matrix_dec = np.array(decimals).reshape(rows, cols)
+    
+    return pent_matrix_str, pent_matrix_dec
+
+# ==========================================
+# ПРИМЕР ИСПОЛЬЗОВАНИЯ
+# ==========================================
+if __name__ == "__main__":
+    # Вариант 1: Поток в виде строки символов (длина 24 элемента для матрицы 2х2)
+    # '=' это -2, '-' это -1
+    pentary_stream_str = "210-==21-02-00012=-2-110"
+    
+    # Вариант 2: Тот же поток, но в виде явного списка чисел
+    # pentary_stream_list = [2, 1, 0, -1, -2, -2, 2, 1, -1, 0, 2, -1, 0, 0, 0, 1, 2, -2, -2, -1, 1, 1, 0, 0]
+
+    matrix_rows = 2
+    matrix_cols = 2
+    
+    try:
+        print(f"Исходный пентарный поток: {pentary_stream_str}\n")
+        
+        p_matrix_str, p_matrix_dec = process_pentary_stream(pentary_stream_str, matrix_rows, matrix_cols)
+        
+        print("1. Пентарная матрица в символьных пентаитах (длина слова 6):")
+        print(p_matrix_str)
+        
+        print("\n2. Матрица десятичных эквивалентов этих пентаитов:")
+        print(p_matrix_dec)
+        
+    except ValueError as e:
+        print(f"Ошибка: {e}")
+import numpy as np
+
+# ==========================================
+# ЧАСТЬ 1: БАЗОВЫЕ МАТЕМАТИЧЕСКИЕ СЛОВАРИ
+# ==========================================
+TRIT_MAP = {'+': 1, '0': 0, '-': -1}
+PENT_MAP = {-2: '=', -1: '-', 0: '0', 1: '1', 2: '2'}
+
+# Веса для 6-разрядных слов
+TRIT_WEIGHTS = [243, 81, 27, 9, 3, 1]
+PENT_WEIGHTS = [3125, 625, 125, 25, 5, 1]
+
+# ==========================================
+# ЧАСТЬ 2: ФУНКЦИИ КОНВЕРТАЦИИ И ВЫЧИСЛЕНИЯ
+# ==========================================
+def tryte_to_decimal(tryte_str: str) -> int:
+    """Переводит 6-тритовый трайт Брусенцова в десятичное число."""
+    return sum(TRIT_MAP[t] * w for t, w in zip(tryte_str, TRIT_WEIGHTS))
+
+def pentait_to_decimal(pentait_list: list) -> int:
+    """Переводит 6-разрядный пентаит в десятичное число."""
+    return sum(p * w for p, w in zip(pentait_list, PENT_WEIGHTS))
+
+def parse_trit_stream(stream: str, rows: int, cols: int):
+    """Преобразует троичный поток в символьную и десятичную матрицы."""
+    stream = stream.replace(" ", "")
+    required_trits = rows * cols * 6
+    if len(stream) < required_trits:
+        raise ValueError("Троичный поток слишком короткий.")
+    
+    trytes = [stream[i:i+6] for i in range(0, required_trits, 6)]
+    decimals = [tryte_to_decimal(t) for t in trytes]
+    
+    return np.array(trytes).reshape(rows, cols), np.array(decimals).reshape(rows, cols)
+
+# ==========================================
+# ЧАСТЬ 3: ДРУЖБА СИСТЕМ (СИНТЕЗ)
+# ==========================================
+def synthesize_ternary_to_pentary(matrix_a, matrix_b):
+    """
+    Поразрядно складывает две символьные троичные матрицы, 
+    порождая пентарную матрицу из 6-разрядных пентаитов.
+    """
+    rows, cols = matrix_a.shape
+    pent_matrix_str = np.zeros((rows, cols), dtype=object)
+    pent_matrix_dec = np.zeros((rows, cols), dtype=int)
+    
+    for r in range(rows):
+        for c in range(cols):
+            # Получаем два трайта в одной и той же позиции матрицы
+            tryte_a = matrix_a[r, c]
+            tryte_b = matrix_b[r, c]
+            
+            # Поразрядное сложение тритов -> получаем элементы пентаита
+            pentait_digits = []
+            for t_a, t_b in zip(tryte_a, tryte_b):
+                sum_digit = TRIT_MAP[t_a] + TRIT_MAP[t_b] # Результат от -2 до 2
+                pentait_digits.append(sum_digit)
+            
+            # Переводим в символьный вид (с использованием '=' и '-')
+            pentait_str = "".join([PENT_MAP[d] for d in pentait_digits])
+            
+            # Считаем десятичное значение по весам пентаита
+            pent_matrix_str[r, c] = pentait_str
+            pent_matrix_dec[r, c] = pentait_to_decimal(pentait_digits)
+            
+    return pent_matrix_str, pent_matrix_dec
+
+# ==========================================
+# ИСПОЛНЯЕМЫЙ БЛОК
+# ==========================================
+if __name__ == "__main__":
+    # Два троичных потока (длина каждого 24 трита для матриц 2х2)
+    stream_A = "++-00-+0-++-000+++--00-+"
+    stream_B = "-0+0-+--0+0++-0-0-00++--"
+    
+    R, C = 2, 2 # Размерность матриц
+    
+    print("=== ШАГ 1: Развертывание троичных потоков ===")
+    t_matrix_A, d_matrix_A = parse_trit_stream(stream_A, R, C)
+    t_matrix_B, d_matrix_B = parse_trit_stream(stream_B, R, C)
+    
+    print("\nТроичная Матрица A (Десятичный вид):\n", d_matrix_A)
+    print("Троичная Матрица B (Десятичный вид):\n", d_matrix_B)
+    
+    print("\n=== ШАГ 2: Поразрядный синтез Брусенцова ===")
+    print("Складываем трайты матрицы А с трайтами матрицы В...")
+    
+    p_matrix_str, p_matrix_dec = synthesize_ternary_to_pentary(t_matrix_A, t_matrix_B)
+
+import numpy as np
+
+# ==========================================
+# 1. СЛОВАРИ И ВЕСА (Троично-пентарный базис)
+# ==========================================
+TRIT_MAP = {'+': 1, '0': 0, '-': -1}
+PENT_MAP = {-2: '=', -1: '-', 0: '0', 1: '1', 2: '2'}
+
+TRIT_WEIGHTS = [243, 81, 27, 9, 3, 1]
+PENT_WEIGHTS = [3125, 625, 125, 25, 5, 1]
+
+# Категории модальной логики Брусенцова для пентарных значений
+BRUSENTSOV_LOGIC = {
+     2: "Необходимо (Necessary)",
+     1: "Возможно (Possible)",
+     0: "Случайно / Нейтрально (Contingent)",
+    -1: "Проблематично (Problematic)",
+    -2: "Невозможно (Impossible)"
+}
+
+# ==========================================
+# 2. БАЗОВЫЕ ВЫЧИСЛЕНИЯ
+# ==========================================
+def tryte_to_decimal(tryte_str: str) -> int:
+    return sum(TRIT_MAP[t] * w for t, w in zip(tryte_str, TRIT_WEIGHTS))
+
+def pentait_to_decimal(pentait_list: list) -> int:
+    return sum(p * w for p, w in zip(pentait_list, PENT_WEIGHTS))
+
+def parse_trit_stream(stream: str, rows: int, cols: int):
+    stream = stream.replace(" ", "")
+    required_trits = rows * cols * 6
+    trytes = [stream[i:i+6] for i in range(0, required_trits, 6)]
+    decimals = [tryte_to_decimal(t) for t in trytes]
+    return np.array(trytes).reshape(rows, cols), np.array(decimals).reshape(rows, cols)
+
+# ==========================================
+# 3. СИНТЕЗ ТРОИЧНОГО В ПЕНТАРНЫЙ
+# ==========================================
+def synthesize_ternary_to_pentary(matrix_a, matrix_b):
+    rows, cols = matrix_a.shape
+    pent_matrix_str = np.zeros((rows, cols), dtype=object)
+    pent_matrix_dec = np.zeros((rows, cols), dtype=int)
+    # Сохраняем и «сырые» списки цифр от -2 до 2 для логического анализа
+    pent_matrix_raw = np.zeros((rows, cols), dtype=object) 
+    
+    for r in range(rows):
+        for c in range(cols):
+            tryte_a = matrix_a[r, c]
+            tryte_b = matrix_b[r, c]
+            
+            pentait_digits = [TRIT_MAP[t_a] + TRIT_MAP[t_b] for t_a, t_b in zip(tryte_a, tryte_b)]
+            
+            pent_matrix_str[r, c] = "".join([PENT_MAP[d] for d in pentait_digits])
+            pent_matrix_dec[r, c] = pentait_to_decimal(pentait_digits)
+            pent_matrix_raw[r, c] = pentait_digits
+            
+    return pent_matrix_str, pent_matrix_dec, pent_matrix_raw
+
+# ==========================================
+# 4. МОДАЛЬНЫЙ АНАЛИЗ БРУСЕНЦОВА
+# ==========================================
+def interpret_modality(matrix_raw):
+    """Переводит каждый разряд каждого пентаита в модальное суждение."""
+    rows, cols = matrix_raw.shape
+    print("\n=== ВЕРИФИКАЦИЯ ПО МОДАЛЬНОЙ ЛОГИКЕ БРУСЕНЦОВА ===")
+    for r in range(rows):
+        for c in range(cols):
+            digits = matrix_raw[r, c]
+            print(f"\nЯчейка [{r},{c}] (Пентаит: {''.join([PENT_MAP[d] for d in digits])}):")
+            for idx, d in enumerate(digits):
+                print( f"  Разряд {idx+1} (вес {PENT_WEIGHTS[idx]}): {BRUSENTSOV_LOGIC[d]}")
+
+# ==========================================
+# ИСПОЛНЯЕМЫЙ БЛОК (ВСЁ В ОДНОМ)
+# ==========================================
+if __name__ == "__main__":
+    # Входные троичные потоки (по 24 трита)
+    stream_A = "++-00-+0-++-000+++--00-+"
+    stream_B = "-0+0-+--0+0++-0-0-00++--"
+    R, C = 2, 2
+    
+    # Сборка троичных матриц
+    t_matrix_A, _ = parse_trit_stream(stream_A, R, C)
+    t_matrix_B, _ = parse_trit_stream(stream_B, R, C)
+    
+    # Синтезируем пентарную матрицу
+    p_str, p_dec, p_raw = synthesize_ternary_to_pentary(t_matrix_A, t_matrix_B)
+    
+    print("=== ПОЛУЧЕННАЯ ПЕНТАРНАЯ МАТРИЦА (В ДЕСЯТИЧНЫХ ЗНАЧЕНИЯХ ПЕНТАИТОВ) ===")
+    print(p_dec)
+    
+    # -------------------------------------------------------------
+    # ЗАДАЧА 1: УМНОЖЕНИЕ МАТРИЦЫ НА ВЕКТОР
+    # -------------------------------------------------------------
+    print("\n=== ЗАДАЧА 1: ЛИНЕЙНАЯ АЛГЕБРА ПЕНТАИТОВ ===")
+    # Создаем пентарный вектор-столбец (значения — это десятичные эквиваленты пентаитов)
+    # Для примера возьмем вектор из двух пентаитов: [100, -50]
+    pentary_vector = np.array([100, -50])
+    print(f"Пентарный вектор V:\n {pentary_vector}")
+    
+    # Умножаем пентарную матрицу на вектор по правилам линейной алгебры
+    result_vector = np.dot(p_dec, pentary_vector)
+    print(f"\nРезультат умножения (Матрица * Вектор):")
+    print(result_vector)
+    
+    # -------------------------------------------------------------
+    # ЗАДАЧА 2: МОДАЛЬНАЯ ЛОГИКА БРУСЕНЦОВА
+    # -------------------------------------------------------------
+    interpret_modality(p_raw)
+
+    
+    print("\n1. Результат в символьных Пентаитах (где '=' это -2, '-' это -1):")
+    print(p_matrix_str)
+    
+    print("\n2. Финальная Пентарная Матрица (Десятичные значения пентаитов):")
+    print(p_matrix_dec)
+
+
