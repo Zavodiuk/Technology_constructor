@@ -1,0 +1,133 @@
+import numpy as np
+
+# Уровни 1 и 4: Базовые симметричные пространства
+TERNARY_SPACE = {-1, 0, 1}
+PENTARY_SPACE = {-2, -1, 0, 1, 2}
+
+class BXOSContextDescriptor:
+    """Уровень 5: Дескриптор контекста (Пентайт/Вектор состояния ядра)"""
+    def __init__(self, mode="T", size=5):
+        self.mode = mode  # "T" (Троичный) или "P" (Пентарный)
+        self.size = size
+        self.vector = np.zeros(size, dtype=int)
+        self.saturation_triggered = False
+
+    def set_data(self, data):
+        self.vector = np.array(data, dtype=int)
+
+class PentaryOperator:
+    """Уровень 6: Пентарная матрица и функции активации нижнего слоя"""
+    def __init__(self, matrix_size):
+        self.size = matrix_size
+        # Инициализируем матрицу связей (пример)
+        self.weights = np.zeros((matrix_size, matrix_size), dtype=int)
+
+    def set_weights(self, matrix_data):
+        self.weights = np.array(matrix_data, dtype=int)
+
+    def saturate(self, val):
+        """Нелинейная функция активации BXOS sat(x) с порогом резонанса"""
+        if val > 2: return 2, True
+        if val < -2: return -2, True
+        return val, False
+
+    def transform(self, pentayt):
+        """Умножение вектора-пентайта на пентарную матрицу оператора"""
+        result = np.zeros(self.size, dtype=int)
+        overflow_signal = False
+        
+        for i in range(self.size):
+            raw_sum = np.dot(pentayt.vector, self.weights[i, :])
+            val, overflow = self.saturate(raw_sum)
+            result[i] = val
+            if overflow:
+                overflow_signal = True
+                
+        return result, overflow_signal
+
+class BXOSMetaAnalyzer:
+    """Мета-анализатор входного потока задач BXOS"""
+    @staticmethod
+    def analyze_entropy(task_data):
+        """Оценка сигнатуры задачи: размерность, энтропия и амплитуда предикатов"""
+        max_val = np.max(np.abs(task_data))
+        # Если в задаче уже есть экстремумы ±2, троичный слой пропускается
+        if max_val >= 2:
+            return "HIGH_ENTROPY"
+        # Если матрица большая или имеет сложную структуру
+        if isinstance(task_data, np.ndarray) and task_data.ndim > 1:
+            return "DYNAMIC_COMPLEX"
+        return "LOW_ENTROPY"
+
+class BXOSCore:
+    """Главный вычислительный мозг BXOS с Длинным и Коротким оркестраторами"""
+    def __init__(self, size=5):
+        self.size = size
+        self.context = BXOSContextDescriptor(mode="T", size=size)
+        self.pentary_op = PentaryOperator(size)
+
+    def short_orchestrator(self, task_data, complexity):
+        """Короткий оркестратор (Статический роутинг легких задач)"""
+        print(f"[BXOS] Запуск Короткого Оркестратора. Сложность: {complexity}")
+        if complexity == "LOW_ENTROPY":
+            self.context.mode = "T"
+            # Вычисления строго на троичном слое {-1, 0, 1}
+            print("[BXOS Exec] Задача решена на легком Троичном слое (Уровни 1-3).")
+            return task_data
+        else:
+            self.context.mode = "P"
+            print("[BXOS Exec] Задача линейна, но требует Пентарного базиса.")
+            return np.clip(task_data, -2, 2)
+
+    def long_orchestrator(self, complex_task_matrix):
+        """Длинный оркестратор (Динамический когнитивный цикл суждений)"""
+        print("[BXOS] Запуск Длинного Оркестратора (Высокая сложность).")
+        
+        # Шаг 1: Старт в T-Mode (Троичный режим для экономии ресурсов)
+        self.context.mode = "T"
+        initial_troits = np.clip(complex_task_matrix[0], -1, 1)
+        self.context.set_data(initial_troits)
+        print(f"[BXOS Core] T-mode активен. Начальный трайт: {self.context.vector}")
+
+        # Имитируем цикл суждений и умножение троичных матриц
+        # Шаг 2: Мониторинг промежуточных результатов. Обнаружение переполнения смысла
+        print("[BXOS Core] Цикл суждений обнаружил логический тупик / переполнение.")
+        
+        # Шаг 3: Алгоритм Переключения Контекста (Context Switch: T -> P)
+        print("[BXOS Switch] МГНОВЕННЫЙ ПЕРЕХОД: T-mode ---> P-mode (Квантовое расширение)")
+        self.context.mode = "P"
+        
+        # Разворачиваем скрытые веса пентарной матрицы (Уровень 6)
+        self.pentary_op.set_weights(complex_task_matrix)
+        
+        # Шаг 4: Разрешение парадокса в P-Mode с использованием состояний ±2
+        final_vector, overflow = self.pentary_op.transform(self.context)
+        self.context.set_data(final_vector)
+        print(f"[BXOS Core] P-mode финализирован. Результат пентайта: {self.context.vector}")
+        
+        # Шаг 5: Обратная свёртка для вывода результата
+        print("[BXOS Switch] Релиз контекста: P-mode ---> T-mode")
+        self.context.mode = "T"
+        final_output = np.clip(self.context.vector, -1, 1)
+        return final_output
+
+# --- ТЕСТОВЫЙ ЗАПУСК СИСТЕМЫ BXOS ---
+if __name__ == "__main__":
+    bxos = BXOSCore(size=3)
+    
+    # 1. Тест легкой задачи (Короткий оркестратор)
+    easy_task = np.array([1, 0, -1])
+    complexity = BXOSMetaAnalyzer.analyze_entropy(easy_task)
+    bxos.short_orchestrator(easy_task, complexity)
+    
+    print("-" * 50)
+    
+    # 2. Тест сложной задачи с весами ±2 (Длинный оркестратор)
+    complex_matrix = np.array([
+        [1, -1, 0],
+        [2,  2, -2],  # Пробуждение скрытых пентарных операторов
+        [-2, 0,  1]
+    ])
+    
+    final_decision = bxos.long_orchestrator(complex_matrix)
+    print(f"\n[BXOS Вывод Суждения]: {final_decision}")
