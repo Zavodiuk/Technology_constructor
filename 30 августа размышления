@@ -1,0 +1,105 @@
+import numpy as np
+
+class PentaryArithmetic:
+    """Модуль расширенной пентарной арифметики нижнего слоя BXOS"""
+    
+    @staticmethod
+    def add_digits(a, b, carry_in=0):
+        """
+        Сложение двух симметричных пентарных разрядов {-2, -1, 0, 1, 2} 
+        с учетом входящего и исходящего переноса (по базе 5).
+        Формула баланса: a + b + carry_in = sum_digit + 5 * carry_out
+        """
+        raw_sum = a + b + carry_in
+        
+        # Определяем перенос (carry_out) и остаток (sum_digit) по симметричной базе 5
+        if raw_sum > 2:
+            # Например: 2 + 2 = 4 -> это 5 * 1 - 1 (sum: -1, carry: 1)
+            # Например: 2 + 1 = 3 -> это 5 * 1 - 2 (sum: -2, carry: 1)
+            carry_out = 1
+            sum_digit = raw_sum - 5
+        elif raw_sum < -2:
+            # Например: -2 + -2 = -4 -> это 5 * (-1) + 1 (sum: 1, carry: -1)
+            # Например: -2 + -1 = -3 -> это 5 * (-1) + 2 (sum: 2, carry: -1)
+            carry_out = -1
+            sum_digit = raw_sum + 5
+        else:
+            carry_out = 0
+            sum_digit = raw_sum
+            
+        return sum_digit, carry_out
+
+    @classmethod
+    def add_pentayts(cls, pentayt_a, pentayt_b):
+        """
+        Поразрядное сложение двух пентайтов одинаковой размерности 
+        с распространением переноса от младших разрядов к старшим.
+        """
+        size = len(pentayt_a)
+        result = np.zeros(size, dtype=int)
+        carry = 0
+        
+        # Идем справа налево (от младших к старшим, если массив упорядочен так)
+        for i in reversed(range(size)):
+            sum_digit, carry = cls.add_digits(pentayt_a[i], pentayt_b[i], carry)
+            result[i] = sum_digit
+            
+        # Возвращаем итоговый вектор-пентайт и финальный перенос переполнения слова
+        return result, carry
+
+
+class BXOSJudgmentFunctions:
+    """Специфические логические функции анализа суждений BXOS"""
+    
+    @staticmethod
+    def ternary_to_pentary_projection(ternary_vector):
+        """Прямая проекция троичного трайта в пентарный слой (Уровни 2 -> 5)"""
+        # Вложение {-1, 0, 1} в {-2, -1, 0, 1, 2} без искажения смыслов
+        return np.array(ternary_vector, dtype=int)
+
+    @staticmethod
+    def pentary_to_ternary_compression(pentary_vector, threshold=1.5):
+        """
+        Сжатие/свёртка пентарного суждения обратно в троичное каноническое ядро (Уровни 5 -> 2).
+        Реализует функцию оценки интенсивности:
+        Экстремумы ±2 сжимаются до ±1, но если они доминируют, выставляется системный маркер важности.
+        """
+        ternary_result = np.zeros(len(pentary_vector), dtype=int)
+        meta_flags = [] # Скрытые маркеры экстра-важности для Длинного Оркестратора
+        
+        for i, val in enumerate(pentary_vector):
+            if abs(val) >= 2:
+                meta_flags.append(f"EXTREME_VALUE_AT_INDEX_{i}")
+                ternary_result[i] = np.sign(val) # Перевод ±2 в брусенцовские ±1
+            else:
+                ternary_result[i] = val # Состояния -1, 0, 1 переносятся как есть
+                
+        return ternary_result, meta_flags
+
+
+# --- ТЕСТОВЫЙ ЗАПУСК НОВЫХ МОДУЛЕЙ BXOS ---
+if __name__ == "__main__":
+    print("[BXOS] Тестирование расширенной арифметики нижнего слоя...")
+    
+    # Тест 1: Сложение двух экстремальных разрядов
+    s_digit, c_out = PentaryArithmetic.add_digits(2, 2)
+    print(f"Разрядный тест: 2 + 2 = {s_digit} (Перенос: {c_out}) -> Математически корректно: 5 * {c_out} + ({s_digit}) = 4")
+    
+    # Тест 2: Сложение двух пентайтов (векторов состояний)
+    # Состояние А: [2,  1, -2]
+    # Состояние Б: [2,  0, -2]
+    pentayt_A = np.array([2, 1, -2])
+    pentayt_B = np.array([2, 0, -2])
+    
+    sum_vector, final_carry = PentaryArithmetic.add_pentayts(pentayt_A, pentayt_B)
+    print(f"Сложение пентайтов: {pentayt_A} + {pentayt_B} = {sum_vector} (Финальный перенос слова: {final_carry})")
+    
+    print("\n[BXOS] Тестирование функции логического сжатия суждений...")
+    
+    # Тест 3: Функция свёртки суждения из Пентарного в Троичный слой
+    complex_judgment = np.array([2, -1, 0, -2, 1])
+    canonical_troits, flags = BXOSJudgmentFunctions.pentary_to_ternary_compression(complex_judgment)
+    
+    print(f"Исходное пентарное суждение: {complex_judgment}")
+    print(f"Свернутое троичное ядро:      {canonical_troits}")
+    print(f"Системные маркеры для Длинного Оркестратора: {flags}")
