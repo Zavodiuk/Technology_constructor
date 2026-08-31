@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved
+# Vladimir Zavodiuk
+
+"""
+================================================================================
+BXOS — МИНИМАЛЬНЫЙ ГЕЙТ
+================================================================================
+Роль по схеме (см. презентацию Harmony3): "Детерминированная блокировка
+критических состояний. Нулевая задержка в Fast-Path контуре." — то есть
+БЫСТРАЯ ПРОВЕРКА, а не операционная система.
+
+Место в пайплайне:
+  ... пентарные матрицы -> [BXOS: гейт] -> Game-модуль/выход
+
+Что убрано из присланной v1.2 и почему (архив: archive/bxos_v1_2_original.py):
+  - Файловая система, диспетчер процессов, сеть между процессами —
+    ни разу не были частью заявленной роли BXOS (гейт, не ОС).
+  - Гиперболическая геометрия — доказано на числах (см. чат): метрики
+    квантуются в трит ДО применения геометрии, из-за чего 3 из 5
+    разных тестовых входов схлопнулись в одну и ту же точку (0,0,0).
+    Вся "непрерывность" геометрии Лобачевского работала поверх 27 точек
+    решётки, часть из которых дополнительно совпадают.
+  - time.sleep(0.3) на тик планировщика — прямо противоречил заявленной
+    "нулевой задержке".
+  - Состояние 'running' у процессов никогда не было снаружи наблюдаемо
+    (выставлялось и тут же возвращалось в 'ready' в одной функции).
+
+Что оставлено и почему:
+  - rashomon_analyze — единственная часть исходного файла, которая
+    реально работает не декоративно (проверено ранее, используется уже
+    в нескольких блоках пайплайна одинаково).
+  - "Двойной Рашимон" со слайда Harmony3 здесь — не выдуманная тройка
+    ролей, а буквально ДВЕ проверки: на входе (сырые интерпретации) и на
+    выходе (итоговое пентарное состояние + уверенность). Это честная,
+    неметафорическая версия заявленной идеи.
+================================================================================
+"""
+
+import time
+from enum import Enum
+from dataclasses import dataclass
+from typing import Dict, Any, List, Optional
+
+
+# ============================================================
+# RASHOMON (та же логика, что уже используется в троичном/BXOS-контексте)
+# ============================================================
+
+def rashomon_analyze(interpretations: Dict[str, float],
+                      margin_threshold: float = 0.15,
+                      min_score: float = 0.3) -> Dict:
+    if not interpretations:
+        return {'state': -1, 'top': None, 'margin': 0.0, 'reason': 'Нет интерпретаций'}
+    sorted_items = sorted(interpretations.items(), key=lambda x: x[1], reverse=True)
+    top_label, top_score = sorted_items[0]
+    margin = top_score - sorted_items[1][1] if len(sorted_items) > 1 else top_score
+    if top_score < min_score:
+        state, reason = -1, f"Лучшая оценка слишком низкая: {top_score:.2f}"
+    elif margin >= margin_threshold:
+        state, reason = 1, f"Устойчивое ядро: отрыв {margin:.2f}"
+    else:
+        state, reason = 0, f"Неопределённость: отрыв {margin:.2f}"
+    return {'state': state, 'top': top_label, 'margin': margin, 'reason': reason}
+
+
+# ============================================================
+# ГЕЙТ
+# ============================================================
+
+class GateStatus(Enum):
+    READY = "ready_for_simulation"    # соответствует "Ready for Simulation" со слайда
+    LOCKED = "locked_critical"        # соответствует "Locked (Critical)" со слайда
+
+
+@dataclass
+class GateResult:
+    status: GateStatus
+    stage: str  # "input" | "output"
+    reason: str
+    timestamp: float
+
+
+class BXOSGate:
+    """
+    Два детерминированных чек-пойнта:
+      check_input()  — сырые интерпретации ДО обработки пайплайном
+      check_output() — итоговое пентарное состояние ПОСЛЕ обработки
+
+    Никакого I/O, никакого sleep, никакой геометрии — только сравнения
+    чисел. Лог ограничен по размеру (без утечки, без майнинга).
+    """
+
+    def __init__(self, margin_threshold: float = 0.15, min_score: float = 0.3,
+                 min_confidence: float = 0.4, critical_pentary_states=(-2, -1),
+                 max_log: int = 1000):
+        self.margin_threshold = margin_threshold
+        self.min_score = min_score
+        self.min_confidence = min_confidence
+        self.critical_pentary_states = set(critical_pentary_states)
+        self.max_log = max_log
+        self.log: List[GateResult] = []
+
+    def _record(self, result: GateResult) -> GateResult:
+        self.log.append(result)
+        if len(self.log) > self.max_log:
+            self.log.pop(0)
+        return result
+
+    def check_input(self, interpretations: Dict[str, float]) -> GateResult:
+        """Входной чек-пойнт: явно негодные интерпретации блокируются
+        до того, как пайплайн потратит на них хоть один цикл."""
+        analysis = rashomon_analyze(interpretations, self.margin_threshold, self.min_score)
+        status = GateStatus.LOCKED if analysis['state'] == -1 else GateStatus.READY
+        return self._record(GateResult(status=status, stage="input",
+                                        reason=analysis['reason'], timestamp=time.time()))
+
+    def check_output(self, pentary_value: int, confidence: float) -> GateResult:
+        """Выходной чек-пойнт: итоговое состояние пайплайна (-2..2) и
+        уверенность в нём проверяются перед выпуском наружу."""
+        if pentary_value not in (-2, -1, 0, 1, 2):
+            raise ValueError("pentary_value должен быть в диапазоне -2..2")
+
+        if pentary_value in self.critical_pentary_states:
+            reason = f"критическое состояние на выходе: {pentary_value}"
+            status = GateStatus.LOCKED
+        elif confidence < self.min_confidence:
+            reason = f"уверенность ниже порога: {confidence:.2f} < {self.min_confidence}"
+            status = GateStatus.LOCKED
+        else:
+            reason = "выход прошёл проверку"
+            status = GateStatus.READY
+
+        return self._record(GateResult(status=status, stage="output",
+                                        reason=reason, timestamp=time.time()))
+
+    def summary(self) -> Dict[str, Any]:
+        locked = sum(1 for r in self.log if r.status == GateStatus.LOCKED)
+        ready = len(self.log) - locked
+        return {'total': len(self.log), 'ready': ready, 'locked': locked}
+
+
+# ============================================================
+# ДЕМОНСТРАЦИЯ + ЧЕСТНЫЙ ЗАМЕР ЗАДЕРЖКИ
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("BXOS — МИНИМАЛЬНЫЙ ГЕЙТ")
+    print("=" * 70)
+
+    gate = BXOSGate()
+
+    # 1. Входной чек: нормальный запрос
+    print("\n--- Входной гейт: нормальные интерпретации ---")
+    r1 = gate.check_input({"Камера": 0.9, "Цена": 0.4, "Автономность": 0.6})
+    print(f"  {r1.status.value}: {r1.reason}")
+
+    # 2. Входной чек: явный брак (все оценки низкие)
+    print("\n--- Входной гейт: заведомо слабые интерпретации ---")
+    r2 = gate.check_input({"Камера": 0.1, "Цена": 0.15})
+    print(f"  {r2.status.value}: {r2.reason}")
+
+    # 3. Выходной чек: нормальное состояние
+    print("\n--- Выходной гейт: STRONG_TRUE, высокая уверенность ---")
+    r3 = gate.check_output(pentary_value=2, confidence=0.8)
+    print(f"  {r3.status.value}: {r3.reason}")
+
+    # 4. Выходной чек: критическое состояние
+    print("\n--- Выходной гейт: STRONG_FALSE ---")
+    r4 = gate.check_output(pentary_value=-2, confidence=0.9)
+    print(f"  {r4.status.value}: {r4.reason}")
+
+    # 5. Выходной чек: низкая уверенность при позитивном состоянии
+    print("\n--- Выходной гейт: TRUE, но низкая уверенность ---")
+    r5 = gate.check_output(pentary_value=1, confidence=0.2)
+    print(f"  {r5.status.value}: {r5.reason}")
+
+    # 6. Честный замер задержки одной проверки (в противовес sleep(0.3) в оригинале)
+    print("\n--- Замер задержки (без sleep, без I/O) ---")
+    N = 100_000
+    t0 = time.perf_counter()
+    for _ in range(N):
+        gate.check_output(pentary_value=1, confidence=0.8)
+    dt = time.perf_counter() - t0
+    print(f"  {N:,} проверок за {dt:.4f} сек -> {(dt/N)*1e6:.3f} мкс на проверку")
+
+    print("\nСводка:", gate.summary())
+    print("\n✅ демонстрация завершена")
