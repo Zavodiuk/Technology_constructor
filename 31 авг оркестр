@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved
+# Vladimir Zavodiuk
+
+"""
+================================================================================
+ОРКЕСТРАТОР — реальная сборка пайплайна
+================================================================================
+Место в схеме: стоит НАД всем стеком и вызывает его последовательно.
+
+  ВХОД -> [ТРОИЧНЫЙ БЛОК] -> [БРУСЕНЦОВ: свёртка трёх тритов] ->
+          [ПЕНТАРНЫЙ БЛОК] -> (опционально) [ТРОИЧНЫЕ МАТРИЦЫ] -> РЕЗУЛЬТАТ
+
+В отличие от присланного "Orchestrator V6": здесь НЕТ HTTP/REST, НЕТ
+воображаемых компонентов (Byzantine Consensus, Hyperbolic Graph — их
+никогда не было в проверенном каркасе), НЕТ отдельного блокчейна состояний
+(используются уже существующие ограниченные аудит-цепочки пентарного и
+матричного блоков — плодить третью не нужно). Все блоки вызываются как
+обычные Python-объекты в одном процессе, потому что именно так устроена
+вся наша система — микросервисная архитектура ей просто не нужна.
+
+СТЫКОВКА ЧЕРЕЗ БРУСЕНЦОВА (то, чего не хватало раньше):
+  Троичный блок отдаёт три трита за один запрос: l3_in (входной триаж),
+  l3_out (квантованная оценка кандидата), efficiency_trit (эффективность).
+  Раньше в пентарный слой уходил только «сырой» efficiency-скор напрямую.
+  Теперь между ними явно стоит блок Брусенцова: три трита сворачиваются
+  через fold_and (двумя законами — отрицание+импликация, как и было
+  выведено) в один консолидированный трит, который определяет CONFIDENCE
+  для пентарного состояния: чем больше три сигнала согласны друг с
+  другом — тем выше уверенность на входе в пентарный слой.
+================================================================================
+"""
+
+import sys
+import os
+from dataclasses import dataclass
+from typing import Dict, Any, Optional
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from ternary_block import TernaryBlock, TernaryResult
+from brusentsov_trits import fold_and
+from pentary_final import PentaryBlock, PentarnyStateData
+from ternary_matrix_block import TernaryMatrixBlock, from_pentary, TernaryMatrix
+
+
+# ============================================================
+# МОСТИК: КОНСОЛИДИРОВАННЫЙ ТРИТ -> УВЕРЕННОСТЬ ДЛЯ ПЕНТАРНОГО СЛОЯ
+# ============================================================
+
+def trit_to_confidence(trit: int) -> float:
+    """Согласие трёх тритов троичного блока (через fold_and) -> уверенность
+    для пентарного слоя. -1 = сигналы противоречат друг другу (низкая
+    уверенность), 0 = смешанно, 1 = все три согласны (высокая уверенность)."""
+    return {-1: 0.3, 0: 0.55, 1: 0.85}[trit]
+
+
+@dataclass
+class PipelineResult:
+    status: str  # "rejected" | "ok"
+    ternary: Optional[TernaryResult]
+    consolidated_trit: Optional[int]
+    pentary_confidence: Optional[float]
+    pentary_state: Optional[PentarnyStateData]
+    matrix: Optional[TernaryMatrix]
+    l5_used: bool
+
+
+class Orchestrator:
+    """
+    Вызывает троичный -> Брусенцов -> пентарный -> (опционально) матричный
+    блок последовательно, в одном процессе. Каждый блок уже умеет вести
+    свою ограниченную историю/аудит-цепочку — оркестратор не дублирует это.
+    """
+
+    def __init__(self):
+        self.ternary = TernaryBlock()
+        self.pentary = PentaryBlock()
+        self.matrix = TernaryMatrixBlock()
+
+    def process(self, query: str, interpretations: Dict[str, float],
+                l5_values: Optional[Dict[str, int]] = None) -> PipelineResult:
+        """
+        query, interpretations -> троичный блок.
+        l5_values (опционально) -> {'intent':.., 'goal':.., 'ontology':..,
+        'context':.., 'action':..} — если передано ПОЛНОСТЬЮ (все 5 слоёв),
+        после пентарного шага строится троичная матрица через from_pentary().
+        Без l5_values матричный шаг не выполняется — честно, а не
+        додумывается за пользователя.
+        """
+        # 1. ТРОИЧНЫЙ БЛОК
+        tr = self.ternary.process(query, interpretations)
+
+        if tr.final_decision == "REJECT":
+            return PipelineResult(status="rejected", ternary=tr, consolidated_trit=None,
+                                   pentary_confidence=None, pentary_state=None, matrix=None, l5_used=False)
+
+        # 2. БРУСЕНЦОВ: свёртка трёх тритов в один консолидированный
+        consolidated = fold_and((tr.l3_in, tr.l3_out, tr.efficiency_trit))
+        confidence = trit_to_confidence(consolidated)
+
+        # 3. ПЕНТАРНЫЙ БЛОК
+        pentary_state = self.pentary.receive_from_ternary(
+            best_candidate=tr.best_candidate, score=tr.efficiency, confidence=confidence,
+        )
+
+        # 4. (ОПЦИОНАЛЬНО) ТРОИЧНЫЕ МАТРИЦЫ — только если даны все 5 L5-слоёв
+        matrix_result = None
+        l5_used = False
+        if l5_values and set(l5_values.keys()) == {'intent', 'goal', 'ontology', 'context', 'action'}:
+            for layer, value in l5_values.items():
+                self.pentary.set_l5_state(layer, value)
+            l5_used = True
+            mat = from_pentary(l5_values)
+            self.matrix.state = mat
+            self.matrix.apply('diagonal_projection')
+            matrix_result = self.matrix.state
+
+        return PipelineResult(
+            status="ok", ternary=tr, consolidated_trit=consolidated,
+            pentary_confidence=confidence, pentary_state=pentary_state,
+            matrix=matrix_result, l5_used=l5_used,
+        )
+
+    def status(self) -> Dict[str, Any]:
+        """Сводный статус всех блоков — берётся из их собственных аудит-цепочек,
+        не изобретается заново."""
+        return {
+            'ternary_history_len': len(self.ternary.history),
+            'pentary_audit_chain': self.pentary.chain.to_dict(),
+            'matrix_audit_chain': self.matrix.chain.to_dict(),
+        }
+
+
+# ============================================================
+# ДЕМОНСТРАЦИЯ
+# ============================================================
+
+if __name__ == "__main__":
+    orchestrator = Orchestrator()
+
+    print("=" * 70)
+    print("ОРКЕСТРАТОР — РЕАЛЬНЫЙ ПРОГОН ЦЕПОЧКИ")
+    print("=" * 70)
+
+    # 1. Обычный запрос без L5 (троичный -> Брусенцов -> пентарный)
+    print("\n--- Запрос 1: без L5-слоёв ---")
+    r1 = orchestrator.process(
+        "Хочу телефон с хорошей камерой",
+        {"Камера": 0.9, "Цена": 0.4, "Автономность": 0.6, "Бренд": 0.7},
+    )
+    print(f"Статус: {r1.status}")
+    print(f"Троичный: L3_in={r1.ternary.l3_in}, L3_out={r1.ternary.l3_out}, "
+          f"eff_trit={r1.ternary.efficiency_trit}, кандидат={r1.ternary.best_candidate}")
+    print(f"Брусенцов: консолидированный трит = {r1.consolidated_trit}")
+    print(f"Пентарная уверенность на входе: {r1.pentary_confidence}")
+    print(f"Пентарное состояние: {r1.pentary_state.value.name} ({r1.pentary_state.value.value}), "
+          f"conf={r1.pentary_state.confidence}")
+    print(f"Матрица использовалась: {r1.l5_used}")
+
+    # 2. Запрос с явно провальным входом (REJECT на троичном уровне)
+    print("\n--- Запрос 2: заведомо низкие оценки (ожидаем REJECT) ---")
+    r2 = orchestrator.process("Нужен топ-флагман", {"Камера": 0.1, "Цена": 0.15})
+    print(f"Статус: {r2.status}")
+    print(f"Причина: {r2.ternary.l3_in_reason}")
+
+    # 3. Полный прогон с L5-слоями (доходит до матрицы)
+    print("\n--- Запрос 3: с L5-слоями (полная цепочка до матрицы) ---")
+    r3 = orchestrator.process(
+        "Флагман до 1000 евро",
+        {"Камера": 0.95, "Бренд": 0.85, "Автономность": 0.7},
+        l5_values={'intent': 2, 'goal': 1, 'ontology': 0, 'context': 1, 'action': 2},
+    )
+    print(f"Статус: {r3.status}, L5 использованы: {r3.l5_used}")
+    print(f"Пентарное состояние: {r3.pentary_state.value.name}")
+    print("Матрица после diagonal_projection:")
+    for row in r3.matrix.data:
+        print(f"  {row}")
+
+    # 4. Сводный статус
+    print("\n--- Сводный статус (из собственных аудит-цепочек блоков) ---")
+    st = orchestrator.status()
+    print(f"Троичная история: {st['ternary_history_len']} записей")
+    print(f"Пентарная цепочка: length={st['pentary_audit_chain']['length']}, "
+          f"verified={st['pentary_audit_chain']['verified']}")
+    print(f"Матричная цепочка: length={st['matrix_audit_chain']['length']}, "
+          f"verified={st['matrix_audit_chain']['verified']}")
+
+    print("\n✅ демонстрация завершена")
