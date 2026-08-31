@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+БЛОК ОБРАБОТКИ ТРИТОВ ПО МЕТОДИКЕ БРУСЕНЦОВА — NumPy-версия
+================================================================================
+Замена скалярной версии (brusentsov_trits.py) для случаев, когда нужно
+обработать МНОГО тритов за раз (массивами, не по одному).
+
+Замерено честно (см. обсуждение в чате):
+  - Простая операция (отрицание) поэлементно в Python: ~23 млн тритов/сек
+  - Та же операция через NumPy:                          ~256 млн тритов/сек (11x)
+  - Табличная бинарная операция (как импликация) в Python: ~8 млн операций/сек
+  - Та же операция через NumPy-таблицу:                    ~200 млн операций/сек (25x)
+
+ВАЖНО: это ускорение приходит НЕ от троичности и не от "упаковки в трайты",
+а от замены интерпретируемого Python-цикла на векторизованный вызов C-кода
+внутри NumPy. Чем сложнее операция на трит, тем больше выигрыш (см. цифры
+выше — 11x на простой операции против 25x на табличной).
+
+Логика операций (два закона — отрицание и импликация, остальное выводится)
+не изменилась относительно brusentsov_trits.py — изменилась только
+реализация: списки + dict -> NumPy-массивы + табличная индексация.
+
+Для единичных значений (не массивов) используйте brusentsov_trits.py —
+там же нет смысла тратить накладные расходы на создание NumPy-массива
+ради одного трита.
+================================================================================
+"""
+
+import numpy as np
+from typing import Tuple
+
+TritArray = np.ndarray  # dtype=np.int8, значения -1, 0, 1
+
+
+def _check_trit_array(arr: TritArray) -> TritArray:
+    if not np.all(np.isin(arr, [-1, 0, 1])):
+        raise ValueError("Массив содержит значения, отличные от -1, 0, 1")
+    return arr
+
+
+def make_trit_array(values) -> TritArray:
+    """Список/массив чисел -> проверенный NumPy-массив тритов (int8)."""
+    arr = np.asarray(values, dtype=np.int8)
+    return _check_trit_array(arr)
+
+
+# ============================================================
+# 1. ДВА ЗАКОНА: ОТРИЦАНИЕ И ИМПЛИКАЦИЯ (векторизованные)
+# ============================================================
+
+def trit_not(arr: TritArray) -> TritArray:
+    """Отрицание всего массива разом: -t для каждого элемента."""
+    return -_check_trit_array(arr)
+
+
+# Таблица импликации в виде 3x3 NumPy-массива.
+# Индексация: [a+1, b+1], т.к. a,b in {-1,0,1} -> индексы {0,1,2}.
+_IMPL_NP = np.array([
+    [1, 1, 1],    # a=-1: b=-1,0,1 -> 1,1,1
+    [0, 1, 1],    # a=0
+    [-1, 0, 1],   # a=1
+], dtype=np.int8)
+
+
+def trit_impl(a: TritArray, b: TritArray) -> TritArray:
+    """Импликация a -> b, поэлементно по всему массиву через табличную индексацию."""
+    a, b = _check_trit_array(a), _check_trit_array(b)
+    if a.shape != b.shape:
+        raise ValueError(f"Размеры массивов не совпадают: {a.shape} != {b.shape}")
+    return _IMPL_NP[a + 1, b + 1]
+
+
+# ============================================================
+# 2. ВЫВЕДЕННЫЕ ОПЕРАЦИИ (те же формулы, что в скалярной версии)
+# ============================================================
+
+def trit_and(a: TritArray, b: TritArray) -> TritArray:
+    """a AND b := NOT(a -> NOT(b)). "Сильная" (Лукасевич) конъюнкция."""
+    return trit_not(trit_impl(a, trit_not(b)))
+
+
+def trit_or(a: TritArray, b: TritArray) -> TritArray:
+    """a OR b := (NOT a) -> b."""
+    return trit_impl(trit_not(a), b)
+
+
+def fold_and(arr: TritArray) -> int:
+    """Свёртка одного вектора через AND (последовательно, как reduce)."""
+    arr = _check_trit_array(arr)
+    if arr.size == 0:
+        return 1
+    result = int(arr[0])
+    for t in arr[1:]:
+        result = int(trit_and(np.array([result], dtype=np.int8), np.array([t], dtype=np.int8))[0])
+    return result
+
+
+def fold_or(arr: TritArray) -> int:
+    """Свёртка одного вектора через OR (последовательно, как reduce)."""
+    arr = _check_trit_array(arr)
+    if arr.size == 0:
+        return -1
+    result = int(arr[0])
+    for t in arr[1:]:
+        result = int(trit_or(np.array([result], dtype=np.int8), np.array([t], dtype=np.int8))[0])
+    return result
+
+
+def _tree_reduce_batch(matrix: TritArray, op, neutral: int) -> np.ndarray:
+    """Векторизованная свёртка M независимых векторов (строк матрицы MxK) в
+    M чисел, попарным деревом (log2(K) векторизованных шагов вместо K
+    последовательных). Корректно только для АССОЦИАТИВНОЙ op (проверено
+    для trit_and/trit_or на всех 27 тройках -1,0,1 — см. чат)."""
+    m = _check_trit_array(matrix).copy()
+    while m.shape[1] > 1:
+        k = m.shape[1]
+        if k % 2 == 1:
+            # нечётный хвост: дополняем нейтральным элементом справа
+            m = np.concatenate([m, np.full((m.shape[0], 1), neutral, dtype=np.int8)], axis=1)
+            k += 1
+        left, right = m[:, 0::2], m[:, 1::2]
+        m = op(left, right)
+    return m[:, 0]
+
+
+def fold_and_batch(matrix: TritArray) -> np.ndarray:
+    """Свёртка через AND сразу для M независимых векторов (матрица MxK) ->
+    массив из M результатов. Векторизовано (log2(K) шагов NumPy вместо
+    M*K последовательных вызовов в Python)."""
+    return _tree_reduce_batch(matrix, trit_and, neutral=1)  # 1 = нейтральный элемент AND
+
+
+def fold_or_batch(matrix: TritArray) -> np.ndarray:
+    """Свёртка через OR сразу для M независимых векторов (матрица MxK) ->
+    массив из M результатов. Векторизовано."""
+    return _tree_reduce_batch(matrix, trit_or, neutral=-1)  # -1 = нейтральный элемент OR
+
+
+# ============================================================
+# 3. СБАЛАНСИРОВАННАЯ ТРОИЧНАЯ АРИФМЕТИКА (батч-версия)
+# ============================================================
+
+TRAIT_SIZE = 6  # трайт = 6 тритов, диапазон -364..+364
+
+
+def to_balanced_ternary_batch(numbers, width: int = TRAIT_SIZE) -> np.ndarray:
+    """Массив целых чисел -> матрица тритов (N чисел x width тритов, младший разряд первым)."""
+    numbers = np.asarray(numbers, dtype=np.int64)
+    max_val = (3 ** width - 1) // 2
+    if np.any(np.abs(numbers) > max_val):
+        raise ValueError(f"Есть числа вне диапазона ±{max_val} для {width} тритов")
+
+    result = np.zeros((len(numbers), width), dtype=np.int8)
+    v = numbers.copy()
+    for i in range(width):
+        rem = v % 3
+        v = v // 3
+        # балансировка: rem==2 -> -1 и перенос в следующий разряд
+        mask = rem == 2
+        rem = np.where(mask, -1, rem)
+        v = np.where(mask, v + 1, v)
+        result[:, i] = rem
+    return result
+
+
+def from_balanced_ternary_batch(trit_matrix: np.ndarray) -> np.ndarray:
+    """Матрица тритов (N x width, младший разряд первым) -> массив целых чисел."""
+    trit_matrix = _check_trit_array(np.asarray(trit_matrix, dtype=np.int64))
+    width = trit_matrix.shape[1]
+    powers = 3 ** np.arange(width)
+    return trit_matrix @ powers
+
+
+# ============================================================
+# ДЕМОНСТРАЦИЯ И СВЕРКА СО СКАЛЯРНОЙ ВЕРСИЕЙ
+# ============================================================
+
+if __name__ == "__main__":
+    import time
+
+    print("=" * 70)
+    print("БЛОК БРУСЕНЦОВА — NUMPY-ВЕРСИЯ")
+    print("=" * 70)
+
+    # 1. Проверка корректности таблицы AND/OR (сверка со скалярной версией)
+    print("\nТаблица AND/OR (векторизованная), сверка со скалярной:")
+    a_vals = np.array([-1, -1, -1, 0, 0, 0, 1, 1, 1], dtype=np.int8)
+    b_vals = np.array([-1, 0, 1, -1, 0, 1, -1, 0, 1], dtype=np.int8)
+    and_res = trit_and(a_vals, b_vals)
+    or_res = trit_or(a_vals, b_vals)
+    for a, b, r_and, r_or in zip(a_vals, b_vals, and_res, or_res):
+        print(f"  AND({a:2d},{b:2d})={r_and:2d}   OR({a:2d},{b:2d})={r_or:2d}")
+
+    # 2. Батч-арифметика
+    numbers = [42, 100, 50, -200, 364]
+    trit_matrix = to_balanced_ternary_batch(numbers)
+    back = from_balanced_ternary_batch(trit_matrix)
+    print(f"\nЧисла {numbers} -> трайты -> обратно {back.tolist()}")
+
+    # 3. Реальный замер на большом объёме — сверка ускорения из обсуждения
+    N = 2_000_000
+    rng = np.random.default_rng(42)
+    big_a = rng.choice([-1, 0, 1], size=N).astype(np.int8)
+    big_b = rng.choice([-1, 0, 1], size=N).astype(np.int8)
+
+    t0 = time.perf_counter()
+    _ = trit_impl(big_a, big_b)
+    dt = time.perf_counter() - t0
+    print(f"\n{N:,} импликаций через NumPy: {dt:.4f} сек ({N/dt:,.0f} операций/сек)")
+
+    # 3.5. Батч-свёртка: проверка корректности + честный замер против Python-цикла
+    print("\nБатч-свёртка (fold_and_batch / fold_or_batch):")
+    M, K = 50_000, 16
+    rng2 = np.random.default_rng(7)
+    batch = rng2.choice([-1, 0, 1], size=(M, K)).astype(np.int8)
+
+    # эталон: наивный Python-цикл по каждому вектору, последовательный fold
+    t0 = time.perf_counter()
+    ref_and = [fold_and(row) for row in batch[:2000]]  # на полном M это было бы слишком долго
+    time_ref = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    vec_and_full = fold_and_batch(batch)
+    time_vec_full = time.perf_counter() - t0
+
+    vec_and_sample = vec_and_full[:2000]
+    match = all(int(a) == int(b) for a, b in zip(ref_and, vec_and_sample))
+    print(f"  Корректность (сверка на 2000 из {M} векторов): {match}")
+    print(f"  Python-цикл (fold_and) на 2000 векторов x {K}:      {time_ref:.4f} сек")
+    print(f"  Векторизованная fold_and_batch на всех {M} векторов x {K}: {time_vec_full:.4f} сек")
+    # честная оценка: сколько бы времени занял Python-цикл на всех M векторах (экстраполяция)
+    est_full_python = time_ref * (M / 2000)
+    print(f"  Оценка времени Python-цикла на всех {M}: ~{est_full_python:.4f} сек")
+    print(f"  Ускорение (оценка): {est_full_python/time_vec_full:.1f}x")
+
+    print("\n✅ демонстрация завершена")
