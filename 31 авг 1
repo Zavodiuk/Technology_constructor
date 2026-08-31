@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+ПЕНТАРНАЯ ЛОГИКА ПО МЕТОДИКЕ БРУСЕНЦОВА (обобщение с троичной, k=1 -> k=2)
+================================================================================
+Домен: {-2, -1, 0, 1, 2}
+  +2 — сильное "да"     (STRONG_TRUE)
+  +1 — "да"             (TRUE)
+   0 — свёртка/неопределённость (UNDEFINED)
+  -1 — "нет"            (FALSE)
+  -2 — сильное "нет"    (STRONG_FALSE)
+(та же разметка, что в PentarnyState из pentary_block.py)
+
+Основание: два закона (отрицание, импликация) обобщаются с троичного случая
+(домен -1..1, k=1) на пентарный (домен -2..2, k=2) по общей формуле
+Лукасевича для (2k+1)-значной логики:
+
+    impl(a, b) = min(k, k - a + b)
+    not(a) = -a
+    and(a, b) = not(impl(a, not(b))) = max(-k, a + b - k)
+    or(a, b)  = impl(not(a), b)        = min(k,  a + b + k)
+
+Проверено численно перед написанием кода (см. чат):
+  - Формула при k=1 даёт ровно ту же таблицу, что в brusentsov_trits.py
+  - AND/OR при k=2 ассоциативны на всех 125 тройках (-2..2)
+  - Нейтральные элементы: AND(2,x)=x, OR(-2,x)=x для любого x
+
+Так как импликация и AND/OR здесь — прямые арифметические формулы (не
+таблица), векторизация ещё дешевле, чем в троичном случае: не нужна
+индексация по таблице, только сложение/вычитание и clip.
+================================================================================
+"""
+
+import numpy as np
+from typing import Union
+
+Penta = np.ndarray  # dtype=np.int8, значения -2..2
+
+K = 2  # параметр домена (пентарная логика: -2..2)
+
+
+def _check_penta(arr: Penta) -> Penta:
+    if not np.all(np.isin(arr, [-2, -1, 0, 1, 2])):
+        raise ValueError("Массив содержит значения вне {-2,-1,0,1,2}")
+    return arr
+
+
+def make_penta_array(values) -> Penta:
+    return _check_penta(np.asarray(values, dtype=np.int8))
+
+
+# ============================================================
+# ДВА ЗАКОНА (векторизованные, чистая арифметика, без таблиц)
+# ============================================================
+
+def penta_not(a: Penta) -> Penta:
+    return -_check_penta(a)
+
+
+def penta_impl(a: Penta, b: Penta) -> Penta:
+    """impl(a,b) = min(K, K - a + b)."""
+    a, b = _check_penta(a), _check_penta(b)
+    if a.shape != b.shape:
+        raise ValueError(f"Размеры не совпадают: {a.shape} != {b.shape}")
+    return np.minimum(K, K - a + b).astype(np.int8)
+
+
+def penta_and(a: Penta, b: Penta) -> Penta:
+    """AND(a,b) = NOT(a -> NOT(b)) = max(-K, a+b-K). "Сильная" конъюнкция."""
+    return penta_not(penta_impl(a, penta_not(b)))
+
+
+def penta_or(a: Penta, b: Penta) -> Penta:
+    """OR(a,b) = (NOT a) -> b = min(K, a+b+K)."""
+    return penta_impl(penta_not(a), b)
+
+
+# ============================================================
+# БАТЧ-СВЁРТКА (дерево, как в троичной версии — ассоциативность подтверждена)
+# ============================================================
+
+def _tree_reduce_batch(matrix: Penta, op, neutral: int) -> np.ndarray:
+    m = _check_penta(matrix).copy()
+    while m.shape[1] > 1:
+        k = m.shape[1]
+        if k % 2 == 1:
+            m = np.concatenate([m, np.full((m.shape[0], 1), neutral, dtype=np.int8)], axis=1)
+        left, right = m[:, 0::2], m[:, 1::2]
+        m = op(left, right)
+    return m[:, 0]
+
+
+def fold_and_batch(matrix: Penta) -> np.ndarray:
+    """Свёртка через AND для M независимых пентарных векторов сразу.
+    Нейтральный элемент AND = +2 (сильное 'да' — не мешает конъюнкции)."""
+    return _tree_reduce_batch(matrix, penta_and, neutral=2)
+
+
+def fold_or_batch(matrix: Penta) -> np.ndarray:
+    """Свёртка через OR для M независимых пентарных векторов сразу.
+    Нейтральный элемент OR = -2 (сильное 'нет' — не мешает дизъюнкции)."""
+    return _tree_reduce_batch(matrix, penta_or, neutral=-2)
+
+
+# ============================================================
+# ДЕМОНСТРАЦИЯ, СВЕРКА И ЗАМЕР СКОРОСТИ
+# ============================================================
+
+if __name__ == "__main__":
+    import time
+
+    print("=" * 70)
+    print("ПЕНТАРНАЯ ЛОГИКА ПО БРУСЕНЦОВУ (k=2)")
+    print("=" * 70)
+
+    vals5 = np.array([-2, -1, 0, 1, 2], dtype=np.int8)
+
+    print("\nТаблица импликации (векторизованная, сверка со скалярным выводом):")
+    for a in vals5:
+        row = penta_impl(np.full(5, a, dtype=np.int8), vals5)
+        print(f"  a={int(a):2d}: {row.tolist()}")
+
+    # 1. Скалярная сверка (эталон из derive_pentary_impl.py) — построчно
+    def impl_k_scalar(a, b, k=2):
+        return min(k, k - a + b)
+
+    mismatch = 0
+    for a in [-2, -1, 0, 1, 2]:
+        for b in [-2, -1, 0, 1, 2]:
+            got = int(penta_impl(np.array([a], dtype=np.int8), np.array([b], dtype=np.int8))[0])
+            expected = impl_k_scalar(a, b)
+            if got != expected:
+                mismatch += 1
+    print(f"\nСверка со скалярной формулой на всех 25 парах: расхождений = {mismatch}")
+
+    # 2. Реальный замер скорости — та же проверка, что была для троичного случая
+    N = 2_000_000
+    rng = np.random.default_rng(42)
+    big_a = rng.choice(vals5, size=N).astype(np.int8)
+    big_b = rng.choice(vals5, size=N).astype(np.int8)
+
+    t0 = time.perf_counter()
+    _ = penta_impl(big_a, big_b)
+    dt = time.perf_counter() - t0
+    print(f"\n{N:,} пентарных импликаций через NumPy (арифметика, не таблица): "
+          f"{dt:.4f} сек ({N/dt:,.0f} операций/сек)")
+
+    # 3. Батч-свёртка: корректность + скорость
+    M, Kw = 50_000, 16
+    rng2 = np.random.default_rng(7)
+    batch = rng2.choice(vals5, size=(M, Kw)).astype(np.int8)
+
+    def fold_and_scalar(arr):
+        result = int(arr[0])
+        for t in arr[1:]:
+            result = int(penta_and(np.array([result], dtype=np.int8), np.array([t], dtype=np.int8))[0])
+        return result
+
+    t0 = time.perf_counter()
+    ref = [fold_and_scalar(row) for row in batch[:2000]]
+    time_ref = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    vec = fold_and_batch(batch)
+    time_vec = time.perf_counter() - t0
+
+    match = all(int(r) == int(v) for r, v in zip(ref, vec[:2000]))
+    est_full = time_ref * (M / 2000)
+    print(f"\nБатч-свёртка AND, M={M}, K={Kw}:")
+    print(f"  Корректность (сверка на 2000 из {M}): {match}")
+    print(f"  Оценка Python-цикла на все {M}: ~{est_full:.4f} сек")
+    print(f"  Векторизованная fold_and_batch:        {time_vec:.4f} сек")
+    print(f"  Ускорение (оценка): {est_full/time_vec:.1f}x")
+
+    print("\n✅ демонстрация завершена")
