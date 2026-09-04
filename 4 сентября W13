@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved
+# Vladimir Zavodiuk
+
+"""
+================================================================================
+ОРКЕСТРАТОР ИИ-КЛАСТЕРА — ИНТЕГРАЦИЯ С ЧИСТЫМ ГЕЙТОМ BXOS (ДВОЙНОЙ РАШИМОН)
+================================================================================
+Место в схеме: стоит НАД всем стеком и контролирует прохождение через 
+детерминированный гейт нулевой задержки (BXOSGate).
+
+  ВХОД -> [BXOS: Входной гейт] -> [ТРОИЧНЫЙ БЛОК] -> [БРУСЕНЦОВ: свёртка] ->
+          [ПЕНТАРНЫЙ БЛОК] -> [МАТРИЧНЫЙ БЛОК (L5)] -> [BXOS: Выходной гейт] -> РЕЗУЛЬТАТ
+================================================================================
+"""
+
+import sys
+import os
+import time
+from enum import Enum
+from dataclasses import dataclass
+from typing import Dict, Any, Optional, List
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from ternary_block import TernaryBlock, TernaryResult
+from brusentsov_trits import fold_and
+from pentary_final import PentaryBlock, PentarnyStateData
+from ternary_matrix_block import TernaryMatrixBlock, from_pentary, TernaryMatrix
+
+
+# ============================================================
+# РАШИМОН И ЧИСТЫЙ ГЕЙТ BXOS (НУЛЕВАЯ ЗАДЕРЖКА)
+# ============================================================
+
+def rashomon_analyze(interpretations: Dict[str, float],
+                      margin_threshold: float = 0.15,
+                      min_score: float = 0.3) -> Dict:
+    if not interpretations:
+        return {'state': -1, 'top': None, 'margin': 0.0, 'reason': 'Нет интерпретаций'}
+    sorted_items = sorted(interpretations.items(), key=lambda x: x[1], reverse=True)
+    top_label, top_score = sorted_items[0]
+    margin = top_score - sorted_items[1][1] if len(sorted_items) > 1 else top_score
+    if top_score < min_score:
+        state, reason = -1, f"Лучшая оценка слишком низкая: {top_score:.2f}"
+    elif margin >= margin_threshold:
+        state, reason = 1, f"Устойчивое ядро: отрыв {margin:.2f}"
+    else:
+        state, reason = 0, f"Неопределённость: отрыв {margin:.2f}"
+    return {'state': state, 'top': top_label, 'margin': margin, 'reason': reason}
+
+
+class GateStatus(Enum):
+    READY = "ready_for_simulation"
+    LOCKED = "locked_critical"
+
+
+@dataclass
+class GateResult:
+    status: GateStatus
+    stage: str  # "input" | "output"
+    reason: str
+    timestamp: float
+
+
+class BXOSGate:
+    """Детерминированный гейт нулевой задержки: двойной Рашимон на входе и выходе."""
+
+    def __init__(self, margin_threshold: float = 0.15, min_score: float = 0.3,
+                 min_confidence: float = 0.4, critical_pentary_states=(-2, -1),
+                 max_log: int = 1000):
+        self.margin_threshold = margin_threshold
+        self.min_score = min_score
+        self.min_confidence = min_confidence
+        self.critical_pentary_states = set(critical_pentary_states)
+        self.max_log = max_log
+        self.log: List[GateResult] = []
+
+    def _record(self, result: GateResult) -> GateResult:
+        self.log.append(result)
+        if len(self.log) > self.max_log:
+            self.log.pop(0)
+        return result
+
+    def check_input(self, interpretations: Dict[str, float]) -> GateResult:
+        analysis = rashomon_analyze(interpretations, self.margin_threshold, self.min_score)
+        status = GateStatus.LOCKED if analysis['state'] == -1 else GateStatus.READY
+        return self._record(GateResult(status=status, stage="input",
+                                        reason=analysis['reason'], timestamp=time.time()))
+
+    def check_output(self, pentary_value: int, confidence: float) -> GateResult:
+        if pentary_value not in (-2, -1, 0, 1, 2):
+            raise ValueError("pentary_value должен быть в диапазоне -2..2")
+
+        if pentary_value in self.critical_pentary_states:
+            reason = f"критическое состояние на выходе: {pentary_value}"
+            status = GateStatus.LOCKED
+        elif confidence < self.min_confidence:
+            reason = f"уверенность ниже порога: {confidence:.2f} < {self.min_confidence}"
+            status = GateStatus.LOCKED
+        else:
+            reason = "выход прошёл проверку"
+            status = GateStatus.READY
+
+        return self._record(GateResult(status=status, stage="output",
+                                        reason=reason, timestamp=time.time()))
+
+    def summary(self) -> Dict[str, Any]:
+        locked = sum(1 for r in self.log if r.status == GateStatus.LOCKED)
+        ready = len(self.log) - locked
+        return {'total': len(self.log), 'ready': ready, 'locked': locked}
+
+
+# ============================================================
+# МОСТИК: ТРИТ -> УВЕРЕННОСТЬ
+# ============================================================
+
+def trit_to_confidence(trit: int) -> float:
+    return {-1: 0.3, 0: 0.55, 1: 0.85}[trit]
+
+
+@dataclass
+class PipelineResult:
+    status: str  # "ok" | "rejected_by_bxos_input" | "rejected_by_ternary" | "locked_by_bxos_output"
+    bxos_input: Optional[GateResult]
+    ternary: Optional[TernaryResult]
+    consolidated_trit: Optional[int]
+    pentary_state: Optional[PentarnyStateData]
+    matrix: Optional[TernaryMatrix]
+    l5_used: bool
+    bxos_output: Optional[GateResult]
+
+
+class Orchestrator:
+    """
+    Основной оркестратор пайплайна: последовательно проводит запрос через 
+    BXOS-вход, троичный блок, Брусенцова, пентарный слой, матричную проекцию 
+    и BXOS-выход.
+    """
+
+    def __init__(self):
+        self.bxos_gate = BXOSGate()
+        self.ternary = TernaryBlock()
+        self.pentary = PentaryBlock()
+        self.matrix = TernaryMatrixBlock()
+
+    def process(
+        self, 
+        query: str, 
+        interpretations: Dict[str, float],
+        l5_values: Optional[Dict[str, int]] = None
+    ) -> PipelineResult:
+        
+        # 1. BXOS ВХОДНОЙ ГЕЙТ (Первый Рашимон)
+        gate_in = self.bxos_gate.check_input(interpretations)
+        if gate_in.status == GateStatus.LOCKED:
+            return PipelineResult(
+                status="rejected_by_bxos_input", bxos_input=gate_in, ternary=None,
+                consolidated_trit=None, pentary_state=None, matrix=None, 
+                l5_used=False, bxos_output=None
+            )
+
+        # 2. ТРОИЧНЫЙ БЛОК
+        tr = self.ternary.process(query, interpretations)
+        if tr.final_decision == "REJECT":
+            return PipelineResult(
+                status="rejected_by_ternary", bxos_input=gate_in, ternary=tr,
+                consolidated_trit=None, pentary_state=None, matrix=None, 
+                l5_used=False, bxos_output=None
+            )
+
+        # 3. БРУСЕНЦОВ: свёртка трёх тритов
+        consolidated = fold_and((tr.l3_in, tr.l3_out, tr.efficiency_trit))
+        confidence = trit_to_confidence(consolidated)
+
+        # 4. ПЕНТАРНЫЙ БЛОК
+        pentary_state = self.pentary.receive_from_ternary(
+            best_candidate=tr.best_candidate, score=tr.efficiency, confidence=confidence
+        )
+
+        # 5. (ОПЦИОНАЛЬНО) ТРОИЧНЫЕ МАТРИЦЫ (L5)
+        matrix_result = None
+        l5_used = False
+        if l5_values and set(l5_values.keys()) == {'intent', 'goal', 'ontology', 'context', 'action'}:
+            for layer, value in l5_values.items():
+                self.pentary.set_l5_state(layer, value)
+            l5_used = True
+            mat = from_pentary(l5_values)
+            self.matrix.state = mat
+            self.matrix.apply('diagonal_projection')
+            matrix_result = self.matrix.state
+
+        # 6. BXOS ВЫХОДНОЙ ГЕЙТ (Второй Рашимон)
+        gate_out = self.bxos_gate.check_output(pentary_state.value.value, pentary_state.confidence)
+        if gate_out.status == GateStatus.LOCKED:
+            return PipelineResult(
+                status="locked_by_bxos_output", bxos_input=gate_in, ternary=tr,
+                consolidated_trit=consolidated, pentary_state=pentary_state, matrix=matrix_result,
+                l5_used=l5_used, bxos_output=gate_out
+            )
+
+        return PipelineResult(
+            status="ok", bxos_input=gate_in, ternary=tr,
+            consolidated_trit=consolidated, pentary_state=pentary_state, matrix=matrix_result,
+            l5_used=l5_used, bxos_output=gate_out
+        )
+
+    def status(self) -> Dict[str, Any]:
+        return {
+            'ternary_history_len': len(self.ternary.history),
+            'pentary_audit_chain': self.pentary.chain.to_dict(),
+            'matrix_audit_chain': self.matrix.chain.to_dict(),
+            'bxos_gate_summary': self.bxos_gate.summary(),
+        }
+
+
+# ============================================================
+# ДЕМОНСТРАЦИЯ
+# ============================================================
+
+if __name__ == "__main__":
+    orchestrator = Orchestrator()
+
+    print("=" * 70)
+    print("ОРКЕСТРАТОР ИИ-КЛАСТЕРА С ИНТЕГРИРОВАННЫМ BXOS-ГЕЙТОМ")
+    print("=" * 70)
+
+    # 1. Успешный прогон через полный контур
+    print("\n--- Запрос 1: Штатный режим с L5-слоями ---")
+    r1 = orchestrator.process(
+        query="Масштабирование распределенного кластера ИИ",
+        interpretations={"Compute": 0.95, "Memory": 0.5, "Latency": 0.7},
+        l5_values={'intent': 2, 'goal': 2, 'ontology': 1, 'context': 1, 'action': 2}
+    )
+    print(f"Статус пайплайна: {r1.status}")
+    print(f"BXOS Вход: {r1.bxos_input.status.value} ({r1.bxos_input.reason})")
+    print(f"Брусенцов (консолидированный трит): {r1.consolidated_trit}")
+    print(f"Пентарное состояние: {r1.pentary_state.value.name} (conf={r1.pentary_state.confidence})")
+    print(f"Матрица использована: {r1.l5_used}")
+    print(f"BXOS Выход: {r1.bxos_output.status.value} ({r1.bxos_output.reason})")
+
+    # 2. Блокировка на входном гейте BXOS (слабые интерпретации)
+    print("\n--- Запрос 2: Блокировка BXOS на входе (слабые данные) ---")
+    r2 = orchestrator.process(
+        query="Аварийный перезапуск",
+        interpretations={"Compute": 0.1, "Memory": 0.15}
+    )
+    print(f"Статус пайплайна: {r2.status}")
+    print(f"BXOS Вход: {r2.bxos_input.status.value} — {r2.bxos_input.reason}")
+
+    # 3. Сводный статус гейта и цепочек
+    print("\n--- Сводный статус системы ---")
+    st = orchestrator.status()
+    print(f"Сводка BXOS Gate: {st['bxos_gate_summary']}")
+    print(f"Троичная история: {st['ternary_history_len']} записей")
+    print(f"Пентарная цепочка: length={st['pentary_audit_chain']['length']}, verified={st['pentary_audit_chain']['verified']}")
+
+    print("\n✅ Интеграция BXOS-гейта в оркестратор успешно завершена.")
