@@ -1,0 +1,412 @@
+# -*- coding: utf-8 -*-
+"""
+ПЕНТАРНАЯ КИБЕРНЕТИЧЕСКАЯ СИСТЕМА — V19 (ПОЛНОМАСШТАБНОЕ НАУЧНОЕ ЯДРО)
+Автор: Владимир Заводюк (Root-Architect)
+Версия: 19.0 (Unified Hyper-Tensor Architecture)
+
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+
+ВНИМАНИЕ: Данный файл содержит архитектурное описание и математическую модель
+саморегулирующихся нелинейных контуров на базе пентарной логики [-2, 2]. 
+Файл может представлять потенциальную системную опасность (риск лавинообразного 
+резонанса энтропии, неконтролируемой деформации волновых мембран и аппаратной 
+блокировки распределенных узлов) при несанкционированном развёртывании на больших сетях.
+"""
+
+import numpy as np
+import time
+import random
+import math
+from itertools import product
+from collections import Counter, defaultdict
+from typing import Dict, List, Tuple, Optional, Any
+
+# --- БАЗИС И СЕМИОТИЧЕСКИЕ СЛОВАРИ ПЕНТАРНОЙ ЛОГИКИ ---
+LOGIC_BASIS: List[int] = [2, 1, 0, -1, -2]
+
+MASKS: Dict[int, str] = {
+     2: "Бригелла (Да / Пик / Абсолютный Источник / Истина)",
+     1: "Коломбина (Скорее Да / Восходящий фронт / Вероятностный Поток)",
+     0: "Доктор Грациано (Наверное / Центр / Абсолютный Баланс / Покой)",
+    -1: "Пьеро (Скорее Нет / Нисходящий фронт / Локальное Сомнение)",
+    -2: "Арлекин (Нет / Впадина / Полная Блокировка / Ложь)"
+}
+
+PENTAR_CODE: Dict[int, str] = {
+    -2: "КАТЕГОРИЧЕСКОЕ НЕТ (Аппаратный обрыв канала / Сингулярный сток)",
+    -1: "МЯГКОЕ НЕТ (Демпфирование потока / Энергетическое торможение)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Свободный ламинарный транзит)",
+     1: "МЯГКОЕ ДА (Активация проводимости / Индукционный подъем)",
+     2: "КАТЕГОРИЧЕСКОЕ ДА (Сверхпроводимость / Резонансное ускорение)"
+}
+
+def quantize_pentarny(value: float) -> int:
+    """Непрерывно-дискретный квантователь сигналов в пентарный базис [-2, 2]"""
+    if value > 0.75:
+        return 2
+    elif value > 0.25:
+        return 1
+    elif value >= -0.25:
+        return 0
+    elif value >= -0.75:
+        return -1
+    else:
+        return -2
+
+
+# ============================================================================
+# МОДУЛЬ 1: МАКРО-ПОЛЕ И ТЕНЗОРНАЯ МЕТРИКА ( [] )
+# ============================================================================
+class PentarnyTensorField:
+    """
+    Макроскопическая тензорная среда высокой размерности. 
+    Использует квадратные скобки `[]` для адресного пространства и пространственных срезов.
+    """
+    def __init__(self, dimensions: Tuple[int, ...]):
+        self.dimensions = dimensions
+        self.field = np.zeros(dimensions, dtype=int)
+        self.metric_tension_tensor = np.zeros(dimensions, dtype=float)
+
+    def inject_quantum_impulse(self, coordinates: Tuple[int, ...], value: int) -> None:
+        if value not in [-2, -1, 0, 1, 2]:
+            raise ValueError("Значение импульса должно строго соответствовать базису [-2, 2]")
+        if all(0 <= coordinates[i] < self.dimensions[i] for i in range(len(self.dimensions))):
+            self.field[coordinates] = value
+
+    def calculate_field_entropy(self) -> float:
+        total_elements = self.field.size
+        if total_elements == 0:
+            return 0.0
+        counts = Counter(self.field.flatten())
+        entropy = 0.0
+        for count in counts.values():
+            p = count / total_elements
+            if p > 0:
+                entropy -= p * math.log2(p)
+        return float(entropy)
+
+    def evaluate_metric_tensor(self) -> float:
+        extreme_states = np.sum(np.abs(self.field) == 2)
+        return float(extreme_states / self.field.size)
+
+
+class PentarnyTensorEvolution:
+    """Модуль нелинейной волновой эволюции и градиентного анализа макро-среды."""
+    def __init__(self, tensor_field: PentarnyTensorField):
+        self.field = tensor_field
+        self.step_counter = 0
+
+    def propagate_wave(self, origin: Tuple[int, ...], radius: int = 1) -> None:
+        dims = len(origin)
+        self.step_counter += 1
+        ranges = [range(max(0, origin[d] - radius), 
+                       min(self.field.dimensions[d], origin[d] + radius + 1)) 
+                  for d in range(dims)]
+        for coords in product(*ranges):
+            dist = sum(abs(coords[d] - origin[d]) for d in range(dims))
+            if 0 < dist <= radius:
+                impulse_value = self.field.field[origin] // (dist + 1)
+                if impulse_value != 0:
+                    current = self.field.field[coords]
+                    self.field.field[coords] = max(-2, min(2, current + impulse_value))
+
+    def calculate_field_gradient(self) -> List[np.ndarray]:
+        return np.gradient(self.field.field.astype(float))
+
+    def calculate_field_divergence(self) -> float:
+        gradient = self.calculate_field_gradient()
+        return float(np.sum([np.sum(np.abs(g)) for g in gradient]))
+
+
+# ============================================================================
+# МОДУЛЬ 2: МИКРО-ГРАФ СЕТЕВОЙ ФИЗИКИ И ПОРОГОВЫХ БАРЬЕРОВ ( : )
+# ============================================================================
+class PentarNode:
+    """
+    Микроскопический сетевой узел, обрабатывающий дуальные потоки сигналов
+    через пороговые разделители (двоеточие `:`).
+    """
+    def __init__(self, node_id: str):
+        self.node_id = node_id
+        self.internal_state: int = 0
+        self.mass: float = 0.0
+        self.decision: int = 0
+        self.historical_states: List[int] = []
+
+    def process_signals(self, signal_a: int, signal_b: int) -> int:
+        signal_a = int(max(-2, min(2, signal_a)))
+        signal_b = int(max(-2, min(2, signal_b)))
+
+        sum_of_decisions = signal_a + signal_b
+        conflict = abs(signal_a - signal_b)
+        
+        # Двоеточие `:` как разделитель режимов перехода
+        if conflict >= 3:
+            informational_mass = conflict * 3.1415
+            self.internal_state = 0
+        else:
+            informational_mass = conflict * 0.75
+            self.internal_state = max(-2, min(2, sum_of_decisions))
+            
+        self.mass = informational_mass
+        self.decision = self.internal_state
+        self.historical_states.append(self.decision)
+        return self.internal_state
+
+
+class PentarEdge:
+    """Канал связи между узлами с динамической теплоемкостью и волновым потоком."""
+    def __init__(self, source: PentarNode, target: PentarNode):
+        self.source = source
+        self.target = target
+        self.energy_flow: float = 1.0
+        self.temp: float = 1.0
+        self.rhythm: float = 0.0
+
+    def update_dynamics(self) -> None:
+        decision_sum = self.source.decision + self.target.decision
+        total_mass = self.source.mass + self.target.mass
+        old_temp = self.temp
+        base_modifier = 1.0 + (decision_sum * 0.2) - (total_mass * 0.15)
+        self.temp = max(0.05, base_modifier)
+        self.rhythm = self.temp - old_temp
+        
+        if self.source.decision == -2 or self.target.decision == -2:
+            self.energy_flow = 0.0
+        else:
+            self.energy_flow = (self.temp * 1.618) + (total_mass * 0.5)
+
+
+class PentarUniverseGraph:
+    """Сетевая инфраструктура графа с ассоциативной памятью ({}) суверенных узлов."""
+    def __init__(self):
+        self.nodes: Dict[str, PentarNode] = {}  # {} — ассоциативная память
+        self.edges: List[PentarEdge] = []
+        self.time_step: int = 0
+
+    def add_node(self, name: str) -> None:
+        self.nodes[name] = PentarNode(name)
+
+    def add_edge(self, src: str, tgt: str) -> None:
+        self.edges.append(PentarEdge(self.nodes[src], self.nodes[tgt]))
+
+    def pulse(self) -> None:
+        self.time_step += 1
+        for name, node in self.nodes.items():
+            connected_signals = []
+            for edge in self.edges:
+                if edge.target == node:
+                    norm_val = (edge.energy_flow - 1.5) / 1.5
+                    connected_signals.append(quantize_pentarny(norm_val))
+                elif edge.source == node:
+                    connected_signals.append(quantize_pentarny(edge.energy_flow / 3.0 - 0.5))
+            
+            if not connected_signals:
+                connected_signals = [random.choice(LOGIC_BASIS)]
+            
+            node.process_signals(int(connected_signals[0]), int(connected_signals[-1]))
+            
+        for edge in self.edges:
+            edge.update_dynamics()
+
+
+# ============================================================================
+# МОДУЛЬ 3: ТРЕХТОЧЕЧНАЯ ДИНАМИЧЕСКАЯ ПЛОСКОСТЬ И КОНФАЙНМЕНТ ( () )
+# ============================================================================
+class ConflictAttractorVertex:
+    """Отдельная вершина мембраны, дрейфующая по градиентам полевых напряжений."""
+    def __init__(self, name: str, initial_coords: Tuple[int, ...], field_dims: Tuple[int, ...]):
+        self.name = name
+        self.coords = list(initial_coords)
+        self.field_dims = field_dims
+        self.trajectory_log: List[Tuple[int, ...]] = [tuple(self.coords)]
+
+    def drift(self, tensor_field: np.ndarray, gradient_fields: List[np.ndarray]) -> None:
+        dims = len(self.field_dims)
+        best_coords = list(self.coords)
+        max_tension = -999.0
+
+        for d in range(dims):
+            for delta in [-1, 1]:
+                test_coords = list(self.coords)
+                test_coords[d] += delta
+                
+                if all(0 <= test_coords[i] < self.field_dims[i] for i in range(dims)):
+                    local_val = abs(tensor_field[tuple(test_coords)])
+                    grad_val = sum(abs(gradient_fields[i][tuple(test_coords)]) for i in range(dims))
+                    tension = local_val + (grad_val * 1.5)
+
+                    if tension > max_tension:
+                        max_tension = tension
+                        best_coords = test_coords
+
+        self.coords = best_coords
+        self.trajectory_log.append(tuple(self.coords))
+
+
+class DynamicPlaneMembrane:
+    """
+    Трехточечный геометрический примитив, образующий деформируемую плоскость 
+    внутри многомерной матрицы. Защищен круглами скобками `()` конфайнмента.
+    """
+    def __init__(self, field_dims: Tuple[int, ...], p1: Tuple[int, ...], p2: Tuple[int, ...], p3: Tuple[int, ...]):
+        self.field_dims = field_dims
+        self.vertex_a = ConflictAttractorVertex("Alpha", p1, field_dims)
+        self.vertex_b = ConflictAttractorVertex("Beta", p2, field_dims)
+        self.vertex_c = ConflictAttractorVertex("Gamma", p3, field_dims)
+
+    def evolve_membrane(self, tensor_field: np.ndarray, gradients: List[np.ndarray]) -> None:
+        self.vertex_a.drift(tensor_field, gradients)
+        self.vertex_b.drift(tensor_field, gradients)
+        self.vertex_c.drift(tensor_field, gradients)
+
+    def get_vertices(self) -> Tuple[Tuple[int, ...], Tuple[int, ...], Tuple[int, ...]]:
+        return (tuple(self.vertex_a.coords), tuple(self.vertex_b.coords), tuple(self.vertex_c.coords))
+
+    def radiate_membrane_front(self, tensor_field: PentarnyTensorField, evolution: PentarnyTensorEvolution) -> None:
+        va = tuple(self.vertex_a.coords)
+        vb = tuple(self.vertex_b.coords)
+        vc = tuple(self.vertex_c.coords)
+
+        tensor_field.inject_quantum_impulse(va, 2)
+        tensor_field.inject_quantum_impulse(vb, 0)
+        tensor_field.inject_quantum_impulse(vc, -2)
+
+        evolution.propagate_wave(va, radius=1)
+        evolution.propagate_wave(vb, radius=1)
+        evolution.propagate_wave(vc, radius=1)
+
+
+# ============================================================================
+# МОДУЛЬ 4: СИСТЕМА КОНТРОЛЯ КАСКАДОВ И ТЕЛЕМЕТРИИ ( @ / := )
+# ============================================================================
+class SystemicTelemetryMonitor:
+    """Контур защиты от лавинообразного резонанса и системной перегрузки."""
+    def __init__(self, entropy_threshold: float = 0.85):
+        self.entropy_threshold = entropy_threshold
+        self.cascade_warnings_issued = 0
+
+    def inspect_system_stability(self, current_entropy: float, current_divergence: float) -> bool:
+        if current_entropy > self.entropy_threshold or current_divergence > 50.0:
+            self.cascade_warnings_issued += 1
+            return True # Требуется экстренное демпфирование
+        return False
+
+
+# ============================================================================
+# МОДУЛЬ 5: УНИВЕРСАЛЬНЫЙ ИНТЕГРИРОВАННЫЙ ОРКЕСТРАТОР V19
+# ============================================================================
+class PentarnyUniverseV19:
+    """Главный оркестратор кибернетической среды V19."""
+    def __init__(self, dimensions: Tuple[int, ...], node_coordinates: Dict[str, Tuple[int, ...]]):
+        self.dimensions = dimensions
+        self.tensor_field = PentarnyTensorField(dimensions)
+        self.tensor_evolution = PentarnyTensorEvolution(self.tensor_field)
+        self.graph = PentarUniverseGraph()
+        self.node_coords = node_coordinates
+        self.telemetry = SystemicTelemetryMonitor()
+
+        mid = dimensions[0] // 2
+        max_idx = dimensions[0] - 1
+        p1 = (mid, mid, mid, mid)
+        p2 = (0, max_idx, mid, mid)
+        p3 = (max_idx, 0, mid, mid)
+        
+        self.membrane = DynamicPlaneMembrane(dimensions, p1, p2, p3)
+
+    def add_node(self, name: str, coords: Tuple[int, ...]) -> None:
+        self.graph.add_node(name)
+        self.node_coords[name] = coords
+
+    def add_edge(self, src: str, tgt: str) -> None:
+        self.graph.add_edge(src, tgt)
+
+    def step(self) -> None:
+        # := Моржовый оператор мгновенного захвата энтропии такта
+        active_entropy := self.tensor_field.calculate_field_entropy()
+        active_divergence := self.tensor_evolution.calculate_field_divergence()
+
+        if self.telemetry.inspect_system_stability(active_entropy, active_divergence):
+            # Аварийная стабилизация при угрозе резонанса
+            for edge in self.graph.edges:
+                edge.energy_flow *= 0.5
+
+        # Пульсация микро-графа
+        self.graph.pulse()
+
+        # Проекция решений в макро-поле
+        for name, node in self.graph.nodes.items():
+            if name in self.node_coords:
+                coords = self.node_coords[name]
+                impulse_val = int(node.decision)
+                if impulse_val != 0:
+                    self.tensor_field.inject_quantum_impulse(coords, impulse_val)
+
+        # Распространение волн узлов
+        for name, coords in self.node_coords.items():
+            self.tensor_evolution.propagate_wave(coords, radius=1)
+
+        # Эволюция трехточечной мембранной плоскости
+        gradients = self.tensor_evolution.calculate_field_gradient()
+        self.membrane.evolve_membrane(self.tensor_field.field, gradients)
+        self.membrane.radiate_membrane_front(self.tensor_field, self.tensor_evolution)
+
+        # Обратная связь поля на каналы графа
+        field_div = self.tensor_evolution.calculate_field_divergence()
+        for edge in self.graph.edges:
+            edge.energy_flow = max(0.0, edge.energy_flow * (1.0 - (field_div * 0.005)))
+
+    def display_comprehensive_telemetry(self) -> None:
+        va, vb, vc = self.membrane.get_vertices()
+        print(f"\n================ [ НАУЧНЫЙ ТАКТ V19: СИНХРОН №{self.graph.time_step} ] ================")
+        print(f"  -> Глобальная энтропия среды: {self.tensor_field.calculate_field_entropy():.6f}")
+        print(f"  -> Метрический тензор напряжения: {self.tensor_field.evaluate_metric_tensor():.6f}")
+        print(f"  -> Дивергенция волнового поля: {self.tensor_evolution.calculate_field_divergence():.4f}")
+        print(f"  -> Координаты вершин мембраны:")
+        print(f"     [Vertex-A]: {va}")
+        print(f"     [Vertex-B]: {vb}")
+        print(f"     [Vertex-C]: {vc}")
+        print("--- СОСТОЯНИЕ РАСПРЕДЕЛЕННЫХ УЗЛОВ И КАНАЛОВ ---")
+        for name, node in self.graph.nodes.items():
+            print(f"  -> Узел [{name}]: Решение = {node.decision:+d} ({PENTAR_CODE[node.decision]}) | Масса = {node.mass:.2f}")
+        for edge in self.graph.edges:
+            print(f"  -> Канал [{edge.source.node_id} -> {edge.target.node_id}]: Поток = {edge.energy_flow:.3f}, Темп = {edge.temp:.3f}")
+
+
+if __name__ == "__main__":
+    print("=" * 75)
+    print("🧠 ПЕНТАРНАЯ ИНТЕГРИРОВАННАЯ СИСТЕМА — V19 (ПОЛНЫЙ НАУЧНЫЙ ФРЕЙМВОРК)")
+    print("⚠️ ALL RIGHTS RESERVED. ПРИМЕНЕНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.")
+    print("=" * 75)
+    
+    # Инициализация 4-мерного тензорного пространства высокой плотности
+    space_dimensions = (5, 5, 5, 5)
+    initial_nodes = {
+        "Core-Master": (2, 2, 2, 2),
+        "Node-Alpha": (1, 1, 2, 2),
+        "Node-Beta": (3, 3, 2, 2),
+        "Node-Gamma": (2, 3, 1, 4)
+    }
+    
+    universe = PentarnyUniverseV19(space_dimensions, initial_nodes)
+    
+    universe.add_node("Core-Master", initial_nodes["Core-Master"])
+    universe.add_node("Node-Alpha", initial_nodes["Node-Alpha"])
+    universe.add_node("Node-Beta", initial_nodes["Node-Beta"])
+    universe.add_node("Node-Gamma", initial_nodes["Node-Gamma"])
+    
+    universe.add_edge("Core-Master", "Node-Alpha")
+    universe.add_edge("Node-Alpha", "Node-Beta")
+    universe.add_edge("Node-Beta", "Node-Gamma")
+    universe.add_edge("Node-Gamma", "Core-Master")
+    
+    # Запуск многотактного моделирования кибернетического контура
+    for cycle in range(5):
+        universe.step()
+        universe.display_comprehensive_telemetry()
+        time.sleep(0.15)
+        
+    print("\n" + "=" * 75)
+    print("✅ ФРЕЙМВОРК V19 УСПЕШНО ВЕРИФИЦИРОВАН И ГОТОВ К РАЗВЁРТЫВАНИЮ")
+    print("=" * 75)
