@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved
+# Vladimir Zavodiuk
+
+"""
+================================================================================
+ОРКЕСТРАТОР ИИ-КЛАСТЕРА — РАСШИРЕННЫЙ ПАЙПЛАЙН С ЯДРОМ BXOS И GAME-МОДУЛЕМ
+================================================================================
+Место в схеме: стоит НАД всем стеком и вызывает его последовательно.
+
+  ВХОД -> [ТРОИЧНЫЙ БЛОК] -> [БРУСЕНЦОВ: свёртка трёх тритов] ->
+          [ПЕНТАРНЫЙ БЛОК] -> [МАТРИЧНЫЙ БЛОК (L5)] -> 
+          [ЯДРО BXOS (Диспетчеризация)] -> [GAME-СИМУЛЯТОР (Сценарный риск)]
+
+В отличие от раздутых микросервисных архитектур, здесь всё собрано в едином 
+высокопроизводительном контуре на чистых Python-объектах. Используются 
+существующие изолированные аудит-цепочки без избыточного дублирования.
+
+СТЫКОВКА ЧЕРЕЗ БРУСЕНЦОВА И ПЕНТАРНОЕ СОСТОЯНИЕ:
+  Троичный блок отдаёт три трита -> свёртка fold_and -> уверенность (confidence) 
+  для пентарного слоя -> проецирование в приоритет процесса BXOS -> 
+  сценарная симуляция устойчивости ИИ-кластера.
+================================================================================
+"""
+
+import sys
+import os
+import time
+import random
+from dataclasses import dataclass
+from typing import Dict, Any, Optional
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from ternary_block import TernaryBlock, TernaryResult
+from brusentsov_trits import fold_and
+from pentary_final import PentaryBlock, PentarnyStateData
+from ternary_matrix_block import TernaryMatrixBlock, from_pentary, TernaryMatrix
+
+K = 2  # Пентарный параметр домена {-2..2}
+
+
+def trit_to_confidence(trit: int) -> float:
+    """Согласие трёх тритов троичного блока (через fold_and) -> уверенность
+    для пентарного слоя. -1 = сигналы противоречат друг другу (низкая
+    уверенность), 0 = смешанно, 1 = все три согласны (высокая уверенность)."""
+    return {-1: 0.3, 0: 0.55, 1: 0.85}[trit]
+
+
+@dataclass
+class BXOSProcessContext:
+    process_id: str
+    workload_type: str
+    pentary_priority: int  # от -2 до 2
+    resource_quota: float
+
+
+class BXOSKernel:
+    """Операционное ядро диспетчеризации процессов ИИ-кластера."""
+
+    def __init__(self):
+        self.registry: Dict[str, BXOSProcessContext] = {}
+
+    def spawn_process(self, pid: str, workload: str, priority: int, quota: float):
+        self.registry[pid] = BXOSProcessContext(
+            process_id=pid, workload_type=workload,
+            pentary_priority=max(-K, min(K, priority)), resource_quota=quota
+        )
+
+    def evaluate_scheduler_state(self) -> Dict[str, Any]:
+        if not self.registry:
+            return {"active_processes": 0, "kernel_status": "IDLE"}
+        priorities = [p.pentary_priority for p in self.registry.values()]
+        avg_prio = sum(priorities) / len(priorities)
+        return {
+            "active_processes": len(self.registry),
+            "average_priority_vector": round(avg_prio, 2),
+            "kernel_status": "STABLE" if avg_prio >= 0 else "DEFENSIVE_THROTTLE"
+        }
+
+
+class PentarySimulationGameEngine:
+    """Game-модуль сценарного моделирования рисков ИИ-кластера."""
+
+    def __init__(self, kernel: BXOSKernel):
+        self.kernel = kernel
+
+    def run_scenario_simulation(self, iterations: int = 150) -> Dict[str, Any]:
+        success_count = 0
+        thermal_breaches = 0
+        for _ in range(iterations):
+            env_stress = random.choice([-2, -1, 0, 1, 2])
+            kernel_state = self.kernel.evaluate_scheduler_state()
+            if env_stress == 2 and kernel_state.get("kernel_status") == "DEFENSIVE_THROTTLE":
+                thermal_breaches += 1
+            else:
+                success_count += 1
+        stability_rate = success_count / iterations
+        return {
+            "scenarios_tested": iterations,
+            "stability_rate": round(stability_rate, 3),
+            "thermal_breaches": thermal_breaches,
+            "verdict": "OPTIMAL_CLUSTER_HARMONY" if stability_rate > 0.8 else "THROTTLE_REQUIRED"
+        }
+
+
+@dataclass
+class PipelineResult:
+    status: str  # "rejected" | "ok"
+    ternary: Optional[TernaryResult]
+    consolidated_trit: Optional[int]
+    pentary_confidence: Optional[float]
+    pentary_state: Optional[PentarnyStateData]
+    matrix: Optional[TernaryMatrix]
+    l5_used: bool
+    bxos_status: Dict[str, Any]
+    simulation_report: Dict[str, Any]
+
+
+class Orchestrator:
+    """
+    Расширенный оркестратор ИИ-кластера: вызывает троичный -> Брусенцов -> 
+    пентарный -> (опционально) матричный блок, после чего передает состояние 
+    в ядро диспетчеризации BXOS и Game-симулятор сценарного риска.
+    """
+
+    def __init__(self):
+        self.ternary = TernaryBlock()
+        self.pentary = PentaryBlock()
+        self.matrix = TernaryMatrixBlock()
+        self.bxos = BXOSKernel()
+        self.game_engine = PentarySimulationGameEngine(self.bxos)
+
+    def process(
+        self, 
+        query: str, 
+        interpretations: Dict[str, float],
+        workload_id: str = "AI_Workload_Default",
+        workload_type: str = "LLM Inference / Training",
+        l5_values: Optional[Dict[str, int]] = None
+    ) -> PipelineResult:
+        """
+        query, interpretations -> троичный блок -> Брусенцов -> пентарный -> 
+        (опционально) троичные матрицы -> ядро BXOS -> Game-симулятор.
+        """
+        # 1. ТРОИЧНЫЙ БЛОК
+        tr = self.ternary.process(query, interpretations)
+
+        if tr.final_decision == "REJECT":
+            return PipelineResult(
+                status="rejected", ternary=tr, consolidated_trit=None,
+                pentary_confidence=None, pentary_state=None, matrix=None, 
+                l5_used=False, bxos_status={"kernel_status": "REJECTED"},
+                simulation_report={"verdict": "ABORTED"}
+            )
+
+        # 2. БРУСЕНЦОВ: свёртка трёх тритов в один консолидированный
+        consolidated = fold_and((tr.l3_in, tr.l3_out, tr.efficiency_trit))
+        confidence = trit_to_confidence(consolidated)
+
+        # 3. ПЕНТАРНЫЙ БЛОК
+        pentary_state = self.pentary.receive_from_ternary(
+            best_candidate=tr.best_candidate, score=tr.efficiency, confidence=confidence,
+        )
+
+        # 4. (ОПЦИОНАЛЬНО) ТРОИЧНЫЕ МАТРИЦЫ — только если даны все 5 L5-слоёв
+        matrix_result = None
+        l5_used = False
+        if l5_values and set(l5_values.keys()) == {'intent', 'goal', 'ontology', 'context', 'action'}:
+            for layer, value in l5_values.items():
+                self.pentary.set_l5_state(layer, value)
+            l5_used = True
+            mat = from_pentary(l5_values)
+            self.matrix.state = mat
+            self.matrix.apply('diagonal_projection')
+            matrix_result = self.matrix.state
+
+        # 5. ИНТЕГРАЦИЯ С ЯДРОМ BXOS И GAME-МОДУЛЕМ
+        pentary_priority = pentary_state.value.value  # от -2 до 2
+        resource_quota = round(tr.efficiency * 100.0, 1)
+        self.bxos.spawn_process(workload_id, workload_type, pentary_priority, resource_quota)
+        sim_report = self.game_engine.run_scenario_simulation(iterations=150)
+
+        return PipelineResult(
+            status="ok", 
+            ternary=tr, 
+            consolidated_trit=consolidated,
+            pentary_confidence=confidence, 
+            pentary_state=pentary_state,
+            matrix=matrix_result, 
+            l5_used=l5_used,
+            bxos_status=self.bxos.evaluate_scheduler_state(),
+            simulation_report=sim_report
+        )
+
+    def status(self) -> Dict[str, Any]:
+        """Сводный статус всех блоков — берётся из их собственных аудит-цепочек и ядер."""
+        return {
+            'ternary_history_len': len(self.ternary.history),
+            'pentary_audit_chain': self.pentary.chain.to_dict(),
+            'matrix_audit_chain': self.matrix.chain.to_dict(),
+            'bxos_scheduler': self.bxos.evaluate_scheduler_state(),
+        }
+
+
+# ============================================================
+# ДЕМОНСТРАЦИЯ
+# ============================================================
+
+if __name__ == "__main__":
+    orchestrator = Orchestrator()
+
+    print("=" * 70)
+    print("ОРКЕСТРАТОР ИИ-КЛАСТЕРА — ПОЛНЫЙ ПРОГОН РАСШИРЕННОГО ПАЙПЛАЙНА")
+    print("=" * 70)
+
+    # 1. Полный прогон с L5-слоями и ИИ-нагрузкой
+    print("\n--- Запрос 1: с L5-слоями и интеграцией BXOS/Game ---")
+    r1 = orchestrator.process(
+        query="Оптимизация распределенного обучения LLM 70B",
+        interpretations={"Compute_Density": 0.94, "Thermal_Load": 0.35, "Memory_Bandwidth": 0.88},
+        workload_id="LLM_Train_Node_70B",
+        workload_type="Distributed Training",
+        l5_values={'intent': 2, 'goal': 2, 'ontology': 1, 'context': 1, 'action': 2},
+    )
+    print(f"Статус: {r1.status}")
+    print(f"Троичный: L3_in={r1.ternary.l3_in}, L3_out={r1.ternary.l3_out}, "
+          f"eff_trit={r1.ternary.efficiency_trit}, кандидат={r1.ternary.best_candidate}")
+    print(f"Брусенцов: консолидированный трит = {r1.consolidated_trit}")
+    print(f"Пентарная уверенность на входе: {r1.pentary_confidence}")
+    print(f"Пентарное состояние: {r1.pentary_state.value.name} ({r1.pentary_state.value.value}), "
+          f"conf={r1.pentary_state.confidence}")
+    print(f"Матрица использовалась: {r1.l5_used}")
+    print(f"Состояние ядра BXOS: {r1.bxos_status}")
+    print(f"Вердикт Game-симулятора: {r1.simulation_report['verdict']} (стабильность: {r1.simulation_report['stability_rate']})")
+
+    # 2. Запрос с явно провальным входом (REJECT на троичном уровне)
+    print("\n--- Запрос 2: заведомо низкие оценки (ожидаем REJECT) ---")
+    r2 = orchestrator.process("Критический сбой кластера", {"Compute": 0.05})
+    print(f"Статус: {r2.status}")
+    print(f"Причина: {r2.ternary.l3_in_reason}")
+
+    # 3. Сводный статус
+    print("\n--- Сводный статус системы ---")
+    st = orchestrator.status()
+    print(f"Троичная история: {st['ternary_history_len']} записей")
+    print(f"Пентарная цепочка: length={st['pentary_audit_chain']['length']}, "
+          f"verified={st['pentary_audit_chain']['verified']}")
+    print(f"Диспетчер BXOS: {st['bxos_scheduler']}")
+
+    print("\n✅ Демонстрация расширенного оркестратора ИИ успешно завершена.")
