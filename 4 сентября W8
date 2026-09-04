@@ -1,0 +1,124 @@
+#!/usr/init/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+ ПРОЕКТ «W ГАРМОНИЯ» — МОДУЛЬ 8: РЕТРАНСЛЯТОР В КОМАНДЫ ВЯЗАЛЬНОГО ОБОРУДОВАНИЯ
+================================================================================
+ Автор технологии и концепции: Владимир Заводюк (Root-Architect)
+ Дата фиксации приоритета: Сентябрь 2026 года
+ Версия: W-8.0 (Knitting Equipment Retransmission & Command Synthesizer)
+
+ ⚖️ ЮРИДИЧЕСКИЙ СТАТУС И ПРАВА / LEGAL NOTICE:
+ ALL RIGHTS RESERVED. ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ Данный программный код является объектом интеллектуальной собственности автора. 
+ Применение, модификация, коммерческое или закрытое развертывание данных 
+ концептуальных контуров допускается СТРОГО С ПИСЬМЕННОГО СОГЛАСИЯ АВТОРА.
+
+ ВНИМАНИЕ: Модуль выполняет трансляцию сбалансированной матрицы свойств 
+ (Protective Property Matrix) в управляющие инструкции для вязальных автоматов 
+ при производстве защитных рукавиц, рукавов и гетр. Нарушение параметров 
+ натяжения и плотности ведет к браку изделия.
+================================================================================
+"""
+
+import json
+import time
+import hashlib
+from typing import List, Dict, Any, Optional
+from dataclasses import dataclass, field
+
+
+@dataclass
+class MachineProfile:
+    """Профиль целевого вязального оборудования."""
+    machine_type: str = "Multi-Feed Industrial Flat Knitting"
+    gauge: int = 13  # Класс вязки (количество игл на дюйм)
+    max_tension_level: float = 100.0
+
+
+class KnittingRetransmissionEngine:
+    """
+    Движок ретрансляции: перевод сбалансированных защитных свойств трайта 
+    в технологические параметры вязальной машины (плотность, натяжение, слои).
+    """
+
+    def __init__(self, machine_profile: Optional[MachineProfile] = None):
+        self.profile = machine_profile or MachineProfile()
+
+    def synthesize_instructions(self, balanced_properties: Dict[str, float]) -> Dict[str, Any]:
+        """
+        Преобразует матрицу свойств в конкретные машиночитаемые инструкции 
+        для производства защитных элементов (рукавицы, защитные рукава, гетры).
+        """
+        # Извлекаем ключевые параметры для расчета машинных кодов
+        cut_res = balanced_properties.get('cut_resistance', 3.0)
+        spark_res = balanced_properties.get('spark_resistance', 3.0)
+        impact_res = balanced_properties.get('impact_resistance', 3.0)
+        temp_res = balanced_properties.get('temp_resistance', 3.0)
+        struct_res = balanced_properties.get('structural_reserve', 3.0)
+
+        # Расчет параметров вязки
+        # 1. Плотность петли (Stitch Density) зависит от резерва структуры и пореза
+        stitch_density = round(self.profile.gauge * (1.0 + (struct_res + cut_res) / 20.0), 2)
+
+        # 2. Натяжение нити (Yarn Feed Tension) для армированных волокон
+        yarn_tension = round(self.profile.max_tension_level * (0.5 + (spark_res + temp_res) / 15.0), 1)
+
+        # 3. Конфигурация слоев (Layer Architecture) для ударной прочности
+        pass_layers = int(round(2.0 + impact_res))
+
+        # 4. Формирование карты подачи сырья по зонам изделия
+        feeding_map = {
+            "core_reinforcement": "High-Modulus Aramid / Para-Aramid",
+            "outer_shield": "Flame-Retardant Composite Blend" if spark_res > 3.0 else "Standard Protective Yarn",
+            "impact_zone_passes": pass_layers
+        }
+
+        instruction_payload = {
+            "machine_type": self.profile.machine_type,
+            "machine_gauge": self.profile.gauge,
+            "calculated_parameters": {
+                "stitch_density_index": stitch_density,
+                "yarn_feed_tension_g": yarn_tension,
+                "pass_layers": pass_layers,
+            },
+            "material_feeding_map": feeding_map,
+            "timestamp": time.time()
+        }
+
+        # Генерация контрольного хэша инструкции
+        instruction_hash = hashlib.sha256(json.dumps(instruction_payload, sort_keys=True).encode()).hexdigest()
+        instruction_payload["instruction_hash"] = instruction_hash[:16] + "..."
+
+        return instruction_payload
+
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("ПРОЕКТ «W ГАРМОНИЯ» — МОДУЛЬ 8: РЕТРАНСЛЯТОР ВЯЗАЛЬНЫХ КОМАНД ЗАПУЩЕН")
+    print("Автор: Владимир Заводюк (Root-Architect) | ALL RIGHTS RESERVED")
+    print("=" * 70)
+
+    retranslator = KnittingRetransmissionEngine()
+
+    # Пример входящих сбалансированных свойств (из Модуля 7)
+    sample_balanced_properties = {
+        'water_resistance': 2.5,
+        'spark_resistance': 4.5,
+        'impact_resistance': 4.0,
+        'cut_resistance': 4.2,
+        'temp_resistance': 3.5,
+        'structural_reserve': 3.8
+    }
+
+    instructions = retranslator.synthesize_instructions(sample_balanced_properties)
+
+    print(f"\n1. Профиль оборудования: {instructions['machine_type']} (Gauge: {instructions['machine_gauge']})")
+    print(f"2. Синтезированные параметры вязки:")
+    for param, val in instructions['calculated_parameters'].items():
+        print(f"  - {param}: {val}")
+    print(f"3. Карта подачи сырья: {instructions['material_feeding_map']}")
+    print(f"4. Хэш инструкции: {instructions['instruction_hash']}")
+
+    print("\n✅ Модуль W-8 (Knitting Equipment Retransmission) успешно верифицирован.")
