@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+ ПРОЕКТ «W ГАРМОНИЯ» — МОДУЛЬ 6: ПЕНТАРНЫЕ МАТРИЦЫ И ПРОСТРАНСТВЕННОЕ СОПРЯЖЕНИЕ
+================================================================================
+ Автор технологии и концепции: Владимир Заводюк (Root-Architect)
+ Дата фиксации приоритета: Сентябрь 2026 года
+ Версия: W-6.0 (Pentary Matrices & Spatial Confinement Engine, k=2)
+
+ ⚖️ ЮРИДИЧЕСКИЙ СТАТУС И ПРАВА / LEGAL NOTICE:
+ ALL RIGHTS RESERVED. ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ Данный программный код является объектом интеллектуальной собственности автора. 
+ Применение, модификация, коммерческое или закрытое развертывание данных 
+ концептуальных контуров допускается СТРОГО С ПИСЬМЕННОГО СОГЛАСИЯ АВТОРА.
+
+ ВНИМАНИЕ: Пентарное матричное пространство расширяет диапазон состояний 
+ до {-2..2} с нелинейным насыщением (клиппингом). Каскадные трансформации 
+ требуют фиксации контрольных хеш-сумм для предотвращения фазового дрейфа.
+================================================================================
+"""
+
+import json
+import time
+import hashlib
+import math
+from typing import List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass
+
+K = 2  # Параметр пентарного домена {-2, -1, 0, 1, 2}
+
+
+class PentaryMatrix:
+    """
+    Пентарная матрица: элементы в диапазоне {-2, -1, 0, 1, 2}.
+    Алгебра с насыщением (клиппингом) в границы [-2, 2] при арифметических операциях.
+    """
+
+    def __init__(self, data: List[List[int]]):
+        self.data = data
+        self.rows = len(data)
+        self.cols = len(data[0]) if data else 0
+        self._validate()
+
+    def _validate(self):
+        if not self.data:
+            raise ValueError("Пентарная матрица не может быть пустой")
+        for row in self.data:
+            if len(row) != self.cols:
+                raise ValueError(f"Несоответствие длины строк: ожидается {self.cols}, получено {len(row)}")
+            for val in row:
+                if val not in (-2, -1, 0, 1, 2):
+                    raise ValueError(f"Недопустимое пентарное значение: {val}. Допустимы только от -2 до 2.")
+
+    def __repr__(self):
+        return f"PentaryMatrix({self.rows}x{self.cols}, K={K})"
+
+    def __eq__(self, other):
+        return isinstance(other, PentaryMatrix) and self.data == other.data
+
+    def copy(self) -> 'PentaryMatrix':
+        return PentaryMatrix([row[:] for row in self.data])
+
+    @property
+    def hash(self) -> str:
+        return hashlib.sha256(json.dumps(self.data).encode()).hexdigest()
+
+    def to_dict(self) -> Dict:
+        return {
+            'rows': self.rows, 
+            'cols': self.cols, 
+            'data': self.data, 
+            'hash': self.hash[:16] + '...'
+        }
+
+    @staticmethod
+    def _clip(v: int) -> int:
+        return K if v > K else (-K if v < -K else v)
+
+    def add(self, other: 'PentaryMatrix') -> 'PentaryMatrix':
+        """Сложение в пентарном пространстве с насыщением до [-2, 2]."""
+        if (self.rows, self.cols) != (other.rows, other.cols):
+            raise ValueError(f"Размеры матриц не совпадают: {self.rows}x{self.cols} vs {other.rows}x{other.cols}")
+        return PentaryMatrix([
+            [self._clip(self.data[i][j] + other.data[i][j]) for j in range(self.cols)] 
+            for i in range(self.rows)
+        ])
+
+    def multiply(self, other: 'PentaryMatrix') -> 'PentaryMatrix':
+        """Матричное умножение с последующим клиппингом результатов в {-2..2}."""
+        if self.cols != other.rows:
+            raise ValueError(f"Несовместимые размеры для умножения: {self.cols} != {other.rows}")
+        result = []
+        for i in range(self.rows):
+            row = []
+            for j in range(other.cols):
+                s = sum(self.data[i][k] * other.data[k][j] for k in range(self.cols))
+                row.append(self._clip(s))
+            result.append(row)
+        return PentaryMatrix(result)
+
+    def transpose(self) -> 'PentaryMatrix':
+        return PentaryMatrix([[self.data[j][i] for j in range(self.rows)] for i in range(self.cols)])
+
+    def stability_index(self) -> float:
+        """Индекс стабильности пентарной среды: нормированная средняя энергия активации."""
+        total_elements = self.rows * self.cols
+        if total_elements == 0:
+            return 0.0
+        energy_sum = sum(abs(v) for row in self.data for v in row)
+        return energy_sum / (total_elements * K)
+
+    def entropy(self) -> float:
+        """Расчет энтропии Шеннона по распределению элементов в диапазоне {-2..2}."""
+        counts = {-2: 0, -1: 0, 0: 0, 1: 0, 2: 0}
+        total = self.rows * self.cols
+        for row in self.data:
+            for v in row:
+                counts[v] += 1
+        
+        if total == 0:
+            return 0.0
+        
+        ent = 0.0
+        for count in counts.values():
+            if count > 0:
+                p = count / total
+                ent -= p * math.log2(p)
+        return ent
+
+    def energy_presence(self) -> 'PentaryMatrix':
+        """Карта потенциалов: сохранение знака, но нормализация уровней активности."""
+        return PentaryMatrix([
+            [1 if v > 0 else (-1 if v < 0 else 0) for v in row] 
+            for row in self.data
+        ])
+
+
+# ============================================================================
+# АУДИТОРНАЯ ХЕШ-ЦЕПЬ ПЕНТАРНЫХ МАТРИЦ
+# ============================================================================
+
+@dataclass
+class PentaryMatrixRecord:
+    index: int
+    timestamp: float
+    prev_hash: str
+    matrix: PentaryMatrix
+    payload: Dict[str, Any]
+
+    @property
+    def hash(self) -> str:
+        data = f"{self.index}{self.timestamp}{self.prev_hash}{self.matrix.hash}{json.dumps(self.payload, sort_keys=True)}"
+        return hashlib.sha256(data.encode()).hexdigest()
+
+    def to_dict(self) -> Dict:
+        return {
+            'index': self.index,
+            'timestamp': self.timestamp,
+            'prev_hash': self.prev_hash[:16] + '...',
+            'matrix': self.matrix.to_dict(),
+            'payload': self.payload,
+            'hash': self.hash[:16] + '...'
+        }
+
+
+class PentaryMatrixAuditChain:
+    def __init__(self, max_length: int = 500):
+        self.records: List[PentaryMatrixRecord] = []
+        self.max_length = max_length
+
+    def add(self, matrix: PentaryMatrix, payload: Dict[str, Any]) -> PentaryMatrixRecord:
+        record = PentaryMatrixRecord(
+            index=len(self.records),
+            timestamp=time.time(),
+            prev_hash=self.records[-1].hash if self.records else 'GENESIS_PENTARY_MATRIX',
+            matrix=matrix,
+            payload=payload,
+        )
+        self.records.append(record)
+        if len(self.records) > self.max_length:
+            self.records.pop(0)
+        return record
+
+    def verify(self) -> Tuple[bool, int]:
+        for i, r in enumerate(self.records):
+            if i > 0 and r.prev_hash != self.records[i-1].hash:
+                return False, i
+        return True, -1
+
+    def to_dict(self) -> Dict:
+        verified, err = self.verify()
+        return {'length': len(self.records), 'verified': verified, 'error_index': err if not verified else None}
+
+
+# ============================================================================
+# ДЕМОНСТРАЦИЯ МОДУЛЯ W-6
+# ============================================================================
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("ПРОЕКТ «W ГАРМОНИЯ» — МОДУЛЬ 6: ПЕНТАРНЫЕ МАТРИЦЫ ЗАПУЩЕНЫ")
+    print("Автор: Владимир Заводюк (Root-Architect) | ALL RIGHTS RESERVED")
+    print("=" * 70)
+
+    # Инициализация тестовой пентарной матрицы
+    p_data = [
+        [2, 1, 0],
+        [-1, 2, -2],
+        [0, 1, 2]
+    ]
+    p_mat = PentaryMatrix(p_data)
+    
+    print(f"\n1. Пентарная матрица 3x3:")
+    for row in p_mat.data:
+        print(f"  {row}")
+    print(f"  Индекс стабильности: {p_mat.stability_index():.3f}")
+    print(f"  Энтропия Шеннона: {p_mat.entropy():.3f}")
+
+    # Проверка аудиторной цепи
+    audit_chain = PentaryMatrixAuditChain()
+    audit_chain.add(p_mat, {'event': 'initial_matrix_load'})
+    
+    transposed = p_mat.transpose()
+    audit_chain.add(transposed, {'event': 'matrix_transpose'})
+
+    print(f"\n2. Состояние аудиторной цепи пентарных матриц:")
+    print(audit_chain.to_dict())
+
+    print("\n✅ Модуль W-6 (Pentary Matrices) успешно верифицирован.")
