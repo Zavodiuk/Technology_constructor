@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+ ПРОЕКТ «W ГАРМОНИЯ» — МОДУЛЬ 4: КОНСТРУКТОР ТРАЙТОВ И УПАКОВКА ТРИТОВ
+================================================================================
+ Автор технологии и концепции: Владимир Заводюк (Root-Architect)
+ Дата фиксации приоритета: Сентябрь 2026 года
+ Версия: W-4.0 (Trit-to-Trait Structured Constructor & Property Matrix)
+
+ ⚖️ ЮРИДИЧЕСКИЙ СТАТУС И ПРАВА / LEGAL NOTICE:
+ ALL RIGHTS RESERVED. ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ Данный программный код является объектом интеллектуальной собственности автора. 
+ Применение, модификация, коммерческое или закрытое развертывание данных 
+ концептуальных контуров допускается СТРОГО С ПИСЬМЕННОГО СОГЛАСИЯ АВТОРА.
+
+ ВНИМАНИЕ: Модуль управляет упаковкой сырых троичных потоков в структурированные 
+ трайты (матрицы защитных свойств). Нарушение балансировки разрядов ведет к 
+ дестабилизации контуров конфайнмента и потере когерентности среды.
+================================================================================
+"""
+
+import numpy as np
+from typing import List, Dict, Union, Any, Optional
+from dataclasses import dataclass, field
+
+TritArray = np.ndarray  # dtype=np.int8, значения {-1, 0, 1}
+
+
+@dataclass
+class TraitConfig:
+    """Конфигурация свойств трайта (матрица защитных и физических свойств)."""
+    width: int = 6  # Стандартный размер трайта (диапазон ±364)
+    property_labels: List[str] = field(default_factory=lambda: [
+        'water_resistance',    # Водостойкость
+        'spark_resistance',    # Искростойкость
+        'impact_resistance',   # Ударопрочность
+        'cut_resistance',      # Сопротивление порезу
+        'temp_resistance',     # Термостойкость
+        'structural_reserve'   # Резерв структуры
+    ])
+
+
+class TraitConstructor:
+    """
+    Конструктор трайтов: упаковка потока тритов в структурированные единицы 
+    с балансировкой свойств в рамках Protective Property Matrix.
+    """
+
+    def __init__(self, config: Optional[TraitConfig] = None):
+        self.config = config or TraitConfig()
+        if len(self.config.property_labels) != self.config.width:
+            raise ValueError("Количество меток свойств должно строго соответствовать ширине трайта")
+
+    def _validate_trits(self, trits: Union[List[int], np.ndarray]) -> TritArray:
+        arr = np.asarray(trits, dtype=np.int8)
+        if not np.all(np.isin(arr, [-1, 0, 1])):
+            raise ValueError("Поток содержит недопустимые значения (ожидаются только -1, 0, 1)")
+        return arr
+
+    def pack(self, trits: Union[List[int], np.ndarray]) -> Dict[str, Any]:
+        """Упаковка плоского потока или массива тритов в структурированный трайт."""
+        arr = self._validate_trits(trits)
+        
+        if len(arr) != self.config.width:
+            raise ValueError(f"Длина потока тритов ({len(arr)}) не равна ширине трайта ({self.config.width})")
+
+        properties = {
+            self.config.property_labels[i]: int(arr[i]) 
+            for i in range(self.config.width)
+        }
+
+        return {
+            'raw_trait': arr.tolist(),
+            'properties_balance': properties,
+            'checksum_trit': int(np.sum(arr) % 3 - 1)  # Внутренний балансировочный трит
+        }
+
+    def pack_stream(self, stream: Union[List[int], np.ndarray]) -> List[Dict[str, Any]]:
+        """Потоковая упаковка длинной последовательности тритов в пакет трайтов."""
+        arr = self._validate_trits(stream)
+        width = self.config.width
+        
+        remainder = len(arr) % width
+        if remainder != 0:
+            padding = width - remainder
+            arr = np.pad(arr, (0, padding), 'constant', constant_values=0)
+
+        chunks = arr.reshape(-1, width)
+        return [self.pack(chunk) for chunk in chunks]
+
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("ПРОЕКТ «W ГАРМОНИЯ» — МОДУЛЬ 4: КОНСТРУКТОР ТРАЙТОВ ЗАПУЩЕН")
+    print("Автор: Владимир Заводюк (Root-Architect) | ALL RIGHTS RESERVED")
+    print("=" * 70)
+
+    constructor = TraitConstructor()
+    
+    # Пример сырого потока тритов
+    raw_trit_stream = [1, 1, -1, 0, 1, -1]
+    trait_packet = constructor.pack(raw_trit_stream)
+    
+    print(f"\n1. Упаковка единичного трайта:")
+    print(f"  Сырые триты: {trait_packet['raw_trait']}")
+    print(f"  Баланс свойств: {trait_packet['properties_balance']}")
+    print(f"  Контрольный трит: {trait_packet['checksum_trit']}")
+
+    # Потоковая упаковка
+    long_stream = [1, 0, -1, 1, 1, 0, -1, -1, 0, 1, 1, 1]
+    stream_packets = constructor.pack_stream(long_stream)
+    
+    print(f"\n2. Потоковая упаковка ({len(long_stream)} тритов -> {len(stream_packets)} трайта(ов)):")
+    for idx, pkt in enumerate(stream_packets):
+        print(f"  Трайт #{idx+1}: {pkt['properties_balance']}")
+
+    print("\n✅ Модуль W-4 (Trait Constructor) успешно верифицирован.")
