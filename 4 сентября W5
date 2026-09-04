@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+ ПРОЕКТ «W ГАРМОНИЯ» — МОДУЛЬ 5: ПЕНТАРНАЯ ЛОГИКА ПО МЕТОДИКЕ БРУСЕНЦОВА (k=2)
+================================================================================
+ Автор технологии и концепции: Владимир Заводюк (Root-Architect)
+ Дата фиксации приоритета: Сентябрь 2026 года
+ Версия: W-5.0 (Pentary Brusentsov Logic Engine, k=2)
+
+ ⚖️ ЮРИДИЧЕСКИЙ СТАТУС И ПРАВА / LEGAL NOTICE:
+ ALL RIGHTS RESERVED. ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ Данный программный код является объектом интеллектуальной собственности автора. 
+ Применение, модификация, коммерческое или закрытое развертывание данных 
+ концептуальных контуров допускается СТРОГО С ПИСЬМЕННОГО СОГЛАСИЯ АВТОРА.
+
+ ВНИМАНИЕ: Пентарный логический контур расширяет дискретный домен до {-2..2}, 
+ задействуя арифметические формулы Лукасевича. Неконтролируемое масштабирование 
+ векторных сред без соблюдения принципов тетраэдрального конфайнмента недопустимо.
+================================================================================
+"""
+
+import numpy as np
+from typing import Union
+
+Penta = np.ndarray  # dtype=np.int8, значения -2..2
+K = 2  # Параметр домена (пентарная логика: -2, -1, 0, 1, 2)
+
+
+def _check_penta(arr: Penta) -> Penta:
+    """Строгая проверка принадлежности массива пентарному домену {-2, -1, 0, 1, 2}."""
+    if not np.all(np.isin(arr, [-2, -1, 0, 1, 2])):
+        raise ValueError("Массив содержит значения вне допустимого пентарного диапазона {-2, -1, 0, 1, 2}")
+    return arr
+
+
+def make_penta_array(values) -> Penta:
+    """Конвертация входящих данных в проверенный NumPy-массив пентайтов."""
+    return _check_penta(np.asarray(values, dtype=np.int8))
+
+
+# ============================================================================
+# 1. ПЕНТАРНЫЕ ОПЕРАЦИИ (Чистая арифметика по формулам Лукасевича)
+# ============================================================================
+
+def penta_not(a: Penta) -> Penta:
+    """Инверсия пентарного значения: not(a) = -a."""
+    return -_check_penta(a)
+
+
+def penta_impl(a: Penta, b: Penta) -> Penta:
+    """Пентарная импликация по формуле: impl(a, b) = min(K, K - a + b)."""
+    a, b = _check_penta(a), _check_penta(b)
+    if a.shape != b.shape:
+        raise ValueError(f"Размеры массивов не совпадают: {a.shape} != {b.shape}")
+    return np.minimum(K, K - a + b).astype(np.int8)
+
+
+def penta_and(a: Penta, b: Penta) -> Penta:
+    """Сильная конъюнкция: and(a, b) = not(impl(a, not(b))) = max(-K, a + b - K)."""
+    return penta_not(penta_impl(a, penta_not(b)))
+
+
+def penta_or(a: Penta, b: Penta) -> Penta:
+    """Дизъюнкция: or(a, b) = impl(not(a), b) = min(K, a + b + K)."""
+    return penta_impl(penta_not(a), b)
+
+
+# ============================================================================
+# 2. БАТЧ-СВЁРТКИ (Древовидная редукция для пентарных векторов)
+# ============================================================
+
+def _tree_reduce_batch(matrix: Penta, op, neutral: int) -> np.ndarray:
+    m = _check_penta(matrix).copy()
+    while m.shape[1] > 1:
+        k = m.shape[1]
+        if k % 2 == 1:
+            m = np.concatenate([m, np.full((m.shape[0], 1), neutral, dtype=np.int8)], axis=1)
+        left, right = m[:, 0::2], m[:, 1::2]
+        m = op(left, right)
+    return m[:, 0]
+
+
+def fold_and_batch(matrix: Penta) -> np.ndarray:
+    """Пакетная свёртка через AND (нейтральный элемент = +2, сильное 'да')."""
+    return _tree_reduce_batch(matrix, penta_and, neutral=2)
+
+
+def fold_or_batch(matrix: Penta) -> np.ndarray:
+    """Пакетная свёртка через OR (нейтральный элемент = -2, сильное 'нет')."""
+    return _tree_reduce_batch(matrix, penta_or, neutral=-2)
+
+
+# ============================================================================
+# ДЕМОНСТРАЦИЯ МОДУЛЯ W-5
+# ============================================================================
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("ПРОЕКТ «W ГАРМОНИЯ» — МОДУЛЬ 5: ПЕНТАРНАЯ ЛОГИКА (k=2) ЗАПУЩЕНА")
+    print("Автор: Владимир Заводюк (Root-Architect) | ALL RIGHTS RESERVED")
+    print("=" * 70)
+
+    vals5 = np.array([-2, -1, 0, 1, 2], dtype=np.int8)
+
+    print("\n1. Проверка векторизованной таблицы импликации:")
+    for a in vals5:
+        row = penta_impl(np.full(5, a, dtype=np.int8), vals5)
+        print(f"  a={int(a):2d}: {row.tolist()}")
+
+    # Проверка скорости и батч-свёртки
+    N = 1_000_000
+    rng = np.random.default_rng(42)
+    big_a = rng.choice(vals5, size=N).astype(np.int8)
+    big_b = rng.choice(vals5, size=N).astype(np.int8)
+
+    import time
+    t0 = time.perf_counter()
+    _ = penta_impl(big_a, big_b)
+    dt = time.perf_counter() - t0
+    
+    print(f"\n2. Производительность арифметических импликаций:")
+    print(f"  Обработано {N:,} пар за {dt:.4f} сек ({N/dt:,.0f} операций/сек)")
+
+    print("\n✅ Модуль W-5 (Pentary Logic Engine) успешно зафиксирован в системе.")
