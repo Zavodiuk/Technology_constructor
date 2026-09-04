@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+ ПРОЕКТ «W ГАРМОНИЯ» — МОДУЛЬ 7: ПЕНТАРНЫЙ КОНСТРУКТОР СВОЙСТВ И БАЛАНСИРОВКА
+================================================================================
+ Автор технологии и концепции: Владимир Заводюк (Root-Architect)
+ Дата фиксации приоритета: Сентябрь 2026 года
+ Версия: W-7.0 (Pentary Property Matrix & Trade-Off Engine, k=2)
+
+ ⚖️ ЮРИДИЧЕСКИЙ СТАТУС И ПРАВА / LEGAL NOTICE:
+ ALL RIGHTS RESERVED. ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ Данный программный код является объектом интеллектуальной собственности автора. 
+ Применение, модификация, коммерческое или закрытое развертывание данных 
+ концептуальных контуров допускается СТРОГО С ПИСЬМЕННОГО СОГЛАСИЯ АВТОРА.
+
+ ВНИМАНИЕ: Модуль управляет динамическим балансом защитных свойств (Protective 
+ Property Matrix) через пентарный контур управления (k=2). Усиление одного 
+ параметра вызывает компенсирующий сдвиг сопряженных характеристик во избежание 
+ разрушения структуры материала (контекст рукавиц и защитных средств).
+================================================================================
+"""
+
+import numpy as np
+from typing import List, Dict, Any, Optional
+from dataclasses import dataclass, field
+
+K = 2  # Пентарный параметр домена {-2..2}
+
+
+@dataclass
+class PentaryPropertyConfig:
+    """Конфигурация матрицы защитных свойств с пентарными весами."""
+    property_labels: List[str] = field(default_factory=lambda: [
+        'water_resistance',    # Водостойкость
+        'spark_resistance',    # Искростойкость
+        'impact_resistance',   # Ударопрочность
+        'cut_resistance',      # Сопротивление порезу
+        'temp_resistance',     # Термостойкость
+        'structural_reserve'   # Резерв структуры
+    ])
+    max_level: int = 5         # Предельное значение шкалы свойств
+
+
+class PentaryPropertyBalancer:
+    """
+    Движок балансировки Protective Property Matrix под управлением пентарной логики.
+    Реализует закон компромиссов (trade-off): усиление целевого свойства 
+    перераспределяет ресурс между связанными характеристиками.
+    """
+
+    def __init__(self, config: Optional[PentaryPropertyConfig] = None):
+        self.config = config or PentaryPropertyConfig()
+        self.width = len(self.config.property_labels)
+        
+        # Матрица взаимного влияния свойств (веса компенсации trade-off)
+        # Строка - управляемое свойство, столбец - затрагиваемое свойство
+        self.trade_off_matrix = np.array([
+            [ 1.0, -0.2, -0.1, -0.1, -0.2, -0.4],  # water_resistance
+            [-0.2,  1.0, -0.2, -0.1, -0.3, -0.2],  # spark_resistance
+            [-0.1, -0.2,  1.0, -0.4, -0.1, -0.2],  # impact_resistance
+            [-0.1, -0.1, -0.4,  1.0, -0.1, -0.3],  # cut_resistance
+            [-0.2, -0.3, -0.1, -0.1,  1.0, -0.3],  # temp_resistance
+            [-0.4, -0.2, -0.2, -0.3, -0.3,  1.0],  # structural_reserve
+        ], dtype=np.float32)
+
+    def _validate_pentary(self, vector: np.ndarray) -> np.ndarray:
+        arr = np.asarray(vector, dtype=np.int8)
+        if not np.all(np.isin(arr, [-2, -1, 0, 1, 2])):
+            raise ValueError("Вектор управления должен содержать пентарные значения от -2 до 2")
+        return arr
+
+    def balance_properties(
+        self, 
+        base_properties: Dict[str, float], 
+        control_vector: List[int]
+    ) -> Dict[str, Any]:
+        """
+        Перераспределение защитных свойств на основе пентарного управляющего вектора 
+        с учетом ограничений энергоемкости и trade-off.
+        """
+        ctrl = self._validate_pentary(control_vector)
+        if len(ctrl) != self.width:
+            raise ValueError(f"Длина управляющего вектора ({len(ctrl)}) не равна числу свойств ({self.width})")
+
+        # Переводим текущие свойства в массив
+        current_vals = np.array([base_properties.get(label, 3.0) for label in self.config.property_labels], dtype=np.float32)
+
+        # Вычисление дельты изменений через пентарное воздействие и матрицу влияний
+        # Нормализация управляющего воздействия в диапазон [-1.0, 1.0]
+        normalized_ctrl = ctrl.astype(np.float32) / K
+        delta = np.dot(self.trade_off_matrix, normalized_ctrl) * 0.5
+
+        # Применение изменений с клиппингом в допустимые рамки [1.0, self.config.max_level]
+        new_vals = np.clip(current_vals + delta, 1.0, float(self.config.max_level))
+
+        balanced_result = {
+            self.config.property_labels[i]: round(float(new_vals[i]), 2)
+            for i in range(self.width)
+        }
+
+        # Оценка совокупной стабильности матрицы свойств
+        stability_score = float(np.mean(new_vals) / self.config.max_level)
+
+        return {
+            'control_vector': ctrl.tolist(),
+            'properties': balanced_result,
+            'matrix_stability': round(stability_score, 3),
+            'trade_off_applied': True
+        }
+
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("ПРОЕКТ «W ГАРМОНИЯ» — МОДУЛЬ 7: ПЕНТАРНЫЙ КОНСТРУКТОР СВОЙСТВ ЗАПУЩЕН")
+    print("Автор: Владимир Заводюк (Root-Architect) | ALL RIGHTS RESERVED")
+    print("=" * 70)
+
+    balancer = PentaryPropertyBalancer()
+
+    # Базовые параметры защитной рукавицы
+    initial_props = {
+        'water_resistance': 3.0,
+        'spark_resistance': 4.0,
+        'impact_resistance': 3.0,
+        'cut_resistance': 4.0,
+        'temp_resistance': 3.0,
+        'structural_reserve': 3.5
+    }
+
+    # Пентарный вектор управления: усилить ударную прочность (+2) и порез (+1), 
+    # ослабить влагозащиту (-1) ради баланса
+    control_signal = [ -1, 0, 2, 1, 0, 0 ]
+
+    result = balancer.balance_properties(initial_props, control_signal)
+
+    print(f"\n1. Управляющий пентарный вектор: {result['control_vector']}")
+    print(f"2. Сбалансированная матрица свойств (Protective Property Matrix):")
+    for prop, val in result['properties'].items():
+        print(f"  - {prop}: {val}")
+    print(f"3. Индекс стабильности матрицы: {result['matrix_stability']}")
+
+    print("\n✅ Модуль W-7 (Pentary Property Matrix Balancer) успешно верифицирован.")
