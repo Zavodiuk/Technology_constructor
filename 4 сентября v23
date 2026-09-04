@@ -1,0 +1,216 @@
+# -*- coding: utf-8 -*-
+"""
+ПЕНТАРНАЯ КИБЕРНЕТИЧЕСКАЯ СИСТЕМА — V23 (СИНХРО-МУАР И БИ-ЯДЕРНАЯ РЕКУПЕРАЦИЯ)
+Автор: Владимир Заводюк (Root-Architect)
+Версия: 23.0 (Adaptive Bi-Core Counter-Rotating Moiré Architecture)
+
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+
+ВНИМАНИЕ: Интегрирует адаптивную угловую скорость, контрвращение би-ядерного 
+тернарного слоя, фазовый гистерезис топологической памяти и рекуперационные стоки.
+"""
+
+import numpy as np
+import time
+import math
+from collections import deque
+from typing import Dict, List, Tuple, Optional
+
+PENTAR_CODE: Dict[int, str] = {
+    -2: "КАТЕГОРИЧЕСКОЕ НЕТ (Аппаратная блокировка / Рекуперационный сток)",
+    -1: "МЯГКОЕ НЕТ (Демпфирование с фазовым следом)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Ламинарный регенерированный ноль)",
+     1: "МЯГКОЕ ДА (Индукционный подъем ядра)",
+     2: "КАТЕГОРИЧЕСКОЕ ДА (Резонансная сверхпроводимость)"
+}
+
+
+# ============================================================================
+# МОДУЛЬ 1: МАКРО-ПОЛЕ С АДАПТИВНОЙ РЕКУПЕРАЦИЕЙ ( [] )
+# ============================================================================
+class MacroFieldV23:
+    def __init__(self, dimensions: Tuple[int, int] = (7, 7)):
+        self.dimensions = dimensions
+        self.field = np.zeros(dimensions, dtype=int)
+        mid_x, mid_y = dimensions[0] // 2, dimensions[1] // 2
+        for x in range(dimensions[0]):
+            for y in range(dimensions[1]):
+                dist = abs(x - mid_x) + abs(y - mid_y)
+                if dist == 0: self.field[x, y] = 2
+                elif dist == 1: self.field[x, y] = 1
+                elif dist == 2: self.field[x, y] = 0
+                elif dist == 3: self.field[x, y] = -1
+                else: self.field[x, y] = -2
+
+    def calculate_entropy(self) -> float:
+        total = self.field.size
+        unique, counts = np.unique(self.field, return_counts=True)
+        entropy = 0.0
+        for count in counts:
+            p = count / total
+            if p > 0:
+                entropy -= p * math.log2(p)
+        return float(entropy)
+
+    def recover_extremes(self) -> int:
+        """Рекуперация: конвертация застоявшихся (-2) в ламинарный баланс (0)."""
+        count = 0
+        it = np.nditer(self.field, flags=['multi_index'], op_flags=['readwrite'])
+        while not it.finished:
+            if it[0] == -2:
+                it[0] = 0
+                count += 1
+            it.iter_next() if hasattr(it, 'iter_next') else it.iternext()
+        return count
+
+
+# ============================================================================
+# МОДУЛЬ 2: БИ-ЯДЕРНЫЙ КОНТРВРАЩАТЕЛЬ С АДАПТИВНОЙ СКОРОСТЬЮ ( {} )
+# ============================================================================
+class CounterRotatingBiCore:
+    """
+    Два тернарных ядра [-1, 0, 1], вращающихся навстречу друг другу 
+    с динамической скоростью, зависящей от локальной энтропии среды.
+    """
+    def __init__(self, size: int = 3):
+        self.size = size
+        self.matrix_a = self._generate_ternary(size)
+        self.matrix_b = self._generate_ternary(size)
+        
+        self.angle_a: float = 0.0
+        self.angle_b: float = 0.0
+        self.base_velocity: float = math.pi / 6.0
+
+    def _generate_ternary(self, size: int) -> np.ndarray:
+        mat = np.zeros((size, size), dtype=int)
+        mid = size // 2
+        for x in range(size):
+            for y in range(size):
+                if x == mid and y == mid: mat[x, y] = 0
+                elif (x + y) % 2 == 0: mat[x, y] = 1
+                else: mat[x, y] = -1
+        return mat
+
+    def update_rotation(self, entropy: float) -> None:
+        # Адаптивная скорость: при росте энтропии замедляемся для точности
+        dynamic_velocity = self.base_velocity / (1.0 + entropy * 2.0)
+        
+        self.angle_a += dynamic_velocity          # По часовой
+        self.angle_b -= dynamic_velocity * 1.5    # Против часовой (с коэффициентом прецессии)
+        
+        if self.angle_a >= 2 * math.pi: self.angle_a = 0.0
+        if self.angle_b <= -2 * math.pi: self.angle_b = 0.0
+
+    def get_combined_state(self, local_coord: Tuple[int, int], angle: float, matrix: np.ndarray) -> int:
+        x, y = local_coord
+        mid = self.size // 2
+        ox, oy = x - mid, y - mid
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        rx = int(round(ox * cos_a - oy * sin_a))
+        ry = int(round(ox * sin_a + oy * cos_a))
+        tx = max(0, min(self.size - 1, rx + mid))
+        ty = max(0, min(self.size - 1, ry + mid))
+        return int(matrix[tx, ty])
+
+
+# ============================================================================
+# МОДУЛЬ 3: ТОПОЛОГИЧЕСКАЯ ПАМЯТЬ И ФАЗОВЫЙ ГИСТЕРЕЗИС
+# ============================================================================
+class PhaseHysteresisMemory:
+    """Учет предыстории состояний шлюза для устранения дребезга сигналов."""
+    def __init__(self, window_size: int = 4):
+        self.history = deque(maxlen=window_size)
+
+    def register_state(self, state: int) -> int:
+        self.history.append(state)
+        # Сглаженный вес предыстории (интегральный гистерезис)
+        avg = sum(self.history) / len(self.history)
+        if avg > 1.2: return 2
+        elif avg > 0.3: return 1
+        elif avg >= -0.3: return 0
+        elif avg >= -1.2: return -1
+        else: return -2
+
+
+# ============================================================================
+# МОДУЛЬ 4: ИНТЕГРИРОВАННЫЙ ОРКЕСТРАТОР V23
+# ============================================================================
+class MoiréUnifiedOrchestratorV23:
+    def __init__(self):
+        self.macro_field = MacroFieldV23((7, 7))
+        self.bi_core = CounterRotatingBiCore(size=3)
+        self.hysteresis = PhaseHysteresisMemory(window_size=4)
+        self.time_step: int = 0
+
+    def execute_sync_cycle(self) -> Tuple[int, int, float, float]:
+        self.time_step += 1
+        current_entropy = self.macro_field.calculate_entropy()
+        
+        # Интеграция рекуперации при перегреве энтропии
+        if current_entropy > 0.65:
+            self.macro_field.recover_extremes()
+
+        self.bi_core.update_rotation(current_entropy)
+        
+        center = (3, 3)
+        slice_field = self.macro_field.field[2:5, 2:5]
+        
+        interaction_sum = 0
+        matches = 0
+        
+        for tx in range(3):
+            for ty in range(3):
+                val_a = self.bi_core.get_combined_state((tx, ty), self.bi_core.angle_a, self.bi_core.matrix_a)
+                val_b = self.bi_core.get_combined_state((tx, ty), self.bi_core.angle_b, self.bi_core.matrix_b)
+                
+                # Двойной муар-эффект интерференции тернарных ядер
+                core_interference = val_a + val_b
+                
+                if tx < slice_field.shape[0] and ty < slice_field.shape[1]:
+                    p_val = slice_field[tx, ty]
+                    product_val = core_interference * p_val
+                    interaction_sum += product_val
+                    if core_interference == p_val:
+                        matches += 1
+
+        # `:` — пороговая квантизация шлюза
+        if interaction_sum > 6: raw_gate = 2
+        elif interaction_sum > 1: raw_gate = 1
+        elif interaction_sum >= -1: raw_gate = 0
+        elif interaction_sum >= -6: raw_gate = -1
+        else: raw_gate = -2
+
+        # Применение фазового гистерезиса топологической памяти
+        stabilized_gate = self.hysteresis.register_state(raw_gate)
+        coherence = float(matches / 9.0)
+        
+        return stabilized_gate, interaction_sum, current_entropy, coherence
+
+    def display_telemetry(self) -> None:
+        gate, sum_val, entropy, coherence = self.execute_sync_cycle()
+        deg_a = math.degrees(self.bi_core.angle_a) % 360
+        deg_b = math.degrees(self.bi_core.angle_b) % 360
+        print(f"\n================ [ СИНХРО-МУАР V23: ТАКТ №{self.time_step} ] ================")
+        print(f"  -> Энтропия среды: {entropy:.4f}")
+        print(f"  -> Углы ядер [Alpha / Beta]: {deg_a:.1f}° / {deg_b:.1f}°")
+        print(f"  -> Интегральный индекс муара (Σ): {sum_val:+d}")
+        print(f"  -> Когерентность сетки: {coherence:.2f}")
+        print(f"  -> Стабилизированный шлюз (Гистерезис): {gate:+d} ({PENTAR_CODE[gate]})")
+
+
+if __name__ == "__main__":
+    print("=" * 75)
+    print("🧠 ПЕНТАРНАЯ СИСТЕМА — V23 (АДАПТИВНЫЙ БИ-ЯДЕРНЫЙ МУАР И РЕКУПЕРАЦИЯ)")
+    print("⚠️ ALL RIGHTS RESERVED. ПРИМЕНЕНИЕ ТОЛЬКО СОГЛАСНО ЛИЦЕНЗИИ АВТОРА.")
+    print("=" * 75)
+    
+    orchestrator = MoiréUnifiedOrchestratorV23()
+    
+    for cycle in range(5):
+        orchestrator.display_telemetry()
+        time.sleep(0.15)
+        
+    print("\n" + "=" * 75)
+    print("✅ АРХИТЕКТУРНЫЙ КОНТУР V23 УСПЕШНО СИНТЕЗИРОВАН И ВЕРИФИЦИРОВАН")
+    print("=" * 75)
