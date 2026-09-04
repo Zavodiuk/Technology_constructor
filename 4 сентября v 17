@@ -1,0 +1,360 @@
+# -*- coding: utf-8 -*-
+"""
+ПЕНТАРНАЯ ИНТЕГРИРОВАННАЯ СИСТЕМА — V17 (ДИНАМИЧЕСКАЯ ПЛОСКОСТЬ АТТРАКТОРОВ)
+Автор: Владимир Заводюк (Root-Architect)
+Версия: 17.0
+
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+
+ВНИМАНИЕ: Данный программный файл моделирует саморегулирующиеся 
+кибернетические контуры с деформируемыми полевыми мембранами и может 
+представлять потенциальную системную опасность (риск лавинообразного 
+резонанса энтропии, неконтролируемого скручивания волновых плоскостей 
+и блокировки каналов) при несанкционированном развёртывании на больших сетях.
+"""
+
+import numpy as np
+import time
+import random
+from itertools import product
+
+# --- БАЗИС И СЛОВАРИ ПЕНТАРНОЙ ЛОГИКИ ---
+LOGIC_BASIS = [2, 1, 0, -1, -2]
+
+MASKS = {
+     2: "Бригелла (Да / Пик / Источник / Истина)",
+     1: "Коломбина (Скорее Да / Восходящий фронт / Вероятность)",
+     0: "Доктор Грациано (Наверное / Центр / Баланс)",
+    -1: "Пьеро (Скорее Нет / Нисходящий фронт / Сомнение)",
+    -2: "Арлекин (Нет / Впадина / Ложь)"
+}
+
+PENTAR_CODE = {
+    -2: "КАТЕГОРИЧЕСКОЕ НЕТ (Полная блокировка / Обрыв канала)",
+    -1: "МЯГКОЕ НЕТ (Торможение потока)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Свободный транзит)",
+     1: "МЯГКОЕ ДА (Активация / Рост проводимости)",
+     2: "КАТЕГОРИЧЕСКОЕ ДА (Максимальное ускорение / Сверхпроводимость)"
+}
+
+def quantize_pentarny(value: float) -> int:
+    """Квантование непрерывного значения в дискретный пентарный базис [-2, 2]"""
+    if value > 0.75:
+        return 2
+    elif value > 0.25:
+        return 1
+    elif value >= -0.25:
+        return 0
+    elif value >= -0.75:
+        return -1
+    else:
+        return -2
+
+
+# ============================================================================
+# МОДУЛЬ 1: МАКРО-ПОЛЕ (ТЕНЗОРНАЯ СРЕДА V11)
+# ============================================================================
+class PentarnyTensorField:
+    def __init__(self, dimensions: tuple):
+        self.dimensions = dimensions
+        self.field = np.zeros(dimensions, dtype=int)
+
+    def inject_quantum_impulse(self, coordinates: tuple, value: int):
+        if value not in [-2, -1, 0, 1, 2]:
+            raise ValueError("Значение должно строго лежать в пентарном базисе [-2, 2]")
+        if all(0 <= coordinates[i] < self.dimensions[i] for i in range(len(self.dimensions))):
+            self.field[coordinates] = value
+
+    def calculate_field_entropy(self) -> float:
+        """Расчет глобальной системной энтропии по экстремальным состояниям"""
+        total_elements = self.field.size
+        if total_elements == 0:
+            return 0.0
+        extreme_states = np.sum(np.abs(self.field) == 2)
+        return float(extreme_states / total_elements)
+
+
+class PentarnyTensorEvolution:
+    def __init__(self, tensor_field: PentarnyTensorField):
+        self.field = tensor_field
+        self.step_counter = 0
+
+    def propagate_wave(self, origin: tuple, radius: int = 1):
+        """Распространение волнового фронта от очага возмущения"""
+        dims = len(origin)
+        self.step_counter += 1
+        ranges = [range(max(0, origin[d] - radius), 
+                       min(self.field.dimensions[d], origin[d] + radius + 1)) 
+                  for d in range(dims)]
+        for coords in product(*ranges):
+            dist = sum(abs(coords[d] - origin[d]) for d in range(dims))
+            if 0 < dist <= radius:
+                impulse_value = self.field.field[origin] // (dist + 1)
+                if impulse_value != 0:
+                    current = self.field.field[coords]
+                    self.field.field[coords] = max(-2, min(2, current + impulse_value))
+
+    def calculate_field_gradient(self) -> list:
+        return np.gradient(self.field.field.astype(float))
+
+    def calculate_field_divergence(self) -> float:
+        gradient = self.calculate_field_gradient()
+        return float(np.sum([np.sum(np.abs(g)) for g in gradient]))
+
+
+# ============================================================================
+# МОДУЛЬ 2: МИКРО-ГРАФ (СЕТЕВАЯ ФИЗИКА V10.2)
+# ============================================================================
+class PentarNode:
+    def __init__(self, node_id):
+        self.node_id = node_id
+        self.internal_state = 0
+        self.mass = 0.0
+        self.decision = 0
+
+    def process_signals(self, signal_matrix_A: int, signal_matrix_B: int) -> int:
+        signal_matrix_A = int(max(-2, min(2, signal_matrix_A)))
+        signal_matrix_B = int(max(-2, min(2, signal_matrix_B)))
+
+        sum_of_decisions = signal_matrix_A + signal_matrix_B
+        conflict = abs(signal_matrix_A - signal_matrix_B)
+        
+        if conflict >= 3:
+            informational_mass = conflict * 2.5
+            self.internal_state = 0
+        else:
+            informational_mass = conflict * 0.5
+            self.internal_state = max(-2, min(2, sum_of_decisions))
+            
+        self.mass = informational_mass
+        self.decision = self.internal_state
+        return self.internal_state
+
+
+class PentarEdge:
+    def __init__(self, source: PentarNode, target: PentarNode):
+        self.source = source
+        self.target = target
+        self.energy_flow = 1.0
+        self.temp = 1.0
+        self.rhythm = 0.0
+
+    def update_dynamics(self):
+        decision_sum = self.source.decision + self.target.decision
+        total_mass = self.source.mass + self.target.mass
+        old_temp = self.temp
+        base_modifier = 1.0 + (decision_sum * 0.25) - (total_mass * 0.2)
+        self.temp = max(0.05, base_modifier)
+        self.rhythm = self.temp - old_temp
+        
+        if self.source.decision == -2 or self.target.decision == -2:
+            self.energy_flow = 0.0
+        else:
+            self.energy_flow = (self.temp * 1.5) + (total_mass * 0.5)
+
+
+class PentarUniverseGraph:
+    def __init__(self):
+        self.nodes = {}
+        self.edges = []
+        self.time_step = 0
+
+    def add_node(self, name):
+        self.nodes[name] = PentarNode(name)
+
+    def add_edge(self, src, tgt):
+        self.edges.append(PentarEdge(self.nodes[src], self.nodes[tgt]))
+
+    def pulse(self):
+        self.time_step += 1
+        for name, node in self.nodes.items():
+            connected_signals = []
+            for edge in self.edges:
+                if edge.target == node:
+                    norm_val = (edge.energy_flow - 1.5) / 1.5
+                    connected_signals.append(quantize_pentarny(norm_val))
+                elif edge.source == node:
+                    connected_signals.append(quantize_pentarny(edge.energy_flow / 3.0 - 0.5))
+            
+            if not connected_signals:
+                connected_signals = [random.choice([-2, -1, 0, 1, 2])]
+            
+            node.process_signals(int(connected_signals[0]), int(connected_signals[-1]))
+            
+        for edge in self.edges:
+            edge.update_dynamics()
+
+
+# ============================================================================
+# МОДУЛЬ 3: ТРЕХТОЧЕЧНАЯ ДИНАМИЧЕСКАЯ ПЛОСКОСТЬ (АТТРАКТОРЫ МЕМБРАНЫ)
+# ============================================================================
+class ConflictAttractorPoint:
+    """Одиночная плавающая точка-вершина, дрейфующая по градиентам энтропии."""
+    def __init__(self, name: str, initial_coords: tuple, field_dims: tuple):
+        self.name = name
+        self.coords = list(initial_coords)
+        self.field_dims = field_dims
+
+    def drift_by_conflict(self, tensor_field: np.ndarray, gradient_fields: list):
+        dims = len(self.field_dims)
+        best_coords = list(self.coords)
+        max_tension = -1.0
+
+        for d in range(dims):
+            for delta in [-1, 1]:
+                test_coords = list(self.coords)
+                test_coords[d] += delta
+                
+                if all(0 <= test_coords[i] < self.field_dims[i] for i in range(dims)):
+                    local_val = abs(tensor_field[tuple(test_coords)])
+                    grad_val = sum(abs(gradient_fields[i][tuple(test_coords)]) for i in range(dims))
+                    tension = local_val + grad_val
+
+                    if tension > max_tension:
+                        max_tension = tension
+                        best_coords = test_coords
+
+        self.coords = best_coords
+
+
+class DynamicPlaneMembrane:
+    """
+    Образует динамическую плоскость (геометрический треугольник-мембрану) 
+    из трех независимых точек-аттракторов, которая деформируется и перемещается 
+    в матрице под воздействием внутренних конфликтов.
+    """
+    def __init__(self, field_dims: tuple, p1: tuple, p2: tuple, p3: tuple):
+        self.field_dims = field_dims
+        self.vertex_a = ConflictAttractorPoint("Vertex-A", p1, field_dims)
+        self.vertex_b = ConflictAttractorPoint("Vertex-B", p2, field_dims)
+        self.vertex_c = ConflictAttractorPoint("Vertex-C", p3, field_dims)
+
+    def update_membrane_position(self, tensor_field: np.ndarray, gradients: list):
+        # Каждая точка независимо сдвигается в зону максимального напряжения
+        self.vertex_a.drift_by_conflict(tensor_field, gradients)
+        self.vertex_b.drift_by_conflict(tensor_field, gradients)
+        self.vertex_c.drift_by_conflict(tensor_field, gradients)
+
+    def get_plane_vertices(self) -> tuple:
+        return (tuple(self.vertex_a.coords), tuple(self.vertex_b.coords), tuple(self.vertex_c.coords))
+
+    def apply_membrane_barrier(self, tensor_field: PentarnyTensorField, evolution: PentarnyTensorEvolution):
+        """
+        Инжектирует волновые импульсы по вершинам и ребрам деформирующейся плоскости,
+        создавая активный полевой барьер внутри тензорной матрицы.
+        """
+        va = tuple(self.vertex_a.coords)
+        vb = tuple(self.vertex_b.coords)
+        vc = tuple(self.vertex_c.coords)
+
+        # Импульсы по вершинам треугольника плоскости
+        tensor_field.inject_quantum_impulse(va, 2)
+        tensor_field.inject_quantum_impulse(vb, 0)
+        tensor_field.inject_quantum_impulse(vc, -2)
+
+        evolution.propagate_wave(va, radius=1)
+        evolution.propagate_wave(vb, radius=1)
+        evolution.propagate_wave(vc, radius=1)
+
+
+# ============================================================================
+# МОДУЛЬ 4: УНИВЕРСАЛЬНОЕ ИНТЕГРИРОВАННОЕ ЯДРО V17
+# ============================================================================
+class PentarnyUniverseV17:
+    def __init__(self, dimensions: tuple, node_coords: dict):
+        self.dimensions = dimensions
+        self.tensor_field = PentarnyTensorField(dimensions)
+        self.tensor_evolution = PentarnyTensorEvolution(self.tensor_field)
+        self.graph = PentarUniverseGraph()
+        self.node_coords = node_coords
+
+        # Инициализация трех точек, образующих динамическую плоскость (мембрану)
+        mid = dimensions[0] // 2
+        max_idx = dimensions[0] - 1
+        
+        p1 = (mid, mid, mid, mid)
+        p2 = (0, max_idx, mid, mid)
+        p3 = (max_idx, 0, mid, mid)
+        
+        self.membrane = DynamicPlaneMembrane(dimensions, p1, p2, p3)
+
+    def add_node(self, name: str, coords: tuple):
+        self.graph.add_node(name)
+        self.node_coords[name] = coords
+
+    def add_edge(self, src: str, tgt: str):
+        self.graph.add_edge(src, tgt)
+
+    def step(self):
+        # 1. Шаг микро-динамики графовой сети (V10.2)
+        self.graph.pulse()
+        
+        # 2. Проецирование решений графа в тензорное поле (Граф -> Поле)
+        for name, node in self.graph.nodes.items():
+            if name in self.node_coords:
+                coords = self.node_coords[name]
+                impulse_val = int(node.decision)
+                if impulse_val != 0:
+                    self.tensor_field.inject_quantum_impulse(coords, impulse_val)
+        
+        # 3. Распространение волн от узлов (V11)
+        for name, coords in self.node_coords.items():
+            self.tensor_evolution.propagate_wave(coords, radius=1)
+
+        # 4. Применение деформирующейся плоскости-мембраны из трех точек
+        gradients = self.tensor_evolution.calculate_field_gradient()
+        self.membrane.update_membrane_position(self.tensor_field.field, gradients)
+        self.membrane.apply_membrane_barrier(self.tensor_field, self.tensor_evolution)
+
+        # 5. Обратная связь тензорного поля на каналы графа (Поле -> Граф)
+        field_divergence = self.tensor_evolution.calculate_field_divergence()
+        for edge in self.graph.edges:
+            edge.energy_flow = max(0.0, edge.energy_flow * (1.0 - (field_divergence * 0.01)))
+
+    def display_state(self):
+        va, vb, vc = self.membrane.get_plane_vertices()
+        print(f"\n================ [ СИНХРО-ТАКТ V17: {self.graph.time_step} ] ================")
+        print(f"  -> Энтропия тензорного поля: {self.tensor_field.calculate_field_entropy():.4f}")
+        print(f"  -> Дивергенция поля: {self.tensor_evolution.calculate_field_divergence():.2f}")
+        print(f"  -> Вершины плоскости-мембраны:")
+        print(f"     [A]: {va} | [B]: {vb} | [C]: {vc}")
+        print("--- СОСТОЯНИЕ УЗЛОВ И КАНАЛОВ ---")
+        for name, node in self.graph.nodes.items():
+            print(f"  -> Узел [{name}]: Решение = {node.decision:+d} ({PENTAR_CODE[node.decision][:20]}...) | МАССА = {node.mass:.2f}")
+        for edge in self.graph.edges:
+            print(f"  -> Канал [{edge.source.node_id} -> {edge.target.node_id}]: ПОТОК = {edge.energy_flow:.2f}, ТЕМП = {edge.temp:.2f}")
+
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("🧠 ПЕНТАРНАЯ ИНТЕГРИРОВАННАЯ СИСТЕМА — V17 (ДИНАМИЧЕСКАЯ ПЛОСКОСТЬ)")
+    print("⚠️ ВСЕ ПРАВА ЗАЩИЩЕНЫ. ПРИМЕНЕНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.")
+    print("=" * 70)
+    
+    # Задаем пространство координат для тестирования (размерность 5x5x5x5)
+    coords_map = {
+        "Центр-Ядро": (2, 2, 2, 2),
+        "Периферия-1": (1, 1, 2, 2),
+        "Периферия-2": (3, 3, 2, 2)
+    }
+    
+    universe = PentarnyUniverseV17((5, 5, 5, 5), coords_map)
+    
+    universe.add_node("Центр-Ядро", coords_map["Центр-Ядро"])
+    universe.add_node("Периферия-1", coords_map["Периферия-1"])
+    universe.add_node("Периферия-2", coords_map["Периферия-2"])
+    
+    universe.add_edge("Центр-Ядро", "Периферия-1")
+    universe.add_edge("Периферия-1", "Периферия-2")
+    universe.add_edge("Периферия-2", "Центр-Ядро")
+    
+    # Запуск симуляционного цикла с трехточечной деформируемой плоскостью
+    for _ in range(4):
+        universe.step()
+        universe.display_state()
+        time.sleep(0.2)
+        
+    print("\n" + "=" * 70)
+    print("✅ УНИВЕРСАЛЬНОЕ ЯДРО V17 С ДИНАМИЧЕСКОЙ ПЛОСКОСТЬЮ УСПЕШНО РАЗВЕРНУТО")
+    print("=" * 70)
