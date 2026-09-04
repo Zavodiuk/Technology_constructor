@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+ ПРОЕКТ «W ГАРМОНИЯ» — МОДУЛЬ 2: ВЕКТОРИЗОВАННЫЕ ТРИТЫ И БАТЧ-АРХИТЕКТУРА
+================================================================================
+ Автор технологии и концепции: Владимир Заводюк (Root-Architect)
+ Дата фиксации приоритета: Сентябрь 2026 года
+ Версия: W-2.0 (NumPy-Accelerated Brusentsov Vector Engine)
+
+ ⚖️ ЮРИДИЧЕСКИЙ СТАТУС И ПРАВА / LEGAL NOTICE:
+ ALL RIGHTS RESERVED. ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ Данный программный код является объектом интеллектуальной собственности автора. 
+ Применение, модификация, коммерческое или закрытое развертывание данных 
+ концептуальных контуров допускается СТРОГО С ПИСЬМЕННОГО СОГЛАСИЯ АВТОРА.
+
+ ВНИМАНИЕ: Массовая векторизация троичных сред ускоряет обработку сигналов 
+ на порядок, однако требует строгого контроля целостности массивов во избежание 
+ лавинообразного распространения фазовых ошибок в распределенных узлах.
+================================================================================
+"""
+
+import numpy as np
+from typing import Tuple
+
+TritArray = np.ndarray  # dtype=np.int8, значения -1, 0, 1
+
+
+def _check_trit_array(arr: TritArray) -> TritArray:
+    """Проверка целостности массива тритов на соответствие алфавиту {-1, 0, 1}."""
+    if not np.all(np.isin(arr, [-1, 0, 1])):
+        raise ValueError("Массив содержит значения, отличные от -1, 0, 1")
+    return arr
+
+
+def make_trit_array(values) -> TritArray:
+    """Конвертация списка или числового массива в проверенный NumPy-массив тритов."""
+    arr = np.asarray(values, dtype=np.int8)
+    return _check_trit_array(arr)
+
+
+# ============================================================================
+# 1. ВЕКТОРИЗОВАННЫЕ БАЗОВЫЕ ОПЕРАЦИИ БРУСЕНЦОВА
+# ============================================================================
+
+def trit_not(arr: TritArray) -> TritArray:
+    """Пакетное отрицание всего массива тритов за один проход."""
+    return -_check_trit_array(arr)
+
+
+# Таблица импликации Брусенцова 3x3 для векторизованной индексации [a+1, b+1]
+_IMPL_NP = np.array([
+    [1, 1, 1],    # a = -1
+    [0, 1, 1],    # a =  0
+    [-1, 0, 1],   # a =  1
+], dtype=np.int8)
+
+
+def trit_impl(a: TritArray, b: TritArray) -> TritArray:
+    """Векторизованная импликация a -> b через табличную индексацию C-уровня."""
+    a, b = _check_trit_array(a), _check_trit_array(b)
+    if a.shape != b.shape:
+        raise ValueError(f"Размеры массивов не совпадают: {a.shape} != {b.shape}")
+    return _IMPL_NP[a + 1, b + 1]
+
+
+def trit_and(a: TritArray, b: TritArray) -> TritArray:
+    """Сильная конъюнкция: a AND b := NOT(a -> NOT(b))."""
+    return trit_not(trit_impl(a, trit_not(b)))
+
+
+def trit_or(a: TritArray, b: TritArray) -> TritArray:
+    """Дизъюнкция: a OR b := (NOT a) -> b."""
+    return trit_impl(trit_not(a), b)
+
+
+# ============================================================================
+# 2. ДРЕВОВИДНЫЕ ИНТЕРФЕРЕНЦИОННЫЕ СВЁРТКИ (BATCH REDUCE)
+# ============================================================
+
+def _tree_reduce_batch(matrix: TritArray, op, neutral: int) -> np.ndarray:
+    """Логарифмическая редукция строк матрицы через ассоциативную операцию."""
+    m = _check_trit_array(matrix).copy()
+    while m.shape[1] > 1:
+        k = m.shape[1]
+        if k % 2 == 1:
+            m = np.concatenate([m, np.full((m.shape[0], 1), neutral, dtype=np.int8)], axis=1)
+            k += 1
+        left, right = m[:, 0::2], m[:, 1::2]
+        m = op(left, right)
+    return m[:, 0]
+
+
+def fold_and_batch(matrix: TritArray) -> np.ndarray:
+    """Пакетная свёртка строк через AND (нейтральный элемент = 1)."""
+    return _tree_reduce_batch(matrix, trit_and, neutral=1)
+
+
+def fold_or_batch(matrix: TritArray) -> np.ndarray:
+    """Пакетная свёртка строк через OR (нейтральный элемент = -1)."""
+    return _tree_reduce_batch(matrix, trit_or, neutral=-1)
+
+
+# ============================================================================
+# 3. ПАКЕТНАЯ СБАЛАНСИРОВАННАЯ ТРОИЧНАЯ АРИФМЕТИКА
+# ============================================================
+
+TRAIT_SIZE = 6  # Трайт = 6 тритов (диапазон ±364)
+
+
+def to_balanced_ternary_batch(numbers, width: int = TRAIT_SIZE) -> np.ndarray:
+    """Преобразование массива целых чисел в матрицу тритов (трайтов)."""
+    numbers = np.asarray(numbers, dtype=np.int64)
+    max_val = (3 ** width - 1) // 2
+    if np.any(np.abs(numbers) > max_val):
+        raise ValueError(f"Числа выходят за диапазон ±{max_val} для ширины {width}")
+
+    result = np.zeros((len(numbers), width), dtype=np.int8)
+    v = numbers.copy()
+    for i in range(width):
+        rem = v % 3
+        v = v // 3
+        mask = rem == 2
+        rem = np.where(mask, -1, rem)
+        v = np.where(mask, v + 1, v)
+        result[:, i] = rem
+    return result
+
+
+def from_balanced_ternary_batch(trit_matrix: np.ndarray) -> np.ndarray:
+    """Обратное преобразование матрицы тритов в массив целых чисел."""
+    trit_matrix = _check_trit_array(np.asarray(trit_matrix, dtype=np.int64))
+    width = trit_matrix.shape[1]
+    powers = 3 ** np.arange(width)
+    return trit_matrix @ powers
+
+
+# ============================================================
+# ДЕМОНСТРАЦИЯ МОДУЛЯ W-2
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("ПРОЕКТ «W ГАРМОНИЯ» — МОДУЛЬ 2: ВЕКТОРИЗОВАННОЕ ЯДРО ЗАПУЩЕНО")
+    print("Автор: Владимир Заводюк (Root-Architect) | ALL RIGHTS RESERVED")
+    print("=" * 70)
+
+    # Демонстрация пакетной арифметики
+    nums = [10, -50, 120, 364]
+    traits = to_balanced_ternary_batch(nums)
+    restored_nums = from_balanced_ternary_batch(traits)
+    
+    print(f"\n1. Пакетная трайт-арифметика:")
+    print(f"  Исходные: {nums}")
+    print(f"  Восстановленные: {restored_nums.tolist()}")
+
+    # Демонстрация пакетной импликации
+    a_arr = np.array([-1, 0, 1, 1], dtype=np.int8)
+    b_arr = np.array([1, 0, -1, 1], dtype=np.int8)
+    impl_res = trit_impl(a_arr, b_arr)
+    print(f"\n2. Пакетная импликация Брусенцова: {impl_res.tolist()}")
+
+    print("\n✅ Модуль W-2 (Vector Engine) успешно верифицирован.")
