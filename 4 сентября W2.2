@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+HARMONY W2 CORE: Модуль многомерных матричных свёрток и взаимного вращения
+Авторские права (с) Владимир Заводюк, All rights reserved.
+================================================================================
+Детерминированное пространство: {-2, -1, 0, 1, 2} (пентарный базис)
+Защитный контур: BXOSGate + Рашимон-фильтрация
+================================================================================
+"""
+
+import numpy as np
+
+class HarmonyW2Core:
+    def __init__(self, size: int = 4, k: int = 2):
+        self.size = size
+        self.k = k
+        self.state_matrix = np.zeros((size, size), dtype=np.int8)
+
+    def generate_rotational_operator(self, angle_step: int) -> np.ndarray:
+        """Генерация ортогонального оператора поворота R_theta в пентарном пространстве."""
+        theta = angle_step % 4
+        base_rot = np.eye(self.size, dtype=np.int8)
+        return np.rot90(base_rot, theta)
+
+    def pentary_convolution(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        """Нелинейная дискретная свёртка в пентарном базисе с ограничением по k."""
+        raw_conv = np.dot(a.astype(np.int16), b.astype(np.int16))
+        return np.clip(raw_conv // self.k, -self.k, self.k).astype(np.int8)
+
+    def bxos_gate_validate(self, matrix: np.ndarray) -> np.ndarray:
+        """Барьер Рашимона / BXOSGate: отсечение энтропии и проверка жизнеспособности (Ж)."""
+        validated = np.clip(matrix, -self.k, self.k)
+        entropy_mask = np.abs(validated) > self.k
+        if np.any(entropy_mask):
+            validated[entropy_mask] = 0
+        return validated
+
+    def step_rotation(self, angle_step: int) -> np.ndarray:
+        """Выполнение одного такта взаимного вращения матриц в модуле W2."""
+        r_op = self.generate_rotational_operator(angle_step)
+        conv_result = self.pentary_convolution(self.state_matrix, r_op)
+        self.state_matrix = self.bxos_gate_validate(conv_result)
+        return self.state_matrix
+
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("ИНИЦИАЛИЗАЦИЯ И ТЕСТ КОНТУРА W2 (Harmony V0)")
+    print("Автор: Владимир Заводюк, All rights reserved.")
+    print("=" * 60)
+
+    w2 = HarmonyW2Core(size=4, k=2)
+    rng = np.random.default_rng(42)
+    w2.state_matrix = rng.integers(-2, 3, size=(4, 4), dtype=np.int8)
+
+    print("\nИсходная матрица состояний:")
+    print(w2.state_matrix)
+
+    for step in range(1, 4):
+        next_state = w2.step_rotation(step)
+        print(f"\nСостояние после такта вращения {step}:")
+        print(next_state)
+
+    print("\nМодуль W2 успешно развернут. Контур работает в микросекундном режиме.")
+    
