@@ -1,0 +1,53 @@
+# -*- coding: utf-8 -*-
+"""
+ПЕНТАРНАЯ ДИНАМИЧЕСКАЯ ЛОГИКА — V11 (ТЕНЗОРНОЕ ПОЛЕ)
+Автор: Владимир Заводюк (Root-Architect)
+Версия: 11.0
+"""
+
+import numpy as np
+from itertools import product
+
+class PentarnyTensorField:
+    def __init__(self, dimensions: tuple):
+        self.dimensions = dimensions
+        self.field = np.zeros(dimensions, dtype=int)
+        self.attractor_matrix = np.zeros((5, 5), dtype=int)
+
+    def inject_quantum_impulse(self, coordinates: tuple, value: int):
+        if value not in [-2, -1, 0, 1, 2]:
+            raise ValueError("Значение должно строго лежать в пентарном базисе V11")
+        self.field[coordinates] = value
+
+    def calculate_field_entropy(self) -> float:
+        total_elements = self.field.size
+        extreme_states = np.sum(np.abs(self.field) == 2)
+        return float(extreme_states / total_elements)
+
+class PentarnyTensorEvolution:
+    def __init__(self, tensor_field: PentarnyTensorField):
+        self.field = tensor_field
+        self.step_counter = 0
+
+    def propagate_wave(self, origin: tuple, radius: int = 1):
+        dims = len(origin)
+        self.step_counter += 1
+        ranges = [range(max(0, origin[d] - radius), 
+                       min(self.field.dimensions[d], origin[d] + radius + 1)) 
+                  for d in range(dims)]
+        for coords in product(*ranges):
+            dist = sum(abs(coords[d] - origin[d]) for d in range(dims))
+            if 0 < dist <= radius:
+                impulse_value = self.field.field[origin] // (dist + 1)
+                if impulse_value != 0:
+                    current = self.field.field[coords]
+                    new_val = max(-2, min(2, current + impulse_value))
+                    self.field.field[coords] = new_val
+
+    def calculate_field_gradient(self) -> np.ndarray:
+        return np.gradient(self.field.field)
+
+    def calculate_field_divergence(self) -> float:
+        gradient = self.calculate_field_gradient()
+        return float(np.sum([np.sum(np.abs(g)) for g in gradient]))
+        
