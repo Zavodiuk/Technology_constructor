@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+ ПРОЕКТ «W ГАРМОНИЯ» — МОДУЛЬ 10: BXOS ЯДРО И GAME-МОДУЛЬ СЦЕНАРНОГО МОДЕЛИРОВАНИЯ
+================================================================================
+ Автор технологии и концепции: Владимир Заводюк (Root-Architect)
+ Дата фиксации приоритета: Сентябрь 2026 года
+ Версия: W-10.0 (BXOS Kernel & Pentary Simulation Game Engine, k=2)
+
+ ⚖️ ЮРИДИЧЕСКИЙ СТАТУС И ПРАВА / LEGAL NOTICE:
+ ALL RIGHTS RESERVED. ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ Данный программный код является объектом интеллектуальной собственности автора. 
+ Применение, модификация, коммерческое или закрытое развертывание данных 
+ концептуальных контуров допускается СТРОГО С ПИСЬМЕННОГО СОГЛАСИЯ АВТОРА.
+
+ ВНИМАНИЕ: Интегрирует операционное ядро BXOS (Brusentsov Extended Operating 
+ System) с игровым симулятором сценарного прогнозирования для ИИ-кластеров. 
+ Оценивает риски перегрузки и теплового пробоя в динамических виртуальных средах.
+================================================================================
+"""
+
+import time
+import hashlib
+import random
+from typing import List, Dict, Any, Optional
+from dataclasses import dataclass, field
+
+K = 2  # Пентарный параметр домена {-2..2}
+
+
+@dataclass
+class BXOSProcessContext:
+    process_id: str
+    workload_type: str
+    pentary_priority: int  # от -2 до 2
+    resource_quota: float
+
+
+class BXOSKernel:
+    """
+    Ядро BXOS (Brusentsov Extended Operating System): диспетчеризация процессов 
+    и распределение ресурсов ИИ-датацентра на основе пентарной логики.
+    """
+
+    def __init__(self):
+        self.registry: Dict[str, BXOSProcessContext] = {}
+        self.system_entropy: float = 0.0
+
+    def spawn_process(self, pid: str, workload: str, priority: int, quota: float) -> bool:
+        if priority not in (-2, -1, 0, 1, 2):
+            raise ValueError("Приоритет процесса должен быть пентарным (-2..2)")
+        
+        self.registry[pid] = BXOSProcessContext(
+            process_id=pid,
+            workload_type=workload,
+            pentary_priority=priority,
+            resource_quota=quota
+        )
+        return True
+
+    def evaluate_scheduler_state(self) -> Dict[str, Any]:
+        """Оценка общего состояния планировщика BXOS."""
+        if not self.registry:
+            return {"active_processes": 0, "kernel_status": "IDLE"}
+        
+        priorities = [p.pentary_priority for p in self.registry.values()]
+        avg_prio = sum(priorities) / len(priorities)
+        
+        return {
+            "active_processes": len(self.registry),
+            "average_priority_vector": round(avg_prio, 2),
+            "kernel_status": "STABLE" if avg_prio >= 0 else "DEFENSIVE_THROTTLE"
+        }
+
+
+class PentarySimulationGameEngine:
+    """
+    Game-модуль сценарного моделирования: симуляция "что если" (What-If) 
+    для поиска оптимальных точек балансировки ИИ-кластера в условиях неопределенности.
+    """
+
+    def __init__(self, kernel: BXOSKernel):
+        self.kernel = kernel
+
+    def run_scenario_simulation(self, iterations: int = 100) -> Dict[str, Any]:
+        """
+        Прогон стохастических сценариев нагрузки для оценки устойчивости 
+        дата-центра под управлением пентарных правил.
+        """
+        success_count = 0
+        thermal_breach_count = 0
+
+        for _ in range(iterations):
+            # Моделируем случайные пентарные возмущения среды
+            env_stress = random.choice([-2, -1, 0, 1, 2])
+            kernel_state = self.kernel.evaluate_scheduler_state()
+            
+            # Логика принятия решения симулятора
+            if env_stress == 2 and kernel_state["kernel_status"] == "DEFENSIVE_THROTTLE":
+                thermal_breach_count += 1
+            else:
+                success_count += 1
+
+        stability_rate = success_count / iterations
+
+        return {
+            "scenarios_tested": iterations,
+            "stability_rate": round(stability_rate, 3),
+            "thermal_breaches": thermal_breach_count,
+            "simulation_verdict": "OPTIMAL" if stability_rate > 0.75 else "REBALANCE_REQUIRED"
+        }
+
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("ПРОЕКТ «W ГАРМОНИЯ» — МОДУЛЬ 10: BXOS И GAME-МОДУЛЬ ЗАПУЩЕНЫ")
+    print("Автор: Владимир Заводюк (Root-Architect) | ALL RIGHTS RESERVED")
+    print("=" * 70)
+
+    # Инициализация ядра BXOS и регистрация процессов ИИ
+    bxos = BXOSKernel()
+    bxos.spawn_process("LLM_Train_Alpha", "Distributed Training", priority=2, quota=85.0)
+    bxos.spawn_process("Inference_Edge_01", "Real-time API", priority=1, quota=15.0)
+
+    print(f"\n1. Статус ядра BXOS:")
+    print(bxos.evaluate_scheduler_state())
+
+    # Запуск игрового симулятора сценарного анализа
+    game_engine = PentarySimulationGameEngine(bxos)
+    simulation_result = game_engine.run_scenario_simulation(iterations=500)
+
+    print(f"\n2. Результаты сценарного Game-моделирования:")
+    for k, v in simulation_result.items():
+        print(f"  - {k}: {v}")
+
+    print("\n✅ Модуль W-10 (BXOS Kernel & Simulation Game Engine) успешно интегрирован.")
