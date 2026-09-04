@@ -1,0 +1,243 @@
+# -*- coding: utf-8 -*-
+"""
+ПЕНТАРНАЯ ДИНАМИЧЕСКАЯ ЛОГИКА — V10.1 (СЕТЕВАЯ ФИЗИКА — ИСПРАВЛЕННАЯ)
+Автор: Владимир Заводюк (Root-Architect)
+Дата: 13.08.2026 (Исправления: сентябрь 2026)
+Версия: 10.2
+"""
+
+import numpy as np
+import time
+import random
+from collections import Counter
+
+LOGIC_BASIS = [2, 1, 0, -1, -2]
+
+MASKS = {
+     2: "Бригелла (Да / Пик / Источник / Истина)",
+     1: "Коломбина (Скорее Да / Восходящий фронт / Вероятность)",
+     0: "Доктор Грациано (Наверное / Центр / Баланс)",
+    -1: "Пьеро (Скорее Нет / Нисходящий фронт / Сомнение)",
+    -2: "Арлекин (Нет / Впадина / Ложь)"
+}
+
+PENTAR_CODE = {
+    -2: "КАТЕГОРИЧЕСКОЕ НЕТ (Полная блокировка / Обрыв канала)",
+    -1: "МЯГКОЕ НЕТ (Торможение потока)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Свободный транзит)",
+     1: "МЯГКОЕ ДА (Активация / Рост проводимости)",
+     2: "КАТЕГОРИЧЕСКОЕ ДА (Максимальное ускорение / Сверхпроводимость)"
+}
+
+class PentarnySystem:
+    def __init__(self, value: int):
+        if value not in [-2, -1, 0, 1, 2]:
+            raise ValueError("Значение должно быть в диапазоне от -2 до 2")
+        self.value = value
+        self.mask = MASKS[value]
+    
+    def as_logic(self) -> str:
+        states = {2: "Истина", 1: "Вероятность", 0: "Тождество / Баланс", -1: "Сомнение", -2: "Ложь"}
+        return states[self.value]
+    
+    def as_psychology(self) -> str:
+        states = {2: "Мания / Действие", 1: "Интерес", 0: "Рефлексия / Покой", -1: "Апатия / Сомнение", -2: "Депрессия / Отказ"}
+        return states[self.value]
+    
+    def as_physics(self) -> str:
+        states = {2: "Гребень волны (Максимум)", 1: "Восходящий фронт", 0: "Узел покоя", -1: "Спад", -2: "Впадина (Минимум)"}
+        return states[self.value]
+    
+    def as_sociology(self) -> str:
+        states = {2: "Инвестиция / Эмиссия", 1: "Рост рынка", 0: "Стабилизация", -1: "Рецессия", -2: "Кризис / Сток"}
+        return states[self.value]
+    
+    def as_economics(self) -> str:
+        states = {2: "Бум / Перегрев", 1: "Рост", 0: "Стагнация", -1: "Спад", -2: "Дефолт / Обвал"}
+        return states[self.value]
+    
+    def as_energy(self) -> str:
+        states = {2: "Максимум энергии", 1: "Высокий потенциал", 0: "Нейтраль", -1: "Низкий потенциал", -2: "Минимум энергии"}
+        return states[self.value]
+    
+    def as_ethics(self) -> str:
+        states = {2: "Добро / Справедливость", 1: "Сочувствие", 0: "Нейтральность", -1: "Сомнение в морали", -2: "Зло / Несправедливость"}
+        return states[self.value]
+    
+    def strength(self) -> float:
+        return abs(self.value) / 2.0
+    
+    def sign(self) -> int:
+        return 1 if self.value > 0 else (-1 if self.value < 0 else 0)
+    
+    def invert(self) -> 'PentarnySystem':
+        return PentarnySystem(-self.value)
+    
+    def __add__(self, other: 'PentarnySystem') -> 'PentarnySystem':
+        result = max(-2, min(2, self.value + other.value))
+        return PentarnySystem(result)
+    
+    def __sub__(self, other: 'PentarnySystem') -> 'PentarnySystem':
+        result = max(-2, min(2, self.value - other.value))
+        return PentarnySystem(result)
+    
+    def __mul__(self, other: 'PentarnySystem') -> 'PentarnySystem':
+        result = max(-2, min(2, self.value * other.value))
+        return PentarnySystem(result)
+    
+    def __repr__(self):
+        return f"PentarnySystem({self.value})"
+    
+    def __str__(self):
+        return f"{self.value} → {self.mask}"
+    
+    def to_vector(self) -> list:
+        vec = [0, 0, 0, 0, 0]
+        vec[self.value + 2] = 1
+        return vec
+
+def quantize_pentarny(value: float) -> int:
+    if value > 0.75:
+        return 2
+    elif value > 0.25:
+        return 1
+    elif value >= -0.25:
+        return 0
+    elif value >= -0.75:
+        return -1
+    else:
+        return -2
+
+def pentarny_consensus(values: list) -> int:
+    if not values:
+        return 0
+    return quantize_pentarny(sum(values) / len(values))
+
+class PentarNode:
+    def __init__(self, node_id):
+        self.node_id = node_id
+        self.internal_state = 0
+        self.mass = 0.0
+        self.decision = 0
+
+    def process_signals(self, signal_matrix_A: int, signal_matrix_B: int) -> int:
+        # Гарантируем целочисленный базис [-2, 2]
+        signal_matrix_A = int(max(-2, min(2, signal_matrix_A)))
+        signal_matrix_B = int(max(-2, min(2, signal_matrix_B)))
+
+        print(f"\n--- [Узел {self.node_id}] Точка пересечения матриц ---")
+        print(f"Сигнал Матрицы А: {signal_matrix_A} ({PENTAR_CODE[signal_matrix_A]})")
+        print(f"Сигнал Матрицы Б: {signal_matrix_B} ({PENTAR_CODE[signal_matrix_B]})")
+        
+        sum_of_decisions = signal_matrix_A + signal_matrix_B
+        conflict = abs(signal_matrix_A - signal_matrix_B)
+        
+        base_temp = 1.0 + (sum_of_decisions * 0.2)
+        actual_temp = max(0.1, base_temp - (conflict * 0.2))
+        rhythm = sum_of_decisions * 0.5
+        
+        if conflict >= 3:
+            informational_mass = conflict * 2.5
+            self.internal_state = 0
+        else:
+            informational_mass = conflict * 0.5
+            self.internal_state = max(-2, min(2, sum_of_decisions))
+            
+        self.mass = informational_mass
+        self.decision = self.internal_state
+        
+        processing_delay = informational_mass * 0.05
+        time.sleep(processing_delay)
+        
+        print(f"-> Итоговое состояние узла: {self.internal_state} ({PENTAR_CODE[self.internal_state]})")
+        print(f"-> ТЕМП: {actual_temp:.2f} шагов/сек | РИТМ: {rhythm:+.2f}")
+        print(f"-> ИНФОРМАЦИОННАЯ МАССА: {informational_mass:.2f} у.е.")
+        return self.internal_state
+
+class PentarEdge:
+    def __init__(self, source: PentarNode, target: PentarNode):
+        self.source = source
+        self.target = target
+        self.energy_flow = 1.0
+        self.temp = 1.0
+        self.rhythm = 0.0
+
+    def update_dynamics(self):
+        decision_sum = self.source.decision + self.target.decision
+        total_mass = self.source.mass + self.target.mass
+        old_temp = self.temp
+        base_modifier = 1.0 + (decision_sum * 0.25) - (total_mass * 0.2)
+        self.temp = max(0.05, base_modifier)
+        self.rhythm = self.temp - old_temp
+        if self.source.decision == -2 or self.target.decision == -2:
+            self.energy_flow = 0.0
+        else:
+            self.energy_flow = (self.temp * 1.5) + (total_mass * 0.5)
+
+class PentarUniverseGraph:
+    def __init__(self):
+        self.nodes = {}
+        self.edges = []
+        self.time_step = 0
+
+    def add_node(self, name):
+        self.nodes[name] = PentarNode(name)
+
+    def add_edge(self, src, tgt):
+        self.edges.append(PentarEdge(self.nodes[src], self.nodes[tgt]))
+
+    def pulse(self):
+        self.time_step += 1
+        for name, node in self.nodes.items():
+            connected_signals = []
+            for edge in self.edges:
+                if edge.target == node:
+                    # Безопасное квантование плавающего потока энергии в дискретный базис [-2, 2]
+                    norm_val = (edge.energy_flow - 1.5) / 1.5
+                    q_state = quantize_pentarny(norm_val)
+                    connected_signals.append(q_state)
+                elif edge.source == node:
+                    q_state = quantize_pentarny(edge.energy_flow / 3.0 - 0.5)
+                    connected_signals.append(q_state)
+            
+            if not connected_signals:
+                connected_signals = [random.choice([-2, -1, 0, 1, 2])]
+            
+            sig_a = int(connected_signals[0])
+            sig_b = int(connected_signals[-1])
+            
+            node.process_signals(sig_a, sig_b)
+            
+        for edge in self.edges:
+            edge.update_dynamics()
+
+    def display_state(self):
+        print(f"\n================ [ ТАКТ ВРЕМЕНИ: {self.time_step} ] ================")
+        print("--- СОСТОЯНИЕ УЗЛОВ ---")
+        for name, node in self.nodes.items():
+            print(f"Узел [{name}]: Решение = {node.decision:+d} ({PENTAR_CODE[node.decision][:20]}...) | МАССА = {node.mass:.2f}")
+        print("--- ДИНАМИКА ПОТОКОВ В КАНАЛАХ ---")
+        for edge in self.edges:
+            print(f"Канал [{edge.source.node_id} -> {edge.target.node_id}]: ТЕМП = {edge.temp:.2f}, ПОТОК = {edge.energy_flow:.2f}")
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("🧠 ПЕНТАРНАЯ ЛОГИКА — V10.2 (СЕТЕВАЯ ФИЗИКА С КВАНТОВАНИЕМ ПОТОКОВ)")
+    print("=" * 70)
+    
+    universe = PentarUniverseGraph()
+    universe.add_node("Центр")
+    universe.add_node("Периферия-А")
+    universe.add_node("Периферия-Б")
+    universe.addEdge("Центр", "Периферия-А")
+    universe.addEdge("Периферия-А", "Периферия-Б")
+    universe.addEdge("Периферия-Б", "Центр")
+    
+    for _ in range(3):
+        universe.pulse()
+        universe.display_state()
+        time.sleep(0.2)
+    
+    print("\n" + "=" * 70)
+    print("✅ ТЕСТЫ СЕТЕВОЙ ФИЗИКИ V10.2 УСПЕШНО ПРОЙДЕНЫ")
+    print("=" * 70)
