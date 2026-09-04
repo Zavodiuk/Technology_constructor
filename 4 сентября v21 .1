@@ -1,0 +1,374 @@
+# -*- coding: utf-8 -*-
+"""
+ПЕНТАРНАЯ КИБЕРНЕТИЧЕСКАЯ СИСТЕМА — V21 (РЕКУРСИВНЫЕ ЛАТИС-КАПСУЛЫ И РЕКУПЕРАЦИЯ)
+Автор: Владимир Заводюк (Root-Architect)
+Версия: 21.0 (Recursive Lattice Hyper-Tensor Architecture)
+
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+
+ВНИМАНИЕ: Данный файл моделирует многотетраэдральную решетку с рекурсивной 
+вложенностью капсул и контурами рекуперации отрицательной энергии в ламинарный баланс.
+Представляет высокую системную плотность и потенциальную сложность нелинейного управления.
+"""
+
+import numpy as np
+import time
+import random
+import math
+from itertools import product
+from collections import Counter
+from typing import Dict, List, Tuple, Optional
+
+# --- БАЗИС И СЕМИОТИЧЕСКИЕ СЛОВАРИ ПЕНТАРНОЙ ЛОГИКИ ---
+LOGIC_BASIS: List[int] = [2, 1, 0, -1, -2]
+
+MASKS: Dict[int, str] = {
+     2: "Бригелла (Да / Пик / Абсолютный Источник / Истина)",
+     1: "Коломбина (Скорее Да / Восходящий фронт / Вероятностный Поток)",
+     0: "Доктор Грациано (Наверное / Центр / Абсолютный Баланс / Покой)",
+    -1: "Пьеро (Скорее Нет / Нисходящий фронт / Локальное Сомнение)",
+    -2: "Арлекин (Нет / Впадина / Полная Блокировка / Ложь)"
+}
+
+PENTAR_CODE: Dict[int, str] = {
+    -2: "КАТЕГОРИЧЕСКОЕ НЕТ (Аппаратный обрыв канала / Рекуперационный сток)",
+    -1: "МЯГКОЕ НЕТ (Демпфирование потока / Энергетическое торможение)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Свободный ламинарный транзит / Регенерация)",
+     1: "МЯГКОЕ ДА (Активация проводимости / Индукционный подъем)",
+     2: "КАТЕГОРИЧЕСКОЕ ДА (Сверхпроводимость / Резонансное ускорение)"
+}
+
+def quantize_pentarny(value: float) -> int:
+    if value > 0.75:
+        return 2
+    elif value > 0.25:
+        return 1
+    elif value >= -0.25:
+        return 0
+    elif value >= -0.75:
+        return -1
+    else:
+        return -2
+
+
+# ============================================================================
+# МОДУЛЬ 1: МАКРО-ПОЛЕ И МЕТРИКА С РЕКУПЕРАЦИЕЙ ЭНЕРГИИ ( [] )
+# ============================================================================
+class PentarnyTensorField:
+    def __init__(self, dimensions: Tuple[int, ...]):
+        self.dimensions = dimensions
+        self.field = np.zeros(dimensions, dtype=int)  # [] — адресная сетка
+
+    def inject_quantum_impulse(self, coordinates: Tuple[int, ...], value: int) -> None:
+        if value not in [-2, -1, 0, 1, 2]:
+            raise ValueError("Значение импульса должно соответствовать базису [-2, 2]")
+        if all(0 <= coordinates[i] < self.dimensions[i] for i in range(len(self.dimensions))):
+            self.field[coordinates] = value
+
+    def calculate_field_entropy(self) -> float:
+        total_elements = self.field.size
+        if total_elements == 0:
+            return 0.0
+        counts = Counter(self.field.flatten())
+        entropy = 0.0
+        for count in counts.values():
+            p = count / total_elements
+            if p > 0:
+                entropy -= p * math.log2(p)
+        return float(entropy)
+
+    def recover_to_laminar_balance(self) -> int:
+        """Рекуперация: конвертация застоявшихся экстремальных состояний (-2) в баланс (0)."""
+        converted_count = 0
+        it = np.nditer(self.field, flags=['multi_index'], op_flags=['readwrite'])
+        while not it.finished:
+            if it[0] == -2:
+                it[0] = 0  # Сброс в абсолютный покой (Доктор Грациано)
+                converted_count += 1
+            it.iternext()
+        return converted_count
+
+
+class PentarnyTensorEvolution:
+    def __init__(self, tensor_field: PentarnyTensorField):
+        self.field = tensor_field
+        self.step_counter = 0
+
+    def propagate_wave(self, origin: Tuple[int, ...], radius: int = 1) -> None:
+        dims = len(origin)
+        self.step_counter += 1
+        ranges = [range(max(0, origin[d] - radius), 
+                       min(self.field.dimensions[d], origin[d] + radius + 1)) 
+                  for d in range(dims)]
+        for coords in product(*ranges):
+            dist = sum(abs(coords[d] - origin[d]) for d in range(dims))
+            if 0 < dist <= radius:
+                impulse_value = self.field.field[origin] // (dist + 1)
+                if impulse_value != 0:
+                    current = self.field.field[coords]
+                    self.field.field[coords] = max(-2, min(2, current + impulse_value))
+
+    def calculate_field_gradient(self) -> List[np.ndarray]:
+        return np.gradient(self.field.field.astype(float))
+
+    def calculate_field_divergence(self) -> float:
+        gradient = self.calculate_field_gradient()
+        return float(np.sum([np.sum(np.abs(g)) for g in gradient]))
+
+
+# ============================================================================
+# МОДУЛЬ 2: МИКРО-ГРАФ С УПРАВЛЯЕМЫМИ КАНАЛАМИ ( : )
+# ============================================================================
+class PentarNode:
+    def __init__(self, node_id: str):
+        self.node_id = node_id
+        self.internal_state: int = 0
+        self.mass: float = 0.0
+        self.decision: int = 0
+        self.isolation_depth: int = 0  # Уровень рекурсивной вложенности капсулы
+
+    def process_signals(self, signal_a: int, signal_b: int) -> int:
+        if self.isolation_depth > 0:
+            # Внутри рекурсивной капсулы узел подвергается глубокой стабилизации
+            self.decision = 0
+            self.internal_state = 0
+            self.mass = 0.0
+            return 0
+
+        signal_a = int(max(-2, min(2, signal_a)))
+        signal_b = int(max(-2, min(2, signal_b)))
+        sum_of_decisions = signal_a + signal_b
+        conflict = abs(signal_a - signal_b)
+        
+        if conflict >= 3:
+            informational_mass = conflict * 3.14
+            self.internal_state = 0
+        else:
+            informational_mass = conflict * 0.75
+            self.internal_state = max(-2, min(2, sum_of_decisions))
+            
+        self.mass = informational_mass
+        self.decision = self.internal_state
+        return self.internal_state
+
+
+class PentarEdge:
+    def __init__(self, source: PentarNode, target: PentarNode):
+        self.source = source
+        self.target = target
+        self.energy_flow: float = 1.0
+        self.temp: float = 1.0
+
+    def update_dynamics(self) -> None:
+        if self.source.isolation_depth > 0 or self.target.isolation_depth > 0:
+            self.energy_flow = 0.0
+            self.temp = 0.05
+            return
+
+        decision_sum = self.source.decision + self.target.decision
+        total_mass = self.source.mass + self.target.mass
+        base_modifier = 1.0 + (decision_sum * 0.2) - (total_mass * 0.15)
+        self.temp = max(0.05, base_modifier)
+        
+        if self.source.decision == -2 or self.target.decision == -2:
+            self.energy_flow = 0.0
+        else:
+            self.energy_flow = (self.temp * 1.618) + (total_mass * 0.5)
+
+
+class PentarUniverseGraph:
+    def __init__(self):
+        self.nodes: Dict[str, PentarNode] = {}  # {} — ассоциативная память
+        self.edges: List[PentarEdge] = []
+        self.time_step: int = 0
+
+    def add_node(self, name: str) -> None:
+        self.nodes[name] = PentarNode(name)
+
+    def add_edge(self, src: str, tgt: str) -> None:
+        self.edges.append(PentarEdge(self.nodes[src], self.nodes[tgt]))
+
+    def pulse(self) -> None:
+        self.time_step += 1
+        for name, node in self.nodes.items():
+            connected_signals = []
+            for edge in self.edges:
+                if edge.target == node:
+                    norm_val = (edge.energy_flow - 1.5) / 1.5
+                    connected_signals.append(quantize_pentarny(norm_val))
+                elif edge.source == node:
+                    connected_signals.append(quantize_pentarny(edge.energy_flow / 3.0 - 0.5))
+            
+            if not connected_signals:
+                connected_signals = [random.choice(LOGIC_BASIS)]
+            
+            node.process_signals(int(connected_signals[0]), int(connected_signals[-1]))
+            
+        for edge in self.edges:
+            edge.update_dynamics()
+
+
+# ============================================================================
+# МОДУЛЬ 3: МНОГОТЕТРАЭДРАЛЬНАЯ РЕШЕТКА И РЕКУРСИВНЫЕ КАПСУЛЫ ( () )
+# ============================================================================
+class RecursiveTetrahedralCapsule:
+    """
+    Капсула с поддержкой рекурсивной вложенности и многотетраэдральных связей.
+    """
+    def __init__(self, name: str, field_dims: Tuple[int, ...], vertices: tuple, depth: int = 1):
+        self.name = name
+        self.field_dims = field_dims
+        self.coords_list = [list(v) for v in vertices]
+        self.depth = depth
+        self.sub_capsule: Optional['RecursiveTetrahedralCapsule'] = None
+
+    def drift(self, tensor_field: np.ndarray, gradient_fields: List[np.ndarray]) -> None:
+        dims = len(self.field_dims)
+        for idx, vertex in enumerate(self.coords_list):
+            best_coords = list(vertex)
+            max_tension = -999.0
+            for d in range(dims):
+                for delta in [-1, 1]:
+                    test_coords = list(vertex)
+                    test_coords[d] += delta
+                    if all(0 <= test_coords[i] < self.field_dims[i] for i in range(dims)):
+                        local_val = abs(tensor_field[tuple(test_coords)])
+                        grad_val = sum(abs(gradient_fields[i][tuple(test_coords)]) for i in range(dims))
+                        tension = local_val + (grad_val * (2.0 * self.depth))
+                        if tension > max_tension:
+                            max_tension = tension
+                            best_coords = test_coords
+            self.coords_list[idx] = best_coords
+
+        if self.sub_capsule:
+            self.sub_capsule.drift(tensor_field, gradient_fields)
+
+    def spawn_nested_capsule(self) -> None:
+        if not self.sub_capsule and self.depth < 3:
+            mid_v = [sum(x)//len(x) for x in zip(*self.coords_list)]
+            offset_v = [max(0, c - 1) for c in mid_v]
+            sub_verts = (
+                tuple(mid_v),
+                tuple(offset_v),
+                tuple([min(self.field_dims[0]-1, c+1) for c in mid_v]),
+                tuple([max(0, c-1) for c in offset_v])
+            )
+            self.sub_capsule = RecursiveTetrahedralCapsule(f"{self.name}-Sub", self.field_dims, sub_verts, self.depth + 1)
+
+    def enforce_lattice_containment(self, tensor_field: PentarnyTensorField, evolution: PentarnyTensorEvolution, graph: PentarUniverseGraph, node_coords: Dict[str, Tuple[int, ...]]) -> None:
+        all_coords = np.array(self.coords_list)
+        min_b = np.min(all_coords, axis=0)
+        max_b = np.max(all_coords, axis=0)
+
+        for v in self.coords_list:
+            tensor_field.inject_quantum_impulse(tuple(v), -2)
+            evolution.propagate_wave(tuple(v), radius=1)
+
+        for name, node in graph.nodes.items():
+            if name in node_coords:
+                n_coords = np.array(node_coords[name])
+                if np.all(n_coords >= min_b) and np.all(n_coords <= max_b):
+                    node.isolation_depth = self.depth
+                else:
+                    if node.isolation_depth == self.depth:
+                        node.isolation_depth = 0
+
+        if self.sub_capsule:
+            self.sub_capsule.enforce_lattice_containment(tensor_field, evolution, graph, node_coords)
+
+
+# ============================================================================
+# МОДУЛЬ 4: УНИВЕРСАЛЬНЫЙ ОРКЕСТРАТОР V21
+# ============================================================================
+class PentarnyUniverseV21:
+    def __init__(self, dimensions: Tuple[int, ...], node_coordinates: Dict[str, Tuple[int, ...]]):
+        self.dimensions = dimensions
+        self.tensor_field = PentarnyTensorField(dimensions)
+        self.tensor_evolution = PentarnyTensorEvolution(self.tensor_field)
+        self.graph = PentarUniverseGraph()
+        self.node_coords = node_coordinates
+
+        max_idx = dimensions[0] - 1
+        mid = dimensions[0] // 2
+        
+        # Создание многотетраэдральной латис-решетки
+        capsule_verts_1 = ((0, 0, 0, 0), (max_idx, max_idx, 0, 0), (max_idx, 0, max_idx, 0), (mid, mid, mid, max_idx))
+        capsule_verts_2 = ((1, 1, 1, 1), (max_idx-1, max_idx-1, 1, 1), (max_idx-1, 1, max_idx-1, 1), (mid, mid, mid, max_idx-1))
+
+        self.lattice_capsules = [
+            RecursiveTetrahedralCapsule("Lattice-Alpha", dimensions, capsule_verts_1, depth=1),
+            RecursiveTetrahedralCapsule("Lattice-Beta", dimensions, capsule_verts_2, depth=1)
+        ]
+
+    def add_node(self, name: str, coords: Tuple[int, ...]) -> None:
+        self.graph.add_node(name)
+        self.node_coords[name] = coords
+
+    def add_edge(self, src: str, tgt: str) -> None:
+        self.graph.add_edge(src, tgt)
+
+    def step(self) -> None:
+        # := Захват энтропии и запуск цикла рекуперации
+        current_entropy := self.tensor_field.calculate_field_entropy()
+        if current_entropy > 0.7:
+            recovered_count = self.tensor_field.recover_to_laminar_balance()
+
+        self.graph.pulse()
+
+        for name, node in self.graph.nodes.items():
+            if name in self.node_coords and node.isolation_depth == 0:
+                coords = self.node_coords[name]
+                if node.decision != 0:
+                    self.tensor_field.inject_quantum_impulse(coords, int(node.decision))
+
+        for name, coords in self.node_coords.items():
+            if self.graph.nodes[name].isolation_depth == 0:
+                self.tensor_evolution.propagate_wave(coords, radius=1)
+
+        gradients = self.tensor_evolution.calculate_field_gradient()
+        for cap in self.lattice_capsules:
+            cap.drift(self.tensor_field.field, gradients)
+            if current_entropy > 0.6:
+                cap.spawn_nested_capsule()
+            cap.enforce_lattice_containment(self.tensor_field, self.tensor_evolution, self.graph, self.node_coords)
+
+    def display_telemetry(self) -> None:
+        print(f"\n================ [ ТАКТ V21: ЛАТИС-СИНХРОН №{self.graph.time_step} ] ================")
+        print(f"  -> Энтропия среды: {self.tensor_field.calculate_field_entropy():.6f}")
+        print(f"  -> Активных решетчатых капсул: {len(self.lattice_capsules)}")
+        print("--- СОСТОЯНИЕ РАСПРЕДЕЛЕННЫХ УЗЛОВ И РЕКУРСИИ ---")
+        for name, node in self.graph.nodes.items():
+            status = f"💊 РЕКУРСИВНАЯ КАПСУЛА (Уровень {node.isolation_depth})" if node.isolation_depth > 0 else f"Активен ({node.decision:+d})"
+            print(f"  -> Узел [{name}]: {status} | Масса = {node.mass:.2f}")
+
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("🧠 ПЕНТАРНАЯ СИСТЕМА — V21 (РЕКУРСИВНЫЕ ЛАТИС-КАПСУЛЫ И РЕКУПЕРАЦИЯ)")
+    print("⚠️ ALL RIGHTS RESERVED. ПРИМЕНЕНИЕ ТОЛЬКО СОГЛАСНО ЛИЦЕНЗИИ АВТОРА.")
+    print("=" * 70)
+    
+    space_dimensions = (5, 5, 5, 5)
+    initial_nodes = {
+        "Core-Master": (2, 2, 2, 2),
+        "Sub-Node-1": (1, 1, 1, 1),
+        "Sub-Node-2": (3, 3, 3, 3)
+    }
+    
+    universe = PentarnyUniverseV21(space_dimensions, initial_nodes)
+    for name, coords in initial_nodes.items():
+        universe.add_node(name, coords)
+        
+    universe.add_edge("Core-Master", "Sub-Node-1")
+    universe.add_edge("Sub-Node-1", "Sub-Node-2")
+    universe.add_edge("Sub-Node-2", "Core-Master")
+    
+    for cycle in range(4):
+        universe.step()
+        universe.display_telemetry()
+        time.sleep(0.15)
+        
+    print("\n" + "=" * 70)
+    print("✅ ФРЕЙМВОРК V21 УСПЕШНО РАЗВЕРНУТ И ПРОТЕСТИРОВАН")
+    print("=" * 70)
