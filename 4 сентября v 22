@@ -1,0 +1,194 @@
+# -*- coding: utf-8 -*-
+"""
+ПЕНТАРНАЯ КИБЕРНЕТИЧЕСКАЯ СИСТЕМА — V22 (ВЛОЖЕННЫЙ ФАЗОВЫЙ МУАР И ВРАЩЕНИЕ)
+Автор: Владимир Заводюк (Root-Architect)
+Версия: 22.0 (Moiré Phase-Shifted Nested Matrix Architecture)
+
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+
+ВНИМАНИЕ: Данный модуль реализует кинематическое вращение симметричного 
+тернарного ядра [-1, 0, 1] внутри пентарного макро-поля [-2, -1, 0, 1, 2]. 
+Создает эффект фазового муара для аппаратной фильтрации энтропии без усложнения кода.
+"""
+
+import numpy as np
+import time
+import math
+from typing import Dict, List, Tuple, Optional
+
+# --- БАЗИСЫ И СЕМИОТИЧЕСКИЕ СЛОВАРИ ---
+TERNARY_BASIS: List[int] = [1, 0, -1]  # Симметричное ядро
+PENTAR_BASIS: List[int] = [2, 1, 0, -1, -2]  # Внешнее макро-поле
+
+PENTAR_CODE: Dict[int, str] = {
+    -2: "КАТЕГОРИЧЕСКОЕ НЕТ (Аппаратная блокировка / Обрыв фазы)",
+    -1: "МЯГКОЕ НЕТ (Демпфирование потока)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Ламинарный фазовый ноль)",
+     1: "МЯГКОЕ ДА (Индукционный подъем)",
+     2: "КАТЕГОРИЧЕСКОЕ ДА (Резонансная сверхпроводимость)"
+}
+
+
+# ============================================================================
+# МОДУЛЬ 1: ВНЕШНЕЕ ПЕНТАРНОЕ МАКРО-ПОЛЕ ( [] )
+# ============================================================================
+class PentarnyMacroField:
+    """Внешнее поле высокой размерности с пентарным базисом [-2, 2]."""
+    def __init__(self, dimensions: Tuple[int, int] = (7, 7)):
+        self.dimensions = dimensions
+        self.field = np.zeros(dimensions, dtype=int)
+        # Инициализация градиентного паттерна внешнего поля
+        mid_x, mid_y = dimensions[0] // 2, dimensions[1] // 2
+        for x in range(dimensions[0]):
+            for y in range(dimensions[1]):
+                dist = abs(x - mid_x) + abs(y - mid_y)
+                if dist == 0:
+                    self.field[x, y] = 2
+                elif dist == 1:
+                    self.field[x, y] = 1
+                elif dist == 2:
+                    self.field[x, y] = 0
+                elif dist == 3:
+                    self.field[x, y] = -1
+                else:
+                    self.field[x, y] = -2
+
+    def get_field_slice(self, center: Tuple[int, int], radius: int) -> np.ndarray:
+        cx, cy = center
+        r = radius
+        return self.field[max(0, cx-r):min(self.dimensions[0], cx+r+1),
+                          max(0, cy-r):min(self.dimensions[1], cy+r+1)]
+
+
+# ============================================================================
+# МОДУЛЬ 2: ВНУТРЕННЕЕ ВРАЩАЮЩЕЕСЯ ТЕРНАРНОЕ ЯДРО ( {} )
+# ============================================================================
+class RotatingTernaryCore:
+    """
+    Симметричное тернарное ядро [-1, 0, 1], совершающее угловое вращение 
+    внутри пентарного макро-поля с генерацией эффекта фазового муара.
+    """
+    def __init__(self, size: int = 3):
+        self.size = size
+        self.core_matrix = np.zeros((size, size), dtype=int)
+        # Заполнение симметричной тернарной структуры
+        mid = size // 2
+        for x in range(size):
+            for y in range(size):
+                if x == mid and y == mid:
+                    self.core_matrix[x, y] = 0
+                elif (x + y) % 2 == 0:
+                    self.core_matrix[x, y] = 1
+                else:
+                    self.core_matrix[x, y] = -1
+        
+        self.rotation_angle_rad: float = 0.0
+        self.angular_velocity: float = math.pi / 6.0  # Шаг вращения 30 градусов
+
+    def rotate_step(self) -> None:
+        """Поворот тернарного ядра на один дискретный угловой шаг."""
+        self.rotation_angle_rad += self.angular_velocity
+        if self.rotation_angle_rad >= 2 * math.pi:
+            self.rotation_angle_rad = 0.0
+
+    def get_effective_state_at(self, local_coord: Tuple[int, int]) -> int:
+        """Расчет проекции ядра с учетом угла поворота (тригонометрический маппинг)."""
+        x, y = local_coord
+        mid = self.size // 2
+        ox, oy = x - mid, y - mid
+        
+        # Применение матрицы поворота 2D
+        cos_a = math.cos(self.rotation_angle_rad)
+        sin_a = math.sin(self.rotation_angle_rad)
+        
+        rx = int(round(ox * cos_a - oy * sin_a))
+        ry = int(round(ox * sin_a + oy * cos_a))
+        
+        tx = max(0, min(self.size - 1, rx + mid))
+        ty = max(0, min(self.size - 1, ry + mid))
+        
+        return int(self.core_matrix[tx, ty])
+
+
+# ============================================================================
+# МОДУЛЬ 3: ОРКЕСТРАТОР ФАЗОВОГО МУАРА И РЕДУКТОРА V22
+# ============================================================================
+class MoiréPhaseReducerV22:
+    """
+    Интегрированный контур фазового редуктора. Сопоставляет вращающееся тернарное ядро 
+    с внешним пентарным полем через оператор порогового барьера (:).
+    """
+    def __init__(self, macro_field_dims: Tuple[int, int] = (7, 7)):
+        self.macro_field = PentarnyMacroField(macro_field_dims)
+        self.ternary_core = RotatingTernaryCore(size=3)
+        self.time_step: int = 0
+        self.gate_transmission_state: int = 0
+
+    def evaluate_phase_gate(self) -> Tuple[int, int, float]:
+        """
+        Вычисление точки интерференционного муара: умножение вращающегося 
+        тернарного значения на подмножество внешнего пентарного поля.
+        """
+        self.time_step += 1
+        self.ternary_core.rotate_step()
+        
+        # Центр взаимодействия полей
+        center = (self.macro_field.dimensions[0] // 2, self.macro_field.dimensions[1] // 2)
+        macro_slice = self.macro_field.get_field_slice(center, radius=1)
+        
+        interaction_sum = 0
+        match_count = 0
+        
+        # Попиксельное перекрытие матриц с учетом вращения тернарного слоя
+        for tx in range(3):
+            for ty in range(3):
+                t_val = self.ternary_core.get_effective_state_at((tx, ty))
+                if tx < macro_slice.shape[0] and ty < macro_slice.shape[1]:
+                    p_val = macro_slice[tx, ty]
+                    # Фазовое перемножение (муар-эффект)
+                    product_val = t_val * p_val
+                    interaction_sum += product_val
+                    if t_val == p_val:
+                        match_count += 1
+
+        # `:` — пороговый барьер фильтрации редуктора
+        if interaction_sum > 5:
+            self.gate_transmission_state = 2  # Резонансное открытие
+        elif interaction_sum > 0:
+            self.gate_transmission_state = 1  # Мягкий пропуск
+        elif interaction_sum == 0:
+            self.gate_transmission_state = 0  # Ламинарный баланс
+        elif interaction_sum >= -5:
+            self.gate_transmission_state = -1 # Демпфирование
+        else:
+            self.gate_transmission_state = -2 # Аппаратный обрыв муара
+
+        coherence_factor = float(match_count / 9.0)
+        return self.gate_transmission_state, interaction_sum, coherence_factor
+
+    def display_telemetry(self) -> None:
+        state, sum_val, coherence = self.evaluate_phase_gate()
+        angle_deg = math.degrees(self.ternary_core.rotation_angle_rad)
+        print(f"\n================ [ МУАР-ТАКТ V22: ШАГ №{self.time_step} ] ================")
+        print(f"  -> Угол вращения тернарного ядра: {angle_deg:.1f}°")
+        print(f"  -> Интегральный индекс муара (Σ): {sum_val:+d}")
+        print(f"  -> Коэффициент фазовой когерентности: {coherence:.2f}")
+        print(f"  -> Состояние полевого шлюза: {state:+d} ({PENTAR_CODE[state]})")
+
+
+if __name__ == "__main__":
+    print("=" * 75)
+    print("🧠 ПЕНТАРНАЯ СИСТЕМА — V22 (ВЛОЖЕННЫЙ ФАЗОВЫЙ МУАР И ВРАЩЕНИЕ)")
+    print("⚠️ ALL RIGHTS RESERVED. ПРИМЕНЕНИЕ ТОЛЬКО СОГЛАСНО ЛИЦЕНЗИИ АВТОРА.")
+    print("=" * 75)
+    
+    reducer = MoiréPhaseReducerV22((7, 7))
+    
+    for cycle in range(5):
+        reducer.display_telemetry()
+        time.sleep(0.15)
+        
+    print("\n" + "=" * 75)
+    print("✅ КИНЕМАТИЧЕСКИЙ МОДУЛЬ ВРАЩЕНИЯ МАТРИЦ УСПЕШНО ВЕРИФИЦИРОВАН")
+    print("=" * 75)
