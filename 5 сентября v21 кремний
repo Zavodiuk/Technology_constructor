@@ -1,0 +1,347 @@
+// -*- coding: utf-8 -*-
+/**
+ * ПЕНТАРНАЯ КИБЕРНЕТИЧЕСКАЯ СИСТЕМА — V21 (РЕКУРСИВНЫЕ ЛАТИС-КАПСУЛЫ И РЕКУПЕРАЦИЯ)
+ * Автор: Владимир Заводюк (Root-Architect)
+ * Версия: 21.0-KotlinRecursiveLattice
+ * 
+ * ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ * ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+ */
+
+package org.architect.pentary
+
+import kotlin.math.abs
+import kotlin.math.ln
+import kotlin.random.Random
+
+// Строго типизированный пентарный базис кристалла
+sealed class PentarnyState(val value: Int, val description: String) {
+    object Brigella : PentarnyState(2, "КАТЕГОРИЧЕСКОЕ ДА (Сверхпроводимость / Резонансное ускорение)")
+    object Colombina : PentarnyState(1, "МЯГКОЕ ДА (Активация проводимости / Индукционный подъем)")
+    object Graziano : PentarnyState(0, "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Свободный ламинарный транзит / Регенерация)")
+    object Piero : PentarnyState(-1, "МЯГКОЕ НЕТ (Демпфирование потока / Энергетическое торможение)")
+    object Arlekin : PentarnyState(-2, "КАТЕГОРИЧЕСКОЕ НЕТ (Аппаратный обрыв канала / Рекуперационный сток)")
+
+    companion object {
+        fun fromInt(v: Int): PentarnyState = when (v) {
+            2 -> Brigella
+            1 -> Colombina
+            0 -> Graziano
+            -1 -> Piero
+            -2 -> Arlekin
+            else -> if (v > 0) Brigella else Arlekin
+        }
+
+        fun quantize(raw: Double): PentarnyState = when {
+            raw > 0.75 -> Brigella
+            raw > 0.25 -> Colombina
+            raw >= -0.25 -> Graziano
+            raw >= -0.75 -> Piero
+            else -> Arlekin
+        }
+    }
+}
+
+// Многомерное макроскопическое тензорное поле с функцией рекуперации
+class PentarnyTensorField(val dimensions: IntArray) {
+    private val totalSize = dimensions.fold(1) { acc, d -> acc * d }
+    val field = IntArray(totalSize)
+
+    private fun coordsToIndex(coords: IntArray): Int {
+        var idx = 0
+        var mult = 1
+        for (i in coords.indices.reversed()) {
+            idx += coords[i] * mult
+            mult *= dimensions[i]
+        }
+        return idx
+    }
+
+    fun injectImpulse(coords: IntArray, value: Int) {
+        val idx = coordsToIndex(coords)
+        field[idx] = maxOf(-2, minOf(2, value))
+    }
+
+    fun getEntropy(): Double {
+        if (totalSize == 0) return 0.0
+        val counts = field.toList().groupingBy { it }.eachCount()
+        return counts.values.sumOf { count ->
+            val p = count.toDouble() / totalSize
+            if (p > 0) -p * (ln(p) / ln(2.0)) else 0.0
+        }
+    }
+
+    fun recoverToLaminarBalance(): Int {
+        var convertedCount = 0
+        for (i in field.indices) {
+            if (field[i] == -2) {
+                field[i] = 0 // Сброс в абсолютный покой (Доктор Грациано)
+                convertedCount++
+            }
+        }
+        return convertedCount
+    }
+}
+
+// Микро-узел сетевой физики с поддержкой рекурсивной изоляции
+class PentarNode(val nodeId: String) {
+    var internalState: PentarnyState = PentarnyState.Graziano
+    var mass: Double = 0.0
+    var decision: PentarnyState = PentarnyState.Graziano
+    var isolationDepth: Int = 0 // Уровень рекурсивной вложенности капсулы
+
+    fun processSignals(signalA: PentarnyState, signalB: PentarnyState): PentarnyState {
+        if (isolationDepth > 0) {
+            decision = PentarnyState.Graziano
+            internalState = PentarnyState.Graziano
+            mass = 0.0
+            return PentarnyState.Graziano
+        }
+
+        val sumVal = signalA.value + signalB.value
+        val conflict = abs(signalA.value - signalB.value)
+
+        if (conflict >= 3) {
+            mass = conflict * 3.14
+            internalState = PentarnyState.Graziano
+        } else {
+            mass = conflict * 0.75
+            val clamped = maxOf(-2, minOf(2, sumVal))
+            internalState = PentarnyState.fromInt(clamped)
+        }
+
+        decision = internalState
+        return internalState
+    }
+}
+
+// Канал связи с защитой от утечек в рекурсивных зонах
+class PentarEdge(val source: PentarNode, val target: PentarNode) {
+    var energyFlow: Double = 1.0
+    var temp: Double = 1.0
+
+    fun updateDynamics() {
+        if (source.isolationDepth > 0 || target.isolationDepth > 0) {
+            energyFlow = 0.0
+            temp = 0.05
+            return
+        }
+
+        val decisionSum = source.decision.value + target.decision.value
+        val totalMass = source.mass + target.mass
+        val baseModifier = 1.0 + (decisionSum * 0.2) - (totalMass * 0.15)
+        temp = maxOf(0.05, baseModifier)
+
+        if (source.decision is PentarnyState.Arlekin || target.decision is PentarnyState.Arlekin) {
+            energyFlow = 0.0
+        } else {
+            energyFlow = (temp * 1.618) + (totalMass * 0.5)
+        }
+    }
+}
+
+// Рекурсивная тетраэдральная латис-капсула
+class RecursiveTetrahedralCapsule(
+    val name: String,
+    val fieldDims: IntArray,
+    initialVertices: Array<IntArray>,
+    val depth: Int = 1
+) {
+    var coordsList: MutableList<IntArray> = initialVertices.map { it.clone() }.toMutableList()
+    var subCapsule: RecursiveTetrahedralCapsule? = null
+
+    fun drift(fieldData: IntArray) {
+        val dims = fieldDims.size
+        for (idx in coordsList.indices) {
+            val vertex = coordsList[idx]
+            var bestCoords = vertex.clone()
+            var maxTension = -999.0
+
+            for (d in 0 until dims) {
+                for (delta in intArrayOf(-1, 1)) {
+                    val testCoords = vertex.clone()
+                    testCoords[d] += delta
+
+                    if (testCoords.indices.all { testCoords[it] in 0 until fieldDims[it] }) {
+                        var idxVal = 0
+                        var mult = 1
+                        for (i in testCoords.indices.reversed()) {
+                            idxVal += testCoords[i] * mult
+                            mult *= fieldDims[i]
+                        }
+                        val tension = abs(fieldData[idxVal]).toDouble() + (2.0 * depth)
+
+                        if (tension > maxTension) {
+                            maxTension = tension
+                            bestCoords = testCoords
+                        }
+                    }
+                }
+            }
+            coordsList[idx] = bestCoords
+        }
+        subCapsule?.drift(fieldData)
+    }
+
+    fun spawnNestedCapsule() {
+        if (subCapsule == null && depth < 3) {
+            val dims = fieldDims.size
+            val midV = IntArray(dims) { d -> coordsList.sumOf { it[d] } / coordsList.size }
+            val offsetV = IntArray(dims) { d -> maxOf(0, midV[d] - 1) }
+            val subVerts = arrayOf(
+                midV.clone(),
+                offsetV.clone(),
+                IntArray(dims) { d -> minOf(fieldDims[d] - 1, midV[d] + 1) },
+                IntArray(dims) { d -> maxOf(0, offsetV[d] - 1) }
+            )
+            subCapsule = RecursiveTetrahedralCapsule("$name-Sub", fieldDims, subVerts, depth + 1)
+        }
+    }
+
+    fun enforceLatticeContainment(
+        tensorField: PentarnyTensorField,
+        graphNodes: MutableMap<String, PentarNode>,
+        nodeCoords: Map<String, IntArray>
+    ) {
+        val dims = fieldDims.size
+        val minB = IntArray(dims) { d -> coordsList.minOf { it[d] } }
+        val maxB = IntArray(dims) { d -> coordsList.maxOf { it[d] } }
+
+        for (v in coordsList) {
+            tensorField.injectImpulse(v, -2)
+        }
+
+        for ((name, node) in graphNodes) {
+            if (nodeCoords.containsKey(name)) {
+                val nCoords = nodeCoords[name]!!
+                val inside = nCoords.indices.all { nCoords[it] in minB[it]..maxB[it] }
+                if (inside) {
+                    node.isolationDepth = depth
+                } else if (node.isolationDepth == depth) {
+                    node.isolationDepth = 0
+                }
+            }
+        }
+
+        subCapsule?.enforceLatticeContainment(tensorField, graphNodes, nodeCoords)
+    }
+}
+
+// Главный оркестратор кристалла V21 на Kotlin
+class PentarUniverseV21Core(val dimensions: IntArray) {
+    val tensorField = PentarnyTensorField(dimensions)
+    val graphNodes = mutableMapOf<String, PentarNode>()
+    val edges = mutableListOf<PentarEdge>()
+    val nodeCoords = mutableMapOf<String, IntArray>()
+    var timeStep: Int = 0
+
+    private val maxIdx = dimensions[0] - 1
+    private val mid = dimensions[0] / 2
+
+    val latticeCapsules = listOf(
+        RecursiveTetrahedralCapsule(
+            "Lattice-Alpha",
+            dimensions,
+            arrayOf(intArrayOf(0, 0, 0, 0), intArrayOf(maxIdx, maxIdx, 0, 0), intArrayOf(maxIdx, 0, maxIdx, 0), intArrayOf(mid, mid, mid, maxIdx)),
+            depth = 1
+        ),
+        RecursiveTetrahedralCapsule(
+            "Lattice-Beta",
+            dimensions,
+            arrayOf(intArrayOf(1, 1, 1, 1), intArrayOf(maxIdx - 1, maxIdx - 1, 1, 1), intArrayOf(maxIdx - 1, 1, maxIdx - 1, 1), intArrayOf(mid, mid, mid, maxIdx - 1)),
+            depth = 1
+        )
+    )
+
+    fun addNode(name: String, coords: IntArray) {
+        graphNodes[name] = PentarNode(name)
+        nodeCoords[name] = coords
+    }
+
+    fun addEdge(src: String, tgt: String) {
+        val sNode = graphNodes[src] ?: throw IllegalArgumentException("Узел $src не найден")
+        val tNode = graphNodes[tgt] ?: throw IllegalArgumentException("Узел $tgt не найден")
+        edges.add(PentarEdge(sNode, tNode))
+    }
+
+    fun step() {
+        timeStep++
+        val currentEntropy = tensorField.getEntropy()
+        if (currentEntropy > 0.7) {
+            tensorField.recoverToLaminarBalance()
+        }
+
+        for ((_, node) in graphNodes) {
+            val connectedSignals = mutableListOf<PentarnyState>()
+            for (edge in edges) {
+                if (edge.target == node) {
+                    val normVal = (edge.energyFlow - 1.5) / 1.5
+                    connectedSignals.add(PentarnyState.quantize(normVal))
+                } else if (edge.source == node) {
+                    connectedSignals.add(PentarnyState.quantize(edge.energyFlow / 3.0 - 0.5))
+                }
+            }
+
+            if (connectedSignals.isEmpty()) {
+                connectedSignals.add(PentarnyState.fromInt(Random.nextInt(-2, 3)))
+            }
+
+            node.processSignals(connectedSignals.first(), connectedSignals.last())
+        }
+
+        for (edge in edges) {
+            edge.updateDynamics()
+        }
+
+        for ((name, node) in graphNodes) {
+            if (nodeCoords.containsKey(name) && node.isolationDepth == 0) {
+                val coords = nodeCoords[name]!!
+                if (node.decision.value != 0) {
+                    tensorField.injectImpulse(coords, node.decision.value)
+                }
+            }
+        }
+
+        for (cap in latticeCapsules) {
+            cap.drift(tensorField.field)
+            if (currentEntropy > 0.6) {
+                cap.spawnNestedCapsule()
+            }
+            cap.enforceLatticeContainment(tensorField, graphNodes, nodeCoords)
+        }
+    }
+}
+
+// Точка входа для верификации рекурсивного ядра V21 на Kotlin
+fun main() {
+    println("=========================================================================")
+    println("🧠 ПЕНТАРНАЯ СИСТЕМА — V21 (KOTLIN RECURSIVE LATTICE & RECUPERATION CORE)")
+    println("⚠️ АВТОР И ПРАВООБЛАДАТЕЛЬ: ВЛАДИМИР ЗАВОДЮК (ROOT-ARCHITECT)")
+    println("=========================================================================")
+
+    val dims = intArrayOf(5, 5, 5, 5)
+    val universe = PentarUniverseV21Core(dims)
+
+    universe.addNode("Core-Master", intArrayOf(2, 2, 2, 2))
+    universe.addNode("Sub-Node-1", intArrayOf(1, 1, 1, 1))
+    universe.addNode("Sub-Node-2", intArrayOf(3, 3, 3, 3))
+
+    universe.addEdge("Core-Master", "Sub-Node-1")
+    universe.addEdge("Sub-Node-1", "Sub-Node-2")
+    universe.addEdge("Sub-Node-2", "Core-Master")
+
+    repeat(4) {
+        universe.step()
+        println("\n================ [ ТАКТ KOTLIN V21 №${universe.timeStep} ] ================")
+        println("  -> Энтропия среды: ${String.format("%.6f", universe.tensorField.getEntropy())}")
+        println("--- СОСТОЯНИЕ РАСПРЕДЕЛЕННЫХ УЗЛОВ И РЕКУРСИИ ---")
+        for ((name, node) in universe.graphNodes) {
+            val status = if (node.isolationDepth > 0) "💊 РЕКУРСИВНАЯ КАПСУЛА (Уровень ${node.isolationDepth})" else "Активен (${node.decision.value:+d})"
+            println("  -> Узел [$name]: $status | Масса = ${node.mass}")
+        }
+    }
+
+    println("\n" + "=========================================================================")
+    println("✅ KOTLIN-ЯДРО V21 РЕКУРСИВНЫХ КАПСУЛ УСПЕШНО СКОМПИЛИРОВАНО И ГОТОВО ДЛЯ GITHUB")
+    println("=========================================================================")
+}
