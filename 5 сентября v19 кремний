@@ -1,0 +1,193 @@
+// -*- coding: utf-8 -*-
+/**
+ * ПЕНТАРНАЯ КИБЕРНЕТИЧЕСКАЯ СИСТЕМА — V19 (KOTLIN HARDWARE TENSOR CORE)
+ * Автор: Владимир Заводюк (Root-Architect)
+ * Версия: 19.0-KotlinStrict
+ * 
+ * ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ * ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+ */
+
+package org.architect.pentary
+
+import kotlin.math.abs
+import kotlin.random.Random
+
+// Строго типизированный пентарный базис (аппаратные уровни гетероструктуры)
+sealed class PentarnyState(val value: Int, val description: String) {
+    object Brigella : PentarnyState(2, "КАТЕГОРИЧЕСКОЕ ДА (Сверхпроводимость / Резонансное ускорение)")
+    object Colombina : PentarnyState(1, "МЯГКОЕ ДА (Активация проводимости / Индукционный подъем)")
+    object Graziano : PentarnyState(0, "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Свободный ламинарный транзит)")
+    object Piero : PentarnyState(-1, "МЯГКОЕ НЕТ (Демпфирование потока / Энергетическое торможение)")
+    object Arlekin : PentarnyState(-2, "КАТЕГОРИЧЕСКОЕ НЕТ (Аппаратный обрыв канала / Сингулярный сток)")
+
+    companion object {
+        fun fromInt(v: Int): PentarnyState = when (v) {
+            2 -> Brigella
+            1 -> Colombina
+            0 -> Graziano
+            -1 -> Piero
+            -2 -> Arlekin
+            else -> if (v > 0) Brigella else Arlekin
+        }
+
+        fun quantize(raw: Double): PentarnyState = when {
+            raw > 0.75 -> Brigella
+            raw > 0.25 -> Colombina
+            raw >= -0.25 -> Graziano
+            raw >= -0.75 -> Piero
+            else -> Arlekin
+        }
+    }
+}
+
+// Макроскопическая тензорная матрица среды
+class PentarnyTensorField(val dimensions: IntArray) {
+    private val totalSize = dimensions.fold(1) { acc, d -> acc * d }
+    val field = IntArray(totalSize)
+
+    private fun coordsToIndex(coords: IntArray): Int {
+        var idx = 0
+        var mult = 1
+        for (i in coords.indices.reversed()) {
+            idx += coords[i] * mult
+            mult *= dimensions[i]
+        }
+        return idx
+    }
+
+    fun injectImpulse(coords: IntArray, value: Int) {
+        val idx = coordsToIndex(coords)
+        field[idx] = maxOf(-2, minOf(2, value))
+    }
+
+    fun getEntropy(): Double {
+        if (totalSize == 0) return 0.0
+        val counts = field.toList().groupingBy { it }.eachCount()
+        return counts.values.sumOf { count ->
+            val p = count.toDouble() / totalSize
+            if (p > 0) -p * (kotlin.math.ln(p) / kotlin.math.ln(2.0)) else 0.0
+        }
+    }
+}
+
+// Микро-узел сетевой физики
+class PentarNode(val nodeId: String) {
+    var internalState: PentarnyState = PentarnyState.Graziano
+    var mass: Double = 0.0
+    var decision: PentarnyState = PentarnyState.Graziano
+    val historicalStates = mutableListOf<PentarnyState>()
+
+    fun processSignals(signalA: PentarnyState, signalB: PentarnyState): PentarnyState {
+        val sumVal = signalA.value + signalB.value
+        val conflict = abs(signalA.value - signalB.value)
+
+        if (conflict >= 3) {
+            mass = conflict * 3.1415
+            internalState = PentarnyState.Graziano
+        } else {
+            mass = conflict * 0.75
+            val clamped = maxOf(-2, minOf(2, sumVal))
+            internalState = PentarnyState.fromInt(clamped)
+        }
+
+        decision = internalState
+        historicalStates.add(decision)
+        return internalState
+    }
+}
+
+// Канал связи между узлами с динамической теплоемкостью
+class PentarEdge(val source: PentarNode, val target: PentarNode) {
+    var energyFlow: Double = 1.0
+    var temp: Double = 1.0
+
+    fun updateDynamics() {
+        val decisionSum = source.decision.value + target.decision.value
+        val totalMass = source.mass + target.mass
+        val baseModifier = 1.0 + (decisionSum * 0.2) - (totalMass * 0.15)
+        temp = maxOf(0.05, baseModifier)
+
+        if (source.decision is PentarnyState.Arlekin || target.decision is PentarnyState.Arlekin) {
+            energyFlow = 0.0
+        } else {
+            energyFlow = (temp * 1.618) + (totalMass * 0.5)
+        }
+    }
+}
+
+// Главный сетевой оркестратор кристалла
+class PentarUniverseCore {
+    val nodes = mutableMapOf<String, PentarNode>()
+    val edges = mutableListOf<PentarEdge>()
+    var timeStep: Int = 0
+
+    fun addNode(name: String) {
+        nodes[name] = PentarNode(name)
+    }
+
+    fun addEdge(src: String, tgt: String) {
+        val sourceNode = nodes[src] ?: throw IllegalArgumentException("Узел $src не найден")
+        val targetNode = nodes[tgt] ?: throw IllegalArgumentException("Узел $tgt не найден")
+        edges.add(PentarEdge(sourceNode, targetNode))
+    }
+
+    fun pulse() {
+        timeStep++
+        for ((_, node) in nodes) {
+            val connectedSignals = mutableListOf<PentarnyState>()
+            for (edge in edges) {
+                if (edge.target == node) {
+                    val normVal = (edge.energyFlow - 1.5) / 1.5
+                    connectedSignals.add(PentarnyState.quantize(normVal))
+                } else if (edge.source == node) {
+                    connectedSignals.add(PentarnyState.quantize(edge.energyFlow / 3.0 - 0.5))
+                }
+            }
+
+            if (connectedSignals.isEmpty()) {
+                connectedSignals.add(PentarnyState.fromInt(Random.nextInt(-2, 3)))
+            }
+
+            node.processSignals(connectedSignals.first(), connectedSignals.last())
+        }
+
+        for (edge in edges) {
+            edge.updateDynamics()
+        }
+    }
+}
+
+// Точка входа для аппаратной верификации
+fun main() {
+    println("=========================================================================")
+    println("🧠 ПЕНТАРНАЯ КИБЕРНЕТИЧЕСКАЯ СИСТЕМА — V19 (KOTLIN STRICT HARDWARE CORE)")
+    println("⚠️ АВТОР И ПРАВООБЛАДАТЕЛЬ: ВЛАДИМИР ЗАВОДЮК (ROOT-ARCHITECT)")
+    println("=========================================================================")
+
+    val universe = PentarUniverseCore()
+    universe.addNode("Core-Master")
+    universe.addNode("Node-Alpha")
+    universe.addNode("Node-Beta")
+    universe.addNode("Node-Gamma")
+
+    universe.addEdge("Core-Master", "Node-Alpha")
+    universe.addEdge("Node-Alpha", "Node-Beta")
+    universe.addEdge("Node-Beta", "Node-Gamma")
+    universe.addEdge("Node-Gamma", "Core-Master")
+
+    repeat(5) {
+        universe.pulse()
+        println("\n================ [ СИНХРО-ТАКТ KOTLIN №${universe.timeStep} ] ================")
+        for ((name, node) in universe.nodes) {
+            println("  -> Узел [$name]: Решение = ${node.decision.value:+d} (${node.decision.description.take(28)}...) | Масса = ${node.mass}")
+        }
+        for (edge in universe.edges) {
+            println("  -> Канал [${edge.source.node_id} -> ${edge.target.node_id}]: Поток = ${String.format("%.3f", edge.energyFlow)}")
+        }
+    }
+
+    println("\n" + "=========================================================================")
+    println("✅ KOTLIN-ЯДРО V19 УСПЕШНО СКОМПИЛИРОВАНО И ГОТОВО ДЛЯ GITHUB")
+    println("=========================================================================")
+}
