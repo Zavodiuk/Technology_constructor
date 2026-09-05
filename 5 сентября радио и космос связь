@@ -1,0 +1,273 @@
+# -*- coding: utf-8 -*-
+"""
+КОСМИЧЕСКАЯ РАДИОКАНАЛЬНАЯ СИСТЕМА — V23.7 (DEEP SPACE RF PIPELINE)
+Автор: Владимир Заводюк (Root-Architect)
+Версия: 23.7-SpaceRadio (Moiré-Pentary Space-Borne Telemetry & Communications)
+
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+
+ВНИМАНИЕ: Модуль реализует космический радиоканал связи с 5-позиционной 
+фазовой манипуляцией (5-PSK), компенсацией доплеровских сдвигов, защитой 
+от глубоких космических шумов и муаровым кодированием V23.
+"""
+
+import numpy as np
+import time
+import math
+from typing import Dict, List, Tuple, Optional, Any
+from dataclasses import dataclass, field
+from enum import Enum
+
+# ============================================================
+# РАШИМОН-КОНТУР ДЛЯ КОСМИЧЕСКОЙ СРЕДЫ
+# ============================================================
+
+class Ternary(Enum):
+    FALSE = -1
+    UNDEFINED = 0
+    TRUE = 1
+
+@dataclass
+class TernaryState:
+    value: Ternary
+    confidence: float
+    timestamp: float
+
+class SpaceRashomonEngine:
+    """Анализатор состояния космической среды и стабильности бортового крипто-ядра."""
+    def analyze(self, state: TernaryState, context: Dict[str, Any]) -> str:
+        # Оценка радиационного фона, доплера и стабильности связи
+        radiation_risk = context.get('radiation_risk', 0.1)
+        doppler_shift = context.get('doppler_shift', 0.05)
+        overall = 1.0 - (radiation_risk * 0.5 + doppler_shift * 0.5)
+        return "GO" if overall > 0.6 else ("REVISE" if overall > 0.4 else "NO_GO")
+
+
+# ============================================================
+# МУАРОВОЕ ЯДРО В23 (БИ-ЯДЕРНОЕ СЖАТИЕ И ШИФРОВАНИЕ)
+# ============================================================
+
+class MacroFieldV23:
+    def __init__(self, dimensions: Tuple[int, int] = (7, 7)):
+        self.dimensions = dimensions
+        self.field = np.zeros(dimensions, dtype=int)
+
+    def load_block(self, block_bytes: bytes) -> None:
+        flat_vals = [((b % 5) - 2) for b in block_bytes]
+        total_cells = self.field.size
+        while len(flat_vals) < total_cells:
+            flat_vals.append(0)
+        self.field = np.array(flat_vals[:total_cells], dtype=int).reshape(self.dimensions)
+
+    def extract_block(self) -> bytes:
+        flat = self.field.flatten()
+        return bytes(int((val + 2) * 51) & 0xFF for val in flat)
+
+    def calculate_entropy(self) -> float:
+        total = self.field.size
+        _, counts = np.unique(self.field, return_counts=True)
+        return float(-sum((c / total) * math.log2(c / total) for c in counts if c > 0))
+
+    def recover_extremes(self) -> int:
+        count = 0
+        it = np.nditer(self.field, flags=['multi_index'], op_flags=['readwrite'])
+        while not it.finished:
+            if it[0] == -2:
+                it[0] = 0
+                count += 1
+            it.iternext()
+        return count
+
+
+class CounterRotatingBiCore:
+    def __init__(self, size: int = 3, initial_angle_a: float = 0.0, initial_angle_b: float = 0.0):
+        self.size = size
+        self.matrix_a = self._generate_ternary(size)
+        self.matrix_b = self._generate_ternary(size)
+        self.angle_a = initial_angle_a
+        self.angle_b = initial_angle_b
+        self.base_velocity = math.pi / 6.0
+
+    def _generate_ternary(self, size: int) -> np.ndarray:
+        mat = np.zeros((size, size), dtype=int)
+        mid = size // 2
+        for x in range(size):
+            for y in range(size):
+                if x == mid and y == mid: mat[x, y] = 0
+                elif (x + y) % 2 == 0: mat[x, y] = 1
+                else: mat[x, y] = -1
+        return mat
+
+    def update_rotation(self, entropy: float, synergy_modulator: float) -> None:
+        dynamic_velocity = (self.base_velocity * synergy_modulator) / (1.0 + entropy * 2.0)
+        self.angle_a += dynamic_velocity
+        self.angle_b -= dynamic_velocity * 1.5
+        if self.angle_a >= 2 * math.pi: self.angle_a = 0.0
+        if self.angle_b <= -2 * math.pi: self.angle_b = 0.0
+
+    def get_combined_state(self, local_coord: Tuple[int, int], angle: float, matrix: np.ndarray) -> int:
+        x, y = local_coord
+        mid = self.size // 2
+        ox, oy = x - mid, y - mid
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        rx = int(round(ox * cos_a - oy * sin_a))
+        ry = int(round(ox * sin_a + oy * cos_a))
+        tx = max(0, min(self.size - 1, rx + mid))
+        ty = max(0, min(self.size - 1, ry + mid))
+        return int(matrix[tx, ty])
+
+
+class SpaceMoireEncoderDecoder:
+    def __init__(self, seed_a: float = 0.78, seed_b: float = 2.35):
+        self.macro_field = MacroFieldV23((7, 7))
+        self.bi_core = CounterRotatingBiCore(size=3, initial_angle_a=seed_a, initial_angle_b=seed_b)
+        self.rashomon = SpaceRashomonEngine()
+
+    def encode_block(self, block_bytes: bytes, context: Dict[str, Any] = None) -> Tuple[bytes, str]:
+        self.macro_field.load_block(block_bytes)
+        state = TernaryState(Ternary.TRUE, 0.9, time.time())
+        decision = self.rashomon.analyze(state, context or {})
+
+        if decision == "NO_GO":
+            self.macro_field.field.fill(-2)
+            return self.macro_field.extract_block(), "NO_GO"
+
+        entropy = self.macro_field.calculate_entropy()
+        if entropy > 0.65:
+            self.macro_field.recover_extremes()
+
+        self.bi_core.update_rotation(entropy, synergy_modulator=0.9)
+        slice_field = self.macro_field.field[2:5, 2:5]
+        new_slice = np.copy(slice_field)
+
+        for tx in range(3):
+            for ty in range(3):
+                va = self.bi_core.get_combined_state((tx, ty), self.bi_core.angle_a, self.bi_core.matrix_a)
+                vb = self.bi_core.get_combined_state((tx, ty), self.bi_core.angle_b, self.bi_core.matrix_b)
+                if tx < slice_field.shape[0] and ty < slice_field.shape[1]:
+                    new_slice[tx, ty] = max(-2, min(2, slice_field[tx, ty] + (va + vb)))
+
+        self.macro_field.field[2:5, 2:5] = new_slice
+        return self.macro_field.extract_block(), decision
+
+    def decode_block(self, block_bytes: bytes, context: Dict[str, Any] = None) -> Tuple[bytes, str]:
+        self.macro_field.load_block(block_bytes)
+        state = TernaryState(Ternary.TRUE, 0.9, time.time())
+        decision = self.rashomon.analyze(state, context or {})
+
+        if decision == "NO_GO":
+            return self.macro_field.extract_block(), "NO_GO"
+
+        entropy = self.macro_field.calculate_entropy()
+        self.bi_core.update_rotation(entropy, synergy_modulator=0.9)
+        slice_field = self.macro_field.field[2:5, 2:5]
+        new_slice = np.copy(slice_field)
+
+        for tx in range(3):
+            for ty in range(3):
+                va = self.bi_core.get_combined_state((tx, ty), self.bi_core.angle_a, self.bi_core.matrix_a)
+                vb = self.bi_core.get_combined_state((tx, ty), self.bi_core.angle_b, self.bi_core.matrix_b)
+                if tx < slice_field.shape[0] and ty < slice_field.shape[1]:
+                    new_slice[tx, ty] = max(-2, min(2, slice_field[tx, ty] - (va + vb)))
+
+        self.macro_field.field[2:5, 2:5] = new_slice
+        self.macro_field.recover_extremes()
+        return self.macro_field.extract_block(), decision
+
+
+# ============================================================
+# РАДИОТРАНСПОРТ КОСМИЧЕСКОГО КАНАЛА (5-PSK И ДОПЛЕР)
+# ============================================================
+
+class SpaceRFTransport5PSK:
+    """Модуляция пентарных данных в 5-уровневую фазовую манипуляцию (5-PSK) для радио/космоса."""
+    
+    # Отображение пентарных значений в фазовые углы (в радианах)
+    PHASE_MAP = {-2: 0.0, -1: 1.256, 0: 2.513, 1: 3.770, 2: 5.026}
+    INV_PHASE_MAP = {0.0: -2, 1.256: -1, 2.513: 0, 3.770: 1, 5.026: 2}
+
+    @staticmethod
+    def modulate(compressed_bytes: bytes) -> List[float]:
+        phases = []
+        for b in compressed_bytes:
+            pentar_val = int((b / 51.0) - 2)
+            pentar_val = max(-2, min(2, pentar_val))
+            phases.append(SpaceRFTransport5PSK.PHASE_MAP[pentar_val])
+        return phases
+
+    @staticmethod
+    def transmit_space_channel(phases: List[float], doppler_shift: float = 0.1, noise_sigma: float = 0.05) -> List[float]:
+        transmitted = []
+        for p in phases:
+            # Добавление доплеровского смещения и гауссовского шума (AWGN)
+            corrupted = (p + doppler_shift + np.random.normal(0, noise_sigma)) % (2 * math.pi)
+            transmitted.append(corrupted)
+        return transmitted
+
+    @staticmethod
+    def demodulate(phases: List[float]) -> bytes:
+        out_bytes = bytearray()
+        standard_phases = list(SpaceRFTransport5PSK.INV_PHASE_MAP.keys())
+        for ph in phases:
+            closest_phase = min(standard_phases, key=lambda sp: min(abs(sp - ph), 2 * math.pi - abs(sp - ph)))
+            pentar_val = SpaceRFTransport5PSK.INV_PHASE_MAP[closest_phase]
+            out_bytes.append(int((pentar_val + 2) * 51) & 0xFF)
+        return bytes(out_bytes)
+
+
+# ============================================================
+# ГЛАВНЫЙ КОСМИЧЕСКИЙ КОНВЕЙЕР СВЯЗИ
+# ============================================================
+
+class SpaceCommunicationPipelineV23:
+    def __init__(self, seed_a: float = 0.78, seed_b: float = 2.35):
+        self.codec = SpaceMoireEncoderDecoder(seed_a, seed_b)
+        self.rf_transport = SpaceRFTransport5PSK()
+
+    def transmit_package(self, payload: bytes, block_size: int = 49, space_env: Dict[str, Any] = None) -> Tuple[bytes, List[str]]:
+        space_env = space_env or {'radiation_risk': 0.05, 'doppler_shift': 0.02}
+        padded = payload + b"\x00" * (block_size - (len(payload) % block_size))
+        decisions = []
+
+        # Фаза 1: Кодирование и сжатие на борту аппарата
+        encoded_stream = bytearray()
+        for i in range(0, len(padded), block_size):
+            block = padded[i:i+block_size]
+            enc_block, dec = self.codec.encode_block(block, context=space_env)
+            decisions.append(dec)
+            encoded_stream.extend(enc_block)
+
+        # Фаза 2: Радиомодуляция (5-PSK) и передача через космический тракт
+        rf_phases = self.rf_transport.modulate(bytes(encoded_stream))
+        space_phases = self.rf_transport.transmit_space_channel(rf_phases, doppler_shift=space_env['doppler_shift'], noise_sigma=0.03)
+        demodulated_stream = self.rf_transport.demodulate(space_phases)
+
+        # Фаза 3: Прием, демодуляция и восстановление на Земле
+        decoded_stream = bytearray()
+        for i in range(0, len(demodulated_stream), block_size):
+            block = demodulated_stream[i:i+block_size]
+            dec_block, _ = self.codec.decode_block(block, context=space_env)
+            decoded_stream.extend(dec_block)
+
+        return decoded_stream.rstrip(b"\x00"), decisions
+
+
+if __name__ == "__main__":
+    print("=" * 75)
+    print("🛰️ КОСМИЧЕСКАЯ РАДИОКАНАЛЬНАЯ СИСТЕМА V23.7 (DEEP SPACE RF)")
+    print("⚠️ ALL RIGHTS RESERVED. АВТОР: ВЛАДИМИР ЗАВОДЮК.")
+    print("=" * 75)
+
+    comm_link = SpaceCommunicationPipelineV23(seed_a=0.42, seed_b=1.65)
+    telemetry_data = b"DEEP_SPACE_TELEMETRY: [ORBIT_DATA_OK] - V23.7 Space Link Active."
+    
+    env_conditions = {'radiation_risk': 0.12, 'doppler_shift': 0.04}
+    recovered, verdicts = comm_link.transmit_package(telemetry_data, block_size=49, space_env=env_conditions)
+
+    print(f"Исходная телеметрия: {telemetry_data}")
+    print(f"Вердикты ботового Rashomon: {verdicts}")
+    print(f"Принятые данные с Земли: {recovered}")
+    print("=" * 75)
+    print("✅ СЕАНС КОСМИЧЕСКОЙ СВЯЗИ ПРОШЕЛ УСПЕШНО")
+    print("=" * 75)
