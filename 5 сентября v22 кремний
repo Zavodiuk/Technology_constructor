@@ -1,0 +1,181 @@
+// -*- coding: utf-8 -*-
+/**
+ * ПЕНТАРНАЯ КИБЕРНЕТИЧЕСКАЯ СИСТЕМА — V22 (ВЛОЖЕННЫЙ ФАЗОВЫЙ МУАР И ВРАЩЕНИЕ)
+ * Автор: Владимир Заводюк (Root-Architect)
+ * Версия: 22.0-KotlinMoirePhase
+ * 
+ * ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ * ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+ */
+
+package org.architect.pentary
+
+import kotlin.math.*
+
+val PENTAR_CODE_V22 = mapOf(
+    -2 to "КАТЕГОРИЧЕСКОЕ НЕТ (Аппаратная блокировка / Обрыв фазы)",
+    -1 to "МЯГКОЕ НЕТ (Демпфирование потока)",
+    0 to "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Ламинарный фазовый ноль)",
+    1 to "МЯГКОЕ ДА (Индукционный подъем)",
+    2 to "КАТЕГОРИЧЕСКОЕ ДА (Резонансная сверхпроводимость)"
+)
+
+// Внешнее пентарное макро-поле
+class PentarnyMacroField(val dimensions: Pair<Int, Int> = Pair(7, 7)) {
+    val field: Array<IntArray> = Array(dimensions.first) { IntArray(dimensions.second) }
+
+    init {
+        val midX = dimensions.first / 2
+        val midY = dimensions.second / 2
+        for (x in 0 until dimensions.first) {
+            for (y in 0 until dimensions.second) {
+                val dist = abs(x - midX) + abs(y - midY)
+                field[x][y] = when (dist) {
+                    0 -> 2
+                    1 -> 1
+                    2 -> 0
+                    3 -> -1
+                    else -> -2
+                }
+            }
+        }
+    }
+
+    fun getFieldSlice(center: Pair<Int, Int>, radius: Int): Array<IntArray> {
+        val cx = center.first
+        val cy = center.second
+        val startX = maxOf(0, cx - radius)
+        val endX = minOf(dimensions.first, cx + radius + 1)
+        val startY = maxOf(0, cy - radius)
+        val endY = minOf(dimensions.second, cy + radius + 1)
+
+        val rows = endX - startX
+        val cols = endY - startY
+        val slice = Array(rows) { IntArray(cols) }
+        for (i in 0 until rows) {
+            for (j in 0 until cols) {
+                slice[i][j] = field[startX + i][startY + j]
+            }
+        }
+        return slice
+    }
+}
+
+// Внутреннее вращающееся тернарное ядро
+class RotatingTernaryCore(val size: Int = 3) {
+    val coreMatrix: Array<IntArray> = Array(size) { IntArray(size) }
+    var rotationAngleRad: Double = 0.0
+    val angularVelocity: Double = PI / 6.0 // Шаг вращения 30 градусов
+
+    init {
+        val mid = size / 2
+        for (x in 0 until size) {
+            for (y in 0 until size) {
+                coreMatrix[x][y] = when {
+                    x == mid && y == mid -> 0
+                    (x + y) % 2 == 0 -> 1
+                    else -> -1
+                }
+            }
+        }
+    }
+
+    fun rotateStep() {
+        rotationAngleRad += angularVelocity
+        if (rotationAngleRad >= 2 * PI) {
+            rotationAngleRad = 0.0
+        }
+    }
+
+    fun getEffectiveStateAt(localCoord: Pair<Int, Int>): Int {
+        val x = localCoord.first
+        val y = localCoord.second
+        val mid = size / 2
+        val ox = x - mid
+        val oy = y - mid
+
+        val cosA = cos(rotationAngleRad)
+        val sinA = sin(rotationAngleRad)
+
+        val rx = round(ox * cosA - oy * sinA).toInt()
+        val ry = round(ox * sinA + oy * cosA).toInt()
+
+        val tx = maxOf(0, minOf(size - 1, rx + mid))
+        val ty = maxOf(0, minOf(size - 1, ry + mid))
+
+        return coreMatrix[tx][ty]
+    }
+}
+
+// Оркестратор фазового муара и редуктора V22
+class MoiréPhaseReducerV22(macroFieldDims: Pair<Int, Int> = Pair(7, 7)) {
+    val macroField = PentarnyMacroField(macroFieldDims)
+    val ternaryCore = RotatingTernaryCore(3)
+    var timeStep: Int = 0
+    var gateTransmissionState: Int = 0
+
+    fun evaluatePhaseGate(): Triple<Int, Int, Double> {
+        timeStep++
+        ternaryCore.rotateStep()
+
+        val center = Pair(macroField.dimensions.first / 2, macroField.dimensions.second / 2)
+        val macroSlice = macroField.getFieldSlice(center, 1)
+
+        var interactionSum = 0
+        var matchCount = 0
+
+        for (tx in 0 until 3) {
+            for (ty in 0 until 3) {
+                val tVal = ternaryCore.getEffectiveStateAt(Pair(tx, ty))
+                if (tx < macroSlice.size && ty < macroSlice[0].size) {
+                    val pVal = macroSlice[tx][ty]
+                    val productVal = tVal * pVal
+                    interactionSum += productVal
+                    if (tVal == pVal) {
+                        matchCount++
+                    }
+                }
+            }
+        }
+
+        gateTransmissionState = when {
+            interactionSum > 5 -> 2
+            interactionSum > 0 -> 1
+            interactionSum == 0 -> 0
+            interactionSum >= -5 -> -1
+            else -> -2
+        }
+
+        val coherenceFactor = matchCount / 9.0
+        return Triple(gateTransmissionState, interactionSum, coherenceFactor)
+    }
+
+    fun displayTelemetry() {
+        val (state, sumVal, coherence) = evaluatePhaseGate()
+        val angleDeg = Math.toDegrees(ternaryCore.rotationAngleRad)
+        println("\n================ [ МУАР-ТАКТ V22: ШАГ №$timeStep ] ================")
+        println("  -> Угол вращения тернарного ядра: ${String.format("%.1f", angleDeg)}°")
+        println("  -> Интегральный индекс муара (Σ): ${if (sumVal >= 0) "+$sumVal" else sumVal}")
+        println("  -> Коэффициент фазовой когерентности: ${String.format("%.2f", coherence)}")
+        println("  -> Состояние полевого шлюза: ${if (state >= 0) "+$state" else state} (${PENTAR_CODE_V22[state]})")
+    }
+}
+
+// Точка входа для верификации муар-ядра V22 на Kotlin
+fun main() {
+    println("=========================================================================")
+    println("🧠 ПЕНТАРНАЯ СИСТЕМА — V22 (KOTLIN MOIRÉ PHASE-SHIFTED ROTATION CORE)")
+    println("⚠️ АВТОР И ПРАВООБЛАДАТЕЛЬ: ВЛАДИМИР ЗАВОДЮК (ROOT-ARCHITECT)")
+    println("=========================================================================")
+
+    val reducer = MoiréPhaseReducerV22(Pair(7, 7))
+
+    repeat(5) {
+        reducer.displayTelemetry()
+        Thread.sleep(150)
+    }
+
+    println("\n" + "=========================================================================")
+    println("✅ KOTLIN-ЯДРО V22 УСПЕШНО СКОМПИЛИРОВАНО И ГОТОВО ДЛЯ GITHUB")
+    println("=========================================================================")
+}
