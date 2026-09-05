@@ -1,0 +1,83 @@
+# -*- coding: utf-8 -*-
+"""
+МНОГОУРОВНЕВЫЙ ТЕНЗОРНЫЙ БЛОКЧЕЙН V17–V23 (LIGHT EDGE TO COMPLEX ROOT)
+Автор: Владимир Заводюк (Root-Architect)
+Версия: 23.7-MultiLevelBlockchain
+
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+
+ВНИМАНИЕ: Многоуровневая архитектура распределенного реестра. Легкие краевые узлы 
+(V17–V18) используют тетраэдрическую геометрию и троично-пентарный базис [-2..2], 
+а корневой уровень (V22–V23) осуществляет верификацию через двойной контур Рашимона.
+"""
+
+import hashlib
+import time
+import numpy as np
+from typing import List, Dict, Any
+
+# ============================================================================
+# УРОВЕНЬ V17–V18: ТЕТРАЭДРИЧЕСКИЙ КРАЕВОЙ БЛОК
+# ============================================================================
+class TetrahedralEdgeBlock:
+    def __init__(self, index: int, prev_hash: str, payload: str):
+        self.index = index
+        self.prev_hash = prev_hash
+        self.payload = payload
+        self.timestamp = time.time()
+        # Геометрическая проекция: 3 точки плоскости + фазовый сдвиг в базисе [-2..2]
+        self.tetra_signature = (hash(payload) % 5) - 2 
+        self.hash = self._compute_hash()
+
+    def _compute_hash(self) -> str:
+        raw = f"{self.index}:{self.prev_hash}:{self.payload}:{self.tetra_signature}:{self.timestamp}"
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+# ============================================================================
+# УРОВЕНЬ V22–V23: КОРНЕВОЙ КОНТУР РАШИМОНА И МАКРО-РЕЕСТР
+# ============================================================================
+class RootRashomonLedger:
+    def __init__(self):
+        self.chain: List[TetrahedralEdgeBlock] = []
+        self._create_genesis_block()
+
+    def _create_genesis_block(self):
+        genesis = TetrahedralEdgeBlock(0, "0" * 64, "GENESIS_V17_ROOT")
+        self.chain.append(genesis)
+
+    def validate_and_append(self, block: TetrahedralEdgeBlock) -> str:
+        latest_block = self.chain[-1]
+        
+        # Внешний/Внутренний контур Рашимона для верификации блока
+        entropy_check = abs(block.tetra_signature) <= 2
+        integrity_check = block.prev_hash == latest_block.hash
+
+        if entropy_check and integrity_check:
+            self.chain.append(block)
+            return "GO_COMMITTED"
+        elif not integrity_check:
+            return "NO_GO_BROKEN_CHAIN"
+        else:
+            return "REVISE_ENTROPY"
+
+if __name__ == "__main__":
+    print("=" * 75)
+    print("⛓️ МНОГОУРОВНЕВЫЙ БЛОКЧЕЙН V17–V23 (ТЕСТОВЫЙ ЗАПУСК)")
+    print("⚠️ ALL RIGHTS RESERVED. АВТОР: ВЛАДИМИР ЗАВОДЮК.")
+    print("=" * 75)
+
+    ledger = RootRashomonLedger()
+
+    # Создание краевых блоков на базе V17-V18
+    b1 = TetrahedralEdgeBlock(1, ledger.chain[-1].hash, "SENSOR_TELEMETRY_A")
+    v1 = ledger.validate_and_append(b1)
+    print(f"Блок 1 (V17 Край) -> Вердикт Рашимона: {v1} | Хэш: {b1.hash[:16]}...")
+
+    b2 = TetrahedralEdgeBlock(2, ledger.chain[-1].hash, "ACTUATOR_COMMAND_B")
+    v2 = ledger.validate_and_append(b2)
+    print(f"Блок 2 (V18 Край) -> Вердикт Рашимона: {v2} | Хэш: {b2.hash[:16]}...")
+
+    print(f"\nВсего подтвержденных блоков в глобальном реестре V23: {len(ledger.chain)}")
+    print("=" * 75)
+    
