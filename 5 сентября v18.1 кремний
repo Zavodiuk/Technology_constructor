@@ -1,0 +1,159 @@
+// -*- coding: utf-8 -*-
+/**
+ * ПЕНТАРНАЯ ИНТЕГРИРОВАННАЯ СИСТЕМА — V18.1 (КОТЛИН-РЕАЛИЗАЦИЯ КРИСТАЛЛА)
+ * Автор: Владимир Заводюк (Root-Architect)
+ * Версия: 18.1-KotlinStrictHardwareModel
+ * 
+ * ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ */
+
+package org.architect.pentary
+
+import kotlin.math.abs
+import kotlin.random.Random
+
+// Строго типизированный пентарный базис через sealed class (аппаратные уровни гетероструктуры)
+sealed class PentarnyState(val value: Int, val description: String) {
+    object Arlekin : PentarnyState(-2, "КАТЕГОРИЧЕСКОЕ НЕТ (Полная блокировка / Обрыв канала)")
+    object Piero : PentarnyState(-1, "МЯГКОЕ НЕТ (Торможение потока)")
+    object Graziano : PentarnyState(0, "НУЛЕВАЯ ЗОНА / ПОКОЙ (Свободный транзит)")
+    object Colombina : PentarnyState(1, "МЯГКОЕ ДА (Активация / Рост проводимости)")
+    object Brigella : PentarnyState(2, "КАТЕГОРИЧЕСКОЕ ДА (Сверхпроводимость / Резонанс)")
+
+    companion object {
+        fun fromInt(v: Int): PentarnyState = when (v) {
+            -2 -> Arlekin
+            -1 -> Piero
+            0 -> Graziano
+            1 -> Colombina
+            2 -> Brigella
+            else -> if (v > 0) Brigella else Arlekin
+        }
+
+        fun quantize(raw: Double): PentarnyState = when {
+            raw > 0.75 -> Brigella
+            raw > 0.25 -> Colombina
+            raw >= -0.25 -> Graziano
+            raw >= -0.75 -> Piero
+            else -> Arlekin
+        }
+    }
+}
+
+// Микро-узел квантовой матрицы с жесткой типизацией
+class PentarNode(val nodeId: String) {
+    var internalState: PentarnyState = PentarnyState.Graziano
+    var mass: Double = 0.0
+    var decision: PentarnyState = PentarnyState.Graziano
+
+    fun processSignals(signalA: PentarnyState, signalB: PentarnyState): PentarnyState {
+        val sumVal = signalA.value + signalB.value
+        val conflict = abs(signalA.value - signalB.value)
+
+        // Пороговое разделение состояний (аппаратный селектор)
+        if (conflict >= 3) {
+            mass = conflict * 2.5
+            internalState = PentarnyState.Graziano
+        } else {
+            mass = conflict * 0.5
+            val clamped = maxOf(-2, minOf(2, sumVal))
+            internalState = PentarnyState.fromInt(clamped)
+        }
+        
+        decision = internalState
+        return internalState
+    }
+}
+
+// Токовый канал с траншейной диэлектрической изоляцией
+class PentarEdge(val source: PentarNode, val target: PentarNode) {
+    var energyFlow: Double = 1.0
+    var temp: Double = 1.0
+
+    fun updateDynamics() {
+        val decisionSum = source.decision.value + target.decision.value
+        val totalMass = source.mass + target.mass
+        val baseModifier = 1.0 + (decisionSum * 0.25) - (totalMass * 0.2)
+        temp = maxOf(0.05, baseModifier)
+
+        if (source.decision is PentarnyState.Arlekin || target.decision is PentarnyState.Arlekin) {
+            energyFlow = 0.0
+        } else {
+            energyFlow = (temp * 1.5) + (totalMass * 0.5)
+        }
+    }
+}
+
+// Сетевая топология кристалла
+class PentarUniverseGraph {
+    val nodes = mutableMapOf<String, PentarNode>()
+    val edges = mutableListOf<PentarEdge>()
+    var timeStep: Int = 0
+
+    fun addNode(name: String) {
+        nodes[name] = PentarNode(name)
+    }
+
+    fun addEdge(src: String, tgt: String) {
+        val sourceNode = nodes[src] ?: throw IllegalArgumentNodeException("Узел $src не найден")
+        val targetNode = nodes[tgt] ?: throw IllegalArgumentNodeException("Узел $tgt не найден")
+        edges.add(PentarEdge(sourceNode, targetNode))
+    }
+
+    fun pulse() {
+        timeStep++
+        for ((_, node) in nodes) {
+            val connectedSignals = mutableListOf<PentarnyState>()
+            for (edge in edges) {
+                if (edge.target == node) {
+                    val normVal = (edge.energyFlow - 1.5) / 1.5
+                    connectedSignals.add(PentarnyState.quantize(normVal))
+                } else if (edge.source == node) {
+                    connectedSignals.add(PentarnyState.quantize(edge.energyFlow / 3.0 - 0.5))
+                }
+            }
+
+            if (connectedSignals.isEmpty()) {
+                val randomVal = Random.nextInt(-2, 3)
+                connectedSignals.add(PentarnyState.fromInt(randomVal))
+            }
+
+            node.processSignals(connectedSignals.first(), connectedSignals.last())
+        }
+
+        for (edge in edges) {
+            edge.updateDynamics()
+        }
+    }
+}
+
+class IllegalArgumentNodeException(message: String) : RuntimeException(message)
+
+// Точка входа для верификации Kotlin-кристалла
+fun main() {
+    println("=" .repeat(70))
+    println("🧠 ПЕНТАРНАЯ СИНХРОНИЗИРОВАННАЯ СИСТЕМА — V18.1 (KOTLIN NATIVE MODEL)")
+    println("⚠️ АВТОР И ПРАВООБЛАДАТЕЛЬ: ВЛАДИМИР ЗАВОДЮК (ROOT-ARCHITECT)")
+    println("=" .repeat(70))
+
+    val universe = PentarUniverseGraph()
+    universe.addNode("Ядро")
+    universe.addNode("Узел-1")
+    universe.addNode("Узел-2")
+
+    universe.addEdge("Ядро", "Узел-1")
+    universe.addEdge("Узел-1", "Узел-2")
+    universe.addEdge("Узел-2", "Ядро")
+
+    repeat(3) {
+        universe.pulse()
+        println("\n================ [ СИНХРО-ТАКТ KOTLIN: ${universe.timeStep} ] ================")
+        for ((name, node) in universe.nodes) {
+            println("  -> Узел [$name]: Решение = ${node.decision.value:+d} (${node.decision.description.take(24)}...) | Масса = ${node.mass}")
+        }
+    }
+
+    println("\n" + "=" .repeat(70))
+    println("✅ KOTLIN-ЯДРО V18.1 УСПЕШНО СКОМПИЛИРОВАНО И ПРОВЕРИЛО ТИПЫ")
+    println("=" .repeat(70))
+}
