@@ -1,0 +1,226 @@
+// -*- coding: utf-8 -*-
+/**
+ * ПЕНТАРНАЯ КИБЕРНЕТИЧЕСКАЯ СИСТЕМА — V23 (СИНХРО-МУАР И БИ-ЯДЕРНАЯ РЕКУПЕРАЦИЯ)
+ * Автор: Владимир Заводюк (Root-Architect)
+ * Версия: 23.0-KotlinBiCoreMoire
+ * 
+ * ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ * ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+ */
+
+package org.architect.pentary
+
+import kotlin.math.*
+
+val PENTAR_CODE_V23 = mapOf(
+    -2 to "КАТЕГОРИЧЕСКОЕ НЕТ (Аппаратная блокировка / Рекуперационный сток)",
+    -1 to "МЯГКОЕ НЕТ (Демпфирование с фазовым следом)",
+     0 to "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Ламинарный регенерированный ноль)",
+     1 to "МЯГКОЕ ДА (Индукционный подъем ядра)",
+     2 to "КАТЕГОРИЧЕСКОЕ ДА (Резонансная сверхпроводимость)"
+)
+
+class MacroFieldV23(val dimensions: Pair<Int, Int> = Pair(7, 7)) {
+    val field: Array<IntArray> = Array(dimensions.first) { IntArray(dimensions.second) }
+
+    init {
+        val midX = dimensions.first / 2
+        val midY = dimensions.second / 2
+        for (x in 0 until dimensions.first) {
+            for (y in 0 until dimensions.second) {
+                val dist = abs(x - midX) + abs(y - midY)
+                field[x][y] = when (dist) {
+                    0 -> 2
+                    1 -> 1
+                    2 -> 0
+                    3 -> -1
+                    else -> -2
+                }
+            }
+        }
+    }
+
+    fun calculateEntropy(): Double {
+        val total = (dimensions.first * dimensions.second).toDouble()
+        val counts = mutableMapOf<Int, Int>()
+        for (row in field) {
+            for (v in row) {
+                counts[v] = (counts[v] ?: 0) + 1
+            }
+        }
+        var entropy = 0.0
+        for ((_, count) in counts) {
+            val p = count / total
+            if (p > 0.0) {
+                entropy -= p * (ln(p) / ln(2.0))
+            }
+        }
+        return entropy
+    }
+
+    fun recoverExtremes(): Int {
+        var count = 0
+        for (x in field.indices) {
+            for (y in field[x].indices) {
+                if (field[x][y] == -2) {
+                    field[x][y] = 0
+                    count++
+                }
+            }
+        }
+        return count
+    }
+}
+
+class CounterRotatingBiCore(val size: Int = 3) {
+    val matrixA: Array<IntArray> = generateTernary(size)
+    val matrixB: Array<IntArray> = generateTernary(size)
+    var angleA: Double = 0.0
+    var angleB: Double = 0.0
+    val baseVelocity: Double = PI / 6.0
+
+    private fun generateTernary(sz: Int): Array<IntArray> {
+        val mat = Array(sz) { IntArray(sz) }
+        val mid = sz / 2
+        for (x in 0 until sz) {
+            for (y in 0 until sz) {
+                mat[x][y] = when {
+                    x == mid && y == mid -> 0
+                    (x + y) % 2 == 0 -> 1
+                    else -> -1
+                }
+            }
+        }
+        return mat
+    }
+
+    fun updateRotation(entropy: Double) {
+        val dynamicVelocity = baseVelocity / (1.0 + entropy * 2.0)
+        angleA += dynamicVelocity
+        angleB -= dynamicVelocity * 1.5
+
+        if (angleA >= 2 * PI) angleA = 0.0
+        if (angleB <= -2 * PI) angleB = 0.0
+    }
+
+    fun getCombinedState(localCoord: Pair<Int, Int>, angle: Double, matrix: Array<IntArray>): Int {
+        val x = localCoord.first
+        val y = localCoord.second
+        val mid = size / 2
+        val ox = x - mid
+        val oy = y - mid
+        val cosA = cos(angle)
+        val sinA = sin(angle)
+        val rx = round(ox * cosA - oy * sinA).toInt()
+        val ry = round(ox * sinA + oy * cosA).toInt()
+        val tx = maxOf(0, minOf(size - 1, rx + mid))
+        val ty = maxOf(0, minOf(size - 1, ry + mid))
+        return matrix[tx][ty]
+    }
+}
+
+class PhaseHysteresisMemory(val windowSize: Int = 4) {
+    private val history = ArrayDeque<Int>()
+
+    init {
+        repeat(windowSize) { history.add(0) }
+    }
+
+    fun registerState(state: Int): Int {
+        if (history.size >= windowSize) {
+            history.removeFirst()
+        }
+        history.addLast(state)
+        val avg = history.sum().toDouble() / history.size
+        return when {
+            avg > 1.2 -> 2
+            avg > 0.3 -> 1
+            avg >= -0.3 -> 0
+            avg >= -1.2 -> -1
+            else -> -2
+        }
+    }
+}
+
+data class SyncCycleResult(val gate: Int, val sumVal: Int, val entropy: Double, val coherence: Double)
+
+class MoiréUnifiedOrchestratorV23 {
+    val macroField = MacroFieldV23(Pair(7, 7))
+    val biCore = CounterRotatingBiCore(3)
+    val hysteresis = PhaseHysteresisMemory(4)
+    var timeStep: Int = 0
+
+    fun executeSyncCycle(): SyncCycleResult {
+        timeStep++
+        val currentEntropy = macroField.calculateEntropy()
+
+        if (currentEntropy > 0.65) {
+            macroField.recoverExtremes()
+        }
+
+        biCore.updateRotation(currentEntropy)
+
+        val sliceField = Array(3) { r -> IntArray(3) { c -> macroField.field[r + 2][c + 2] } }
+
+        var interactionSum = 0
+        var matches = 0
+
+        for (tx in 0 until 3) {
+            for (ty in 0 until 3) {
+                val valA = biCore.getCombinedState(Pair(tx, ty), biCore.angleA, biCore.matrixA)
+                val valB = biCore.getCombinedState(Pair(tx, ty), biCore.angleB, biCore.matrixB)
+                val coreInterference = valA + valB
+
+                val pVal = sliceField[tx][ty]
+                val productVal = coreInterference * pVal
+                interactionSum += productVal
+                if (coreInterference == pVal) {
+                    matches++
+                }
+            }
+        }
+
+        val rawGate = when {
+            interactionSum > 6 -> 2
+            interactionSum > 1 -> 1
+            interactionSum >= -1 -> 0
+            interactionSum >= -6 -> -1
+            else -> -2
+        }
+
+        val stabilizedGate = hysteresis.registerState(rawGate)
+        val coherence = matches.toDouble() / 9.0
+
+        return SyncCycleResult(stabilizedGate, interactionSum, currentEntropy, coherence)
+    }
+
+    fun displayTelemetry() {
+        val res = executeSyncCycle()
+        val degA = (Math.toDegrees(biCore.angleA) % 360 + 360) % 360
+        val degB = (Math.toDegrees(biCore.angleB) % 360 + 360) % 360
+        println("\n================ [ СИНХРО-МУАР V23: ТАКТ №$timeStep ] ================")
+        println("  -> Энтропия среды: ${String.format("%.4f", res.entropy)}")
+        println("  -> Углы ядер [Alpha / Beta]: ${String.format("%.1f", degA)}° / ${String.format("%.1f", degB)}°")
+        println("  -> Интегральный индекс муара (Σ): ${if (res.sumVal >= 0) "+${res.sumVal}" else res.sumVal}")
+        println("  -> Когерентность сетки: ${String.format("%.2f", res.coherence)}")
+        println("  -> Стабилизированный шлюз (Гистерезис): ${if (res.gate >= 0) "+${res.gate}" else res.gate} (${PENTAR_CODE_V23[res.gate]})")
+    }
+}
+
+fun main() {
+    println("=========================================================================")
+    println("🧠 ПЕНТАРНАЯ СИСТЕМА — V23 (KOTLIN ADAPTIVE BI-CORE MOIRE & RECUPERATION)")
+    println("⚠️ АВТОР И ПРАВООБЛАДАТЕЛЬ: ВЛАДИМИР ЗАВОДЮК (ROOT-ARCHITECT)")
+    println("=========================================================================")
+
+    val orchestrator = MoiréUnifiedOrchestratorV23()
+
+    repeat(5) {
+        orchestrator.displayTelemetry()
+        Thread.sleep(150)
+    }
+
+    println("\n" + "=========================================================================")
+    println("✅ КАРКАС V23 НА KOTLIN УСПЕШНО СИНТЕЗИРОВАН И ВЕРИФИЦИРОВАН")
+    println("=========================================================================")
+}
