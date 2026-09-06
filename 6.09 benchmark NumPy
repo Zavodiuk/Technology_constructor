@@ -1,0 +1,67 @@
+import numpy as np
+import time
+
+# --- ВЕКТОРНЫЙ БРУСЕНЦОВСКИЙ БЛОК ---
+
+def encode_traits_vectorized(trits_array: np.ndarray) -> np.ndarray:
+    """
+    Векторизованная упаковка массива тритов в индексы трайтов.
+    Вход: матрица тритов размера (N, 3), где элементы из [-1, 0, 1]
+    Выход: одномерный массив индексов от 0 до 26 размера (N,)
+    """
+    # Сдвигаем базис из [-1, 0, 1] в [0, 1, 2]
+    shifted = trits_array + 1
+    # Коэффициенты троичной системы для 3 тритов: 3^2, 3^1, 3^0
+    weights = np.array([9, 3, 1], dtype=np.int16)
+    # Мгновенное матричное умножение вместо циклов
+    return np.dot(shifted, weights)
+
+def decode_traits_vectorized(encoded_array: np.ndarray) -> np.ndarray:
+    """
+    Векторизованная распаковка индексов трайтов обратно в триты.
+    Вход: массив индексов (N,) от 0 до 26
+    Выход: матрица тритов (N, 3) со значениями [-1, 0, 1]
+    """
+    N = encoded_array.shape[0]
+    trits = np.zeros((N, 3), dtype=np.int16)
+    
+    # Извлекаем разряды без циклов Python
+    trits[:, 2] = (encoded_array % 3) - 1
+    val1 = encoded_array // 3
+    trits[:, 1] = (val1 % 3) - 1
+    trits[:, 0] = (val1 // 3) - 1
+    return trits
+
+# --- ТЕСТ СКОРОСТИ ВЕКТОРНОГО БРУСЕНЦОВСКОГО ЯДРА ---
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("🚀 ТЕСТИРОВАНИЕ ВЕКТОРНОГО ЯДРА NUMPY ДЛЯ БЕНЧМАРКА HARMONY3")
+    print("=" * 70)
+    
+    # Генерируем огромный батч случайных тритов (1 000 000 запросов!)
+    N_OPERATIONS = 1_000_000
+    random_trits = np.random.choice([-1, 0, 1], size=(N_OPERATIONS, 3))
+    
+    print( f"Запуск векторизованной упаковки/распаковки для {N_OPERATIONS:,} трайтов...")
+    
+    t0 = time.perf_counter()
+    
+    # 1. Векторное кодирование
+    encoded_values = encode_traits_vectorized(random_trits)
+    
+    # 2. Векторное декодирование
+    decoded_values = decode_traits_vectorized(encoded_values)
+    
+    total_time = time.perf_counter() - t0
+    
+    # Проверка корректности (убеждаемся, что математика Брусенцова не нарушена)
+    assert np.array_equal(random_trits, decoded_values), "Ошибка: Математика нарушена!"
+    
+    ops_per_second = N_OPERATIONS / total_time
+    
+    print("\n[Результаты NumPy Векторизации]:")
+    print(f" Время обработки 1 млн батча: {total_time:.4f} сек")
+    print(f" Скорость выполнения ядра: {ops_per_second / 1e6:.2f} МЛН операций в секунду!")
+    print(f" Среднее время на 1 трайт: {total_time / N_OPERATIONS * 1e9:.2f} наносекунд")
+    print("=" * 70)
