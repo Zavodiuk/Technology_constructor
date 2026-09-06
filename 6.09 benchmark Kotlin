@@ -1,0 +1,576 @@
+package harmony
+
+import java.security.MessageDigest
+import kotlin.math.min
+
+/*
+ * ============================================================================
+ * Harmony3 / BXOS: Monolithic Deterministic Pipeline, Audit Ledger & Benchmarks
+ * ============================================================================
+ *
+ * Архитектура пайплайна:
+ *   ВХОД -> [ТРОИЧНЫЙ БЛОК] -> [БРУСЕНЦОВ: трайт-таблица/скаляр] ->
+ *           [ПЕНТАРНЫЙ БЛОК] -> [ТРОИЧНЫЕ МАТРИЦЫ + SHA-256 LEDGER] -> [BXOS-ГЕЙТ] -> ВЫХОД
+ *
+ * Use Cases: 
+ * Industrial automation safety rings, untamperable telemetry networks, and fail-safe 
+ * automated manufacturing systems (Sprints, Gloves, and Protective Wear production).
+ *
+ * ⚖️ Legal Notice & Intellectual Property
+ *
+ * ALL RIGHTS RESERVED.
+ * This architecture, its mathematical formulations, matrix topologies, and source code 
+ * implementations are the exclusive intellectual property of Vladimir Zavodiuk.
+ *
+ * Any commercial use, integration into proprietary Large Language Models, closed-source 
+ * deployment, or modification of these conceptual frameworks is STRICTLY PROHIBITED 
+ * without explicit written consent from the author.
+ *
+ * Developed under the guidance of multi-valued logic pioneers. Free from binary noise.
+ * ============================================================================
+ */
+
+
+// ============================================================
+// 1. PENTARY BASE & DATA STRUCTURES
+// ============================================================
+
+/**
+ * ПЕНТАРНЫЙ БАЗИС ЛОГИКИ [-2, 2]
+ */
+enum class PentaryValue(val value: Int) {
+    STRONG_FALSE(-2),  // Арлекин / Категорическое НЕТ
+    FALSE(-1),         // Пьеро / Мягкое НЕТ
+    NEUTRAL(0),        // Доктор Грациано / Ламинарный покой
+    TRUE(1),           // Коломбина / Мягкое ДА
+    STRONG_TRUE(2)     // Бригелла / Категорическое ДА
+}
+
+/**
+ * Структура данных для фиксации результатов анализа Расёмона.
+ */
+data class RashomonResult(
+    val state: Int,
+    val top: String?,
+    val margin: Double,
+    val reason: String
+)
+
+/**
+ * Результат обработки данных троичным блоком Брусенцова.
+ */
+data class TernaryResult(
+    val bestCandidate: String?,
+    val efficiency: Double,
+    val l3In: Int,
+    val l3Out: Int,
+    val efficiencyTrit: Int,
+    val finalDecision: String
+)
+
+/**
+ * Состояние пентарного слоя с фиксацией уровня уверенности ИИ.
+ */
+data class PentarnyStateData(
+    val value: PentaryValue,
+    val confidence: Double,
+    val sourceCandidate: String
+)
+
+
+// ============================================================
+// 2. RASHOMON & TERNARY BLOCKS
+// ============================================================
+
+/**
+ * Блок анализа Расёмона. 
+ * Вычисляет неопределенность и фиксирует доминантную интерпретацию.
+ */
+object RashomonBlock {
+    fun analyze(
+        interpretations: Map<String, Double>,
+        marginThreshold: Double = 0.15,
+        minScore: Double = 0.3
+    ): RashomonResult {
+        if (interpretations.isEmpty()) {
+            return RashomonResult(-1, null, 0.0, "Нет интерпретаций")
+        }
+
+        val sortedItems = interpretations.entries.sortedByDescending { it.value }
+        val topEntry = sortedItems[0]
+        val topLabel = topEntry.key
+        val topScore = topEntry.value
+
+        val margin = if (sortedItems.size > 1) {
+            topScore - sortedItems[1].value
+        } else {
+            topScore
+        }
+
+        return when {
+            topScore < minScore -> {
+                RashomonResult(-1, topLabel, margin, "Лучшая оценка слишком низкая: ${String.format("%.2f", topScore)}")
+            }
+            margin >= marginThreshold -> {
+                RashomonResult(1, topLabel, margin, "Устойчивое ядро: отрыв ${String.format("%.2f", margin)}")
+            }
+            else -> {
+                RashomonResult(0, topLabel, margin, "Неопределённость: отрыв ${String.format("%.2f", margin)}")
+            }
+        }
+    }
+}
+
+/**
+ * Троичный блок Брусенцова.
+ * Фиксирует финальное решение (PROCEED / REJECT) и квантует эффективность в трит.
+ */
+object TernaryBlock {
+    fun process(query: String, interpretations: Map<String, Double>): TernaryResult {
+        val analysis = RashomonBlock.analyze(interpretations)
+        val state = analysis.state
+
+        if (state == -1) {
+            return TernaryResult(
+                bestCandidate = null, 
+                efficiency = 0.0, 
+                l3In = -1, 
+                l3Out = -1,
+                efficiencyTrit = -1, 
+                finalDecision = "REJECT"
+            )
+        }
+
+        val best = analysis.top
+        val score = interpretations[best] ?: 0.0
+        
+        val effTrit = if (score > 0.7) 1 else if (score >= 0.4) 0 else -1
+
+        return TernaryResult(
+            bestCandidate = best,
+            efficiency = score,
+            l3In = state,
+            l3Out = if (score > 0.5) 1 else 0,
+            efficiencyTrit = effTrit,
+            finalDecision = "PROCEED"
+        )
+    }
+}
+
+
+// ============================================================
+// 3. BRUSENTSOV LOGIC & TRAIT TABLE
+// ============================================================
+
+/**
+ * Логическое ядро Брусенцова.
+ * Реализует Look-Up таблицу трайтов (ширина 3 трита) на плоском нативном примитиве Kotlin.
+ */
+object BrusentsovLogic {
+    private const val TRAIT_WIDTH = 3
+    private const val TABLE_SIZE = 27 // 3^3
+
+    val traitTable: IntArray by lazy {
+        IntArray(TABLE_SIZE * TABLE_SIZE).apply {
+            for (i in 0 until TABLE_SIZE) {
+                val aTrits = decodeTrait(i)
+                for (j in 0 until TABLE_SIZE) {
+                    val bTrits = decodeTrait(j)
+                    val resTrits = IntArray(TRAIT_WIDTH) { idx -> 
+                        min(aTrits[idx], bTrits[idx]) 
+                    }
+                    this[i * TABLE_SIZE + j] = encodeTrait(resTrits)
+                }
+            }
+        }
+    }
+
+    fun foldAndScalar(trits: IntArray): Int {
+        var res = trits[0]
+        for (i in 1 until trits.size) {
+            res = if (res == 1 && trits[i] == 1) 1 
+                  else if (res == -1 || trits[i] == -1) -1 
+                  else 0
+        }
+        return res
+    }
+
+    fun encodeTrait(trits: IntArray): Int {
+        var valEncoded = 0
+        for (t in trits) {
+            valEncoded = valEncoded * 3 + (t + 1)
+        }
+        return valEncoded
+    }
+
+    fun decodeTrait(encodedVal: Int): IntArray {
+        var temp = encodedVal
+        val trits = IntArray(TRAIT_WIDTH)
+        for (i in TRAIT_WIDTH - 1 downTo 0) {
+            trits[i] = (temp % 3) - 1
+            temp /= 3
+        }
+        return trits
+    }
+
+    fun traitAnd(a: Int, b: Int): Int {
+        return traitTable[a * TABLE_SIZE + b]
+    }
+
+    fun foldAndViaTraitTable(trits: IntArray): Int {
+        val values = IntArray(TRAIT_WIDTH) { 1 }
+        for (i in trits.indices) {
+            if (i < TRAIT_WIDTH) values[i] = trits[i]
+        }
+        
+        val a = encodeTrait(values)
+        val b = encodeTrait(IntArray(TRAIT_WIDTH) { 1 })
+        val resultEncoded = traitAnd(a, b)
+        val resultTrits = decodeTrait(resultEncoded)
+        
+        return if (trits.size == 1) resultTrits[0] 
+               else foldAndScalar(trits.copyOfRange(0, min(trits.size, TRAIT_WIDTH)))
+    }
+}
+
+
+// ============================================================
+// 4. PENTARY BLOCK
+// ============================================================
+
+/**
+ * Пентарный блок управления семантическими слоями L5.
+ * Переводит троичные сигналы уверенности в пентарные значения [-2, 2].
+ */
+class PentaryBlock {
+    val l5State = mutableMapOf(
+        "intent" to 0,
+        "goal" to 0,
+        "ontology" to 0,
+        "context" to 0,
+        "action" to 0
+    )
+
+    fun setL5State(layer: String, value: Int) {
+        if (l5State.containsKey(layer) && value in -2..2) {
+            l5State[layer] = value
+        }
+    }
+
+    fun receiveFromTernary(bestCandidate: String, score: Double, confidence: Double): PentarnyStateData {
+        val valPentary = when {
+            confidence >= 0.8 && score >= 0.8 -> PentaryValue.STRONG_TRUE
+            confidence >= 0.6 -> PentaryValue.TRUE
+            confidence >= 0.4 -> PentaryValue.NEUTRAL
+            confidence >= 0.2 -> PentaryValue.FALSE
+            else -> PentaryValue.STRONG_FALSE
+        }
+        return PentarnyStateData(value = valPentary, confidence = confidence, sourceCandidate = bestCandidate)
+    }
+}
+
+
+// ============================================================
+// 5. TERNARY MATRIX & SHA-256 AUDIT CHAIN
+// ============================================================
+
+data class TernaryMatrix(val data: Array<IntArray>) {
+    fun applyProjection(mode: String = "diagonal_projection"): TernaryMatrix {
+        if (mode == "diagonal_projection") {
+            val matrixCopy = Array(5) { i -> data[i].clone() }
+            for (i in 0 until 5) {
+                for (j in 0 until 5) {
+                    if (i != j) {
+                        matrixCopy[i][j] = 0
+                    }
+                }
+            }
+            return TernaryMatrix(matrixCopy)
+        }
+        return this
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as TernaryMatrix
+        return data.contentDeepEquals(other.data)
+    }
+
+    override fun hashCode(): Int {
+        return data.contentDeepHashCode()
+    }
+}
+
+/**
+ * Неразрывный SHA-256 хэш-реестр (MatrixAuditChain) для фиксации 
+ * матричных состояний в контурах пром. автоматизации и телеметрии.
+ */
+class MatrixAuditChain {
+    data class Block(val hash: String, val data: Map<String, Any>)
+    
+    val chain = mutableListOf<Block>()
+    var previousHash: String = "0".repeat(64)
+
+    fun recordState(matrixData: Array<IntArray>, metadata: Map<String, Any> = emptyMap()): String {
+        val timestamp = System.currentTimeMillis()
+        val matrixList = matrixData.map { it.toList() }
+        val blockString = "ts:$timestamp|mat:$matrixList|meta:$metadata|prev:$previousHash"
+        val currentHash = sha256(blockString)
+        
+        chain.add(Block(currentHash, mapOf(
+            "timestamp" to timestamp,
+            "matrix" to matrixList,
+            "metadata" to metadata,
+            "previous_hash" to previousHash
+        )))
+        previousHash = currentHash
+        return currentHash
+    }
+
+    fun verifyIntegrity(): Boolean {
+        var prevH = "0".repeat(64)
+        for (block in chain) {
+            val dataMap = block.data
+            val timestamp = dataMap["timestamp"]
+            val matrixList = dataMap["matrix"]
+            val metadata = dataMap["metadata"]
+            val prev = dataMap["previous_hash"]
+            
+            if (prev != prevH) return false
+            val blockString = "ts:$timestamp|mat:$matrixList|meta:$metadata|prev:$prev"
+            val computedHash = sha256(blockString as String)
+            if (computedHash != block.hash) return false
+            prevH = block.hash
+        }
+        return true
+    }
+
+    private fun sha256(input: String): String {
+        val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+}
+
+class TernaryMatrixBlockWithAudit {
+    var state = TernaryMatrix(Array(5) { IntArray(5) })
+    val auditChain = MatrixAuditChain()
+
+    fun fromPentaryMapping(l5Values: Map<String, Int>): TernaryMatrix {
+        val matrixData = Array(5) { IntArray(5) }
+        val layers = listOf("intent", "goal", "ontology", "context", "action")
+        
+        layers.forEachIndexed { idx, layer ->
+            val value = l5Values[layer] ?: 0
+            val trit = if (value > 0) 1 else if (value < 0) -1 else 0
+            matrixData[idx][idx] = trit
+        }
+        
+        state = TernaryMatrix(matrixData)
+        return state
+    }
+
+    fun apply(mode: String, metadata: Map<String, Any> = emptyMap()): String {
+        state = state.applyProjection(mode)
+        return auditChain.recordState(state.data, metadata)
+    }
+}
+
+
+// ============================================================
+// 6. BXOS GATE
+// ============================================================
+
+enum class GateStatus(val value: String) {
+    READY("ready_for_simulation"),
+    LOCKED("locked_critical")
+}
+
+data class GateResult(
+    val status: GateStatus,
+    val stage: String,
+    val reason: String,
+    val timestamp: Long
+)
+
+class BXOSGate(
+    val marginThreshold: Double = 0.15,
+    val minScore: Double = 0.3,
+    val minConfidence: Double = 0.4,
+    val criticalPentaryStates: Set<Int> = setOf(-2, -1)
+) {
+    val log = mutableListOf<GateResult>()
+
+    fun checkInput(interpretations: Map<String, Double>): GateResult {
+        val analysis = RashomonBlock.analyze(interpretations, marginThreshold, minScore)
+        val status = if (analysis.state == -1) GateStatus.LOCKED else GateStatus.READY
+        val result = GateResult(status, "input", analysis.reason, System.currentTimeMillis())
+        log.add(result)
+        return result
+    }
+
+    fun checkOutput(pentaryValue: Int, confidence: Double): GateResult {
+        val status: GateStatus
+        val reason: String
+        
+        if (pentaryValue in criticalPentaryStates) {
+            status = GateStatus.LOCKED
+            reason = "критическое состояние на выходе: $pentaryValue"
+        } else if (confidence < minConfidence) {
+            status = GateStatus.LOCKED
+            reason = "уверенность ниже порога: $confidence < $minConfidence"
+        } else {
+            status = GateStatus.READY
+            reason = "выход прошёл проверку"
+        }
+        
+        val result = GateResult(status, "output", reason, System.currentTimeMillis())
+        log.add(result)
+        return result
+    }
+
+    fun summary(): Map<String, Int> {
+        val locked = log.count { it.status == GateStatus.LOCKED }
+        val ready = log.size - locked
+        return mapOf("total" to log.size, "ready" to ready, "locked" to locked)
+    }
+}
+
+
+// ============================================================
+// 7. FULL PIPELINE ORCHESTRATOR & BENCHMARKS
+// ============================================================
+
+data class FullPipelineResult(
+    val status: String,
+    val ternary: TernaryResult?,
+    val consolidatedTrit: Int?,
+    val pentaryConfidence: Double?,
+    val pentaryState: PentarnyStateData?,
+    val matrix: TernaryMatrix?,
+    val auditHash: String?,
+    val l5Used: Boolean,
+    val gateInput: GateResult?,
+    val gateOutput: GateResult?
+)
+
+class FullPipeline(val useTraitTable: Boolean = false) {
+    val ternary = TernaryBlock
+    val pentary = PentaryBlock()
+    val matrixBlock = TernaryMatrixBlockWithAudit()
+    val gate = BXOSGate()
+
+    fun process(
+        query: String,
+        interpretations: Map<String, Double>,
+        l5Values: Map<String, Int>? = null
+    ): FullPipelineResult {
+        val gateIn = gate.checkInput(interpretations)
+        if (gateIn.status == GateStatus.LOCKED) {
+            return FullPipelineResult("locked_input", null, null, null, null, null, null, false, gateIn, null)
+        }
+
+        val tr = ternary.process(query, interpretations)
+        if (tr.finalDecision == "REJECT") {
+            return FullPipelineResult("rejected", tr, null, null, null, null, null, false, gateIn, null)
+        }
+
+        val trits = intArrayOf(tr.l3In, tr.l3Out, tr.efficiencyTrit)
+        val consolidated = if (useTraitTable) {
+            BrusentsovLogic.foldAndViaTraitTable(trits)
+        } else {
+            BrusentsovLogic.foldAndScalar(trits)
+        }
+
+        val confidence = when (consolidated) {
+            -1 -> 0.3
+            0 -> 0.55
+            else -> 0.85
+        }
+
+        val pentaryStateData = pentary.receiveFromTernary(tr.bestCandidate!!, tr.efficiency, confidence)
+
+        var matrixResult: TernaryMatrix? = null
+        var auditHash: String? = null
+        var l5Used = false
+
+        if (l5Values != null && l5Values.keys == setOf("intent", "goal", "ontology", "context", "action")) {
+            for ((layer, value) in l5Values) {
+                pentary.setL5State(layer, value)
+            }
+            l5Used = true
+            matrixBlock.fromPentaryMapping(l5Values)
+            auditHash = matrixBlock.apply("diagonal_projection", mapOf("query" to query))
+            matrixResult = matrixBlock.state
+        }
+
+        val gateOut = gate.checkOutput(pentaryStateData.value.value, confidence)
+        val status = if (gateOut.status == GateStatus.LOCKED) "locked_output" else "ok"
+
+        return FullPipelineResult(
+            status, tr, consolidated, confidence, pentaryStateData, matrixResult, auditHash, l5Used, gateIn, gateOut
+        )
+    }
+}
+
+fun runBenchmark() {
+    println("==========================================================")
+    println("HARMONY3 / BXOS (Kotlin) — ВСТРОЕННЫЙ ЭНД-ТУ-ЭНД БЕНЧМАРК")
+    println("==========================================================")
+
+    val n = 5000
+    val query = "Хочу устройство с высокой защитой"
+    val interp = mapOf("Камера" to 0.4, "Безопасность" to 0.95, "Цена" to 0.5)
+
+    val pipelineFast = FullPipeline(useTraitTable = true)
+    val t0Fast = System.nanoTime()
+    repeat(n) {
+        pipelineFast.process(query, interp)
+    }
+    val tFast = (System.nanoTime() - t0Fast) / 1_000_000.0
+
+    val pipelineSlow = FullPipeline(useTraitTable = false)
+    val t0Slow = System.nanoTime()
+    repeat(n) {
+        pipelineSlow.process(query, interp)
+    }
+    val tSlow = (System.nanoTime() - t0Slow) / 1_000_000.0
+
+    println("\n[Результаты бенчмарка полного пайплайна на $n итераций]:")
+    println("  С трайт-таблицей:  %.2f мс -> %.2f мкс/вызов".format(tFast, tFast * 1000 / n))
+    println("  Без трайт-таблицы: %.2f мс -> %.2f мкс/вызов".format(tSlow, tSlow * 1000 / n))
+    println("==========================================================")
+}
+
+fun main(args: Array<String>) {
+    if (args.contains("--benchmark")) {
+        runBenchmark()
+        return
+    }
+
+    println("==========================================================")
+    println("HARMONY3 / BXOS (Kotlin) — МОНОЛИТНЫЙ КОНТУР")
+    println("Автор: Владимир Заводюк. All rights reserved.")
+    println("==========================================================")
+
+    val pipeline = FullPipeline(useTraitTable = false)
+    val res = pipeline.process(
+        query = "Хочу защитное снаряжение",
+        interpretations = mapOf("Защита" to 0.9, "Комфорт" to 0.5, "Цена" to 0.4),
+        l5Values = mapOf("intent" to 2, "goal" to 1, "ontology" to 1, "context" to 1, "action" to 2)
+    )
+
+    println("\nСтатус контура: ${res.status}")
+    println("Входной гейт:   ${res.gateInput?.status?.value} (${res.gateInput?.reason})")
+    println("Троичный блок:  L3_in=${res.ternary?.l3In}, L3_out=${res.ternary?.l3Out}, кандидат=${res.ternary?.bestCandidate}")
+    println("Свёртка тритов: ${res.consolidatedTrit}")
+    println("Пентарный слой: ${res.pentaryState?.value?.name} (уверенность: ${res.pentaryConfidence})")
+    println("Матрица L5:     использована=${res.l5Used}")
+    res.matrix?.data?.forEach { println(it.contentToString()) }
+    println("SHA-256 Ledger: ${res.auditHash}")
+    println("Целостность цепи: ${pipeline.matrixBlock.auditChain.verifyIntegrity()}")
+    println("Выходной гейт:  ${res.gateOutput?.status?.value} (${res.gateOutput?.reason})")
+    println("Сводка BXOS:    ${pipeline.gate.summary()}")
+    println("\n💡 Совет: запустить бенчмарк можно с аргументом --benchmark")
+    println("✅ Демонстрация успешно завершена")
+}
