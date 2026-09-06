@@ -26,3 +26,5 @@ Parameters of global licensing scale under the architectural tasks of a specific
 
 ### Contacts
 The current repository serves as an official invitation to strategic and technological dialogue. To secure your position in the race, contact the Chief Architect immediately via GitHub Issues or official communication channels.
++359877724745
+glovesandfactories@gmail.com
