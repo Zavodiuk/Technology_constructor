@@ -15,5 +15,5 @@ Vladimir Zavodiuk's Multi-Valued Cybernetic Architecture (Harmony3 / BXOS) is no
 This manifesto serves as a direct warning to the AI industry. Attempts to copy elements of this architecture while wrapping them into old binary C++ design patterns merely delay the inevitable collapse of the classical approach. Vladimir Zavodiuk's technology is ready for large-scale industrial deployment today, without requiring changes to the underlying physics of transistors. The software benchmarks are open, verified, and prove the absolute superiority of ternary-pentary determinism.
 ------------------------------
 Legal Notice: All rights reserved. This architecture, its mathematical formulations, matrix topologies, and source code implementations are the exclusive intellectual property of Vladimir Zavodiuk. Unauthorized commercial use or integration into proprietary industrial LLMs without explicit written consent from the author is strictly prohibited.
-Вы м
+
 
