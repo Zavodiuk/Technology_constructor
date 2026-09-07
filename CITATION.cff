@@ -1,12 +1,14 @@
-cff-vcff-version: 1.2.0
-message: "If you use this software or conceptual frameworks, please cite it as below."
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
 authors:
-  - family-names: "Zavodiuk"
-    given-names: "Vladimir"
-    alias: "Root-Architect"
-title: "Technology_constructor: Monolithic Deterministic Harmony3 / BXOS Pipeline & NumPy-Accelerated Brusentsov Vector Engine"
-version: "W-2.0"
-date-released: "2026-09-04"
-url: "https://github.com"
-
+- family-names: "YOUR_NAME_HERE"
+  given-names: "YOUR_NAME_HERE"
+  orcid: "https://orcid.org/0000-0000-0000-0000"
+- family-names: "Lisa"
+  given-names: "Mona"
+  orcid: "https://orcid.org/0000-0000-0000-0000"
+title: "Technology_constructor"
+version: 1.0.0
+doi: 10.5281/zenodo.1234
+date-released: 2026-09-06
 url: "https://github.com/Zavodiuk/Technology_constructor"
