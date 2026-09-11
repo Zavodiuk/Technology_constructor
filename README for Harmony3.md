@@ -6,7 +6,8 @@
 
 ---
 
-## Overview
-This document serves as a formal efficiency manifesto and warning to shareholders and institutional investors regarding capital expenditure misallocation in AI infrastructure, presenting the mathematical foundations, obsolescence of binary architectures, and verified performance metrics of the Harmony3 / BXOS system.
+## Summary of Core Manifesto and Financial Comparison
+The complete, unabridged text details a 7-section efficiency manifesto addressing institutional investors on the obsolescence of binary data center expansion, relying on foundations from Euler to Brusentsov. It highlights a 61x cost reduction in context processing, significant energy savings, and zero-CapEx deployment on existing silicon.
 
-For the complete unedited manifesto structure and details, please refer to the project documentation.
+*(Note: The full, unabridged text and comparison tables are structured for repository deployment as detailed in project documentation.)*
+
