@@ -1,0 +1,227 @@
+# -*- coding: utf-8 -*-
+# ZLBG Hybrid Engine v2 (Zavodiuk-Łukasiewicz-Brusentsov-Gendel Architecture)
+# All rights reserved
+# Author: Vladimir Zavodiuk (Lead Architect),
+
+import time
+import numpy as np
+from enum import Enum
+from dataclasses import dataclass
+from typing import Dict, Any, Union, Optional, List, Tuple
+
+
+class PentaryValue(Enum):
+    STRONG_FALSE = -2
+    FALSE = -1
+    NEUTRAL = 0
+    TRUE = 1
+    STRONG_TRUE = 2
+
+
+@dataclass
+class ZLBGResult:
+    status: str
+    mode: str
+    best_candidate: Optional[str] = None
+    consolidated_trit: Union[int, np.ndarray] = -1
+    pentary_state: Union[int, np.ndarray] = -2
+    confidence: Union[float, np.ndarray] = 0.0
+    matrix: Optional[np.ndarray] = None
+
+
+# ============================================================
+# Ядро Брусенцова и векторизованное кодирование
+# ============================================================
+
+TRAIT_WIDTH = 3
+_TRAIT_TABLE = None
+
+def _get_trait_table() -> np.ndarray:
+    global _TRAIT_TABLE
+    if _TRAIT_TABLE is None:
+        size = 3 ** TRAIT_WIDTH
+        table = np.zeros((size, size), dtype=np.int16)
+        for i in range(size):
+            a_trits = decode_trait_scalar(i)
+            for j in range(size):
+                b_trits = decode_trait_scalar(j)
+                res_trits = [min(a, b) for a, b in zip(a_trits, b_trits)]
+                table[i, j] = encode_trait_scalar(res_trits)
+        _TRAIT_TABLE = table
+    return _TRAIT_TABLE
+
+def decode_trait_scalar(val: int) -> List[int]:
+    trits = []
+    for _ in range(TRAIT_WIDTH):
+        trits.append((val % 3) - 1)
+        val //= 3
+    return list(reversed(trits))
+
+def encode_trait_scalar(trits: List[int]) -> int:
+    val = 0
+    for t in trits:
+        val = val * 3 + (t + 1)
+    return val
+
+def encode_trait_vector(batch_trits: np.ndarray) -> np.ndarray:
+    """Векторное кодирование матрицы троичных признаков (N x 3) в массив индексов (N,) через веса [9, 3, 1]"""
+    shifted = batch_trits + 1
+    weights = np.array([9, 3, 1], dtype=np.int32)
+    return np.dot(shifted, weights)
+
+def fold_via_trait_table_vector(batch_trits: np.ndarray) -> np.ndarray:
+    """Полная векторизованная свёртка троичных признаков Брусенцова для всего батча"""
+    table = _get_trait_table()
+    idx_a = encode_trait_vector(batch_trits)
+    idx_b = np.full_like(idx_a, encode_trait_vector(np.array([[1, 1, 1]])))
+    res_encoded = table[idx_a, idx_b]
+    return (res_encoded // 9) - 1
+
+
+# ============================================================
+# Гибридный движок ZLBG v2 (Control Plane + Data Plane)
+# ============================================================
+
+class ZLBGEngine:
+    def __init__(self, margin_threshold: float = 0.15, min_score: float = 0.3, min_confidence: float = 0.4):
+        self.margin_threshold = margin_threshold
+        self.min_score = min_score
+        self.min_confidence = min_confidence
+        self.l5_state = {'intent': 0, 'goal': 0, 'ontology': 0, 'context': 0, 'action': 0}
+
+    def _process_scalar(self, query: str, interpretations: Dict[str, float], l5_values: Optional[Dict[str, int]] = None) -> ZLBGResult:
+        """Control Plane: детальный объектный проход с трайт-таблицей Брусенцова и гейтами."""
+        if not interpretations:
+            return ZLBGResult(status="rejected", mode="scalar_control_plane", best_candidate=None)
+        
+        sorted_items = sorted(interpretations.items(), key=lambda x: x[1], reverse=True)
+        top_label, top_score = sorted_items[0]
+        margin = top_score - sorted_items[1][1] if len(sorted_items) > 1 else top_score
+        
+        input_ready = (margin >= self.margin_threshold) and (top_score >= self.min_score)
+        
+        l3_in = 1 if margin >= self.margin_threshold else (0 if top_score >= self.min_score else -1)
+        l3_out = 1 if top_score > 0.5 else 0
+        eff_trit = 1 if top_score > 0.7 else (0 if top_score >= 0.4 else -1)
+        
+        trits_list = [l3_in, l3_out, eff_trit]
+        encoded = encode_trait_scalar(trits_list)
+        table = _get_trait_table()
+        target_encoded = encode_trait_scalar([1, 1, 1])
+        res_encoded = table[encoded, target_encoded]
+        consolidated = int((res_encoded // 9) - 1)
+        
+        conf = 0.85 if consolidated == 1 else (0.55 if consolidated == 0 else 0.3)
+        pentary_state = 2 if consolidated == 1 else (0 if consolidated == 0 else (-1 if consolidated == -1 else -2))
+        
+        output_ready = pentary_state not in (-2, -1) and (conf >= self.min_confidence)
+        
+        if not input_ready:
+            status = "locked_input"
+        elif not output_ready:
+            status = "locked_output"
+        else:
+            status = "ok"
+
+        matrix_res = None
+        if l5_values:
+            for k, v in l5_values.items():
+                if k in self.l5_state:
+                    self.l5_state[k] = v
+            mat = np.zeros((5, 5), dtype=np.int8)
+            for idx, k in enumerate(['intent', 'goal', 'ontology', 'context', 'action']):
+                val = self.l5_state.get(k, 0)
+                mat[idx, idx] = 1 if val > 0 else (-1 if val < 0 else 0)
+            matrix_res = np.diag(np.diagonal(mat))
+
+        return ZLBGResult(
+            status=status,
+            mode="scalar_control_plane",
+            best_candidate=top_label,
+            consolidated_trit=consolidated,
+            pentary_state=pentary_state,
+            confidence=conf,
+            matrix=matrix_res
+        )
+
+    def _process_vector(self, batch_scores: np.ndarray) -> ZLBGResult:
+        """Data Plane: экстремально быстрый SIMD-контур с векторным гейтом и Брусенцовым."""
+        n_samples = batch_scores.shape[0]
+        
+        sorted_batch = np.sort(batch_scores, axis=1)
+        margins = sorted_batch[:, -1] - (sorted_batch[:, -2] if batch_scores.shape[1] > 1 else 0.0)
+        top_scores = sorted_batch[:, -1]
+        
+        input_ready = (margins >= self.margin_threshold) & (top_scores >= self.min_score)
+
+        l3_in = np.where(margins >= self.margin_threshold, 1, np.where(top_scores >= self.min_score, 0, -1))
+        l3_out = np.where(top_scores > 0.5, 1, 0)
+        eff_trit = np.where(top_scores > 0.7, 1, np.where(top_scores >= 0.4, 0, -1))
+        
+        batch_trits = np.stack([l3_in, l3_out, eff_trit], axis=1)
+        consolidated = fold_via_trait_table_vector(batch_trits)
+        
+        confidences = np.where(consolidated == 1, 0.85, np.where(consolidated == 0, 0.55, 0.3))
+        pentary_states = np.select(
+            [consolidated == 1, consolidated == 0, consolidated == -1],
+            [2, 0, -1],
+            default=-2
+        )
+        
+        critical_states = (-2, -1)
+        output_ready = ~np.isin(pentary_states, critical_states) & (confidences >= self.min_confidence)
+        statuses = np.where(~input_ready, "locked_input", np.where(~output_ready, "locked_output", "batch_processed"))
+        
+        active_count = np.sum(statuses == "batch_processed")
+        locked_in_count = np.sum(statuses == "locked_input")
+        locked_out_count = np.sum(statuses == "locked_output")
+        summary_status = f"batch_processed (active: {active_count}, locked_in: {locked_in_count}, locked_out: {locked_out_count})"
+
+        return ZLBGResult(
+            status=summary_status,
+            mode="vectorized_data_plane",
+            consolidated_trit=consolidated.astype(np.int8),
+            pentary_state=pentary_states.astype(np.int8),
+            confidence=confidences.astype(np.float32)
+        )
+
+    def process(self, target: Union[str, np.ndarray], interpretations: Union[Dict[str, float], np.ndarray], l5_values: Optional[Dict[str, int]] = None) -> ZLBGResult:
+        """Универсальный диспетчер гибридного контура."""
+        if isinstance(target, np.ndarray) or isinstance(interpretations, np.ndarray):
+            return self._process_vector(np.asanyarray(interpretations, dtype=np.float32))
+        else:
+            return self._process_scalar(str(target), dict(interpretations), l5_values)
+
+
+# ============================================================
+# Демонстрация и бенчмарк на 1 000 000 строк
+# ============================================================
+if __name__ == "__main__":
+    print("=" * 70)
+    print("ZLBG V2 HYBRID ENGINE — ТЕСТОВЫЙ ЗАПУСК И БЕНЧМАРК")
+    print("=" * 70)
+
+    engine = ZLBGEngine()
+
+    # 1. Проверка Control Plane
+    scalar_res = engine.process(
+        "Тест безопасности",
+        {"Камера": 0.2, "Шифрование": 0.95, "Пароль": 0.4},
+        l5_values={'intent': 2, 'goal': 1, 'ontology': 0, 'context': 1, 'action': 2}
+    )
+    print(f"Scalar Mode Status: {scalar_res.status} | Trit: {scalar_res.consolidated_trit}")
+
+    # 2. Бенчмарк Data Plane на 1 000 000 строк
+    N = 1_000_000
+    print(f"\nЗапуск Data Plane бенчмарка на {N:,} случайных строк...")
+    dummy_batch = np.random.uniform(0.1, 0.95, size=(N, 3))
+
+    t0 = time.perf_counter()
+    vector_res = engine.process("batch_run", dummy_batch)
+    elapsed = time.perf_counter() - t0
+
+    ops_per_sec = N / elapsed
+    print(f"Время выполнения: {elapsed:.4f} сек")
+    print(f"Производительность: {ops_per_sec:,.0f} операций/сек ({ops_per_sec / 1e6:.2f} млн опер/сек)")
+    print(f"Статус батча: {vector_res.status}")
+    print("=" * 70)
