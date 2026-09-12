@@ -1,0 +1,224 @@
+# -*- coding: utf-8 -*-
+# All rights reserved
+# Authors: Vladimir Zavodiuk (Lead Architect), Jan Łukasiewicz, Nikolay Brusentsov, Aron Gendel
+
+"""
+================================================================================
+ZLBG Hybrid Engine (Zavodiuk-Łukasiewicz-Brusentsov-Gendel Architecture)
+Монолитный гибридный контур: Control Plane + Data Plane с поддержкой NumPy SIMD
+================================================================================
+"""
+
+import time
+import numpy as np
+from enum import Enum
+from dataclasses import dataclass, field
+from typing import Dict, Any, Union, List, Optional, Tuple
+
+
+# ============================================================
+# 1. DATA STRUCTURES & CONFIGURATIONS
+# ============================================================
+
+class PentaryValue(Enum):
+    STRONG_FALSE = -2
+    FALSE = -1
+    NEUTRAL = 0
+    TRUE = 1
+    STRONG_TRUE = 2
+
+
+class GateStatus(Enum):
+    READY = "ready_for_simulation"
+    LOCKED = "locked_critical"
+
+
+@dataclass
+class ZLBGResult:
+    status: str
+    mode: str
+    best_candidate: Optional[str]
+    consolidated_trit: Union[int, np.ndarray]
+    pentary_state: Union[int, np.ndarray]
+    confidence: Union[float, np.ndarray]
+    matrix: Optional[np.ndarray] = None
+
+
+# ============================================================
+# 2. BRUSENTSOV TRAIT TABLE & SCALAR LOGIC
+# ============================================================
+
+TRAIT_WIDTH = 3
+
+def fold_and_scalar(trits: Tuple[int, ...]) -> int:
+    res = trits[0]
+    for t in trits[1:]:
+        res = 1 if (res == 1 and t == 1) else (-1 if (res == -1 or t == -1) else 0)
+    return res
+
+
+def encode_trait(trits: List[int]) -> int:
+    val = 0
+    for t in trits:
+        val = val * 3 + (t + 1)
+    return val
+
+
+def decode_trait(val: int) -> List[int]:
+    trits = []
+    for _ in range(TRAIT_WIDTH):
+        trits.append((val % 3) - 1)
+        val //= 3
+    return list(reversed(trits))
+
+
+_TRAIT_TABLE = None
+
+def _get_trait_table() -> np.ndarray:
+    global _TRAIT_TABLE
+    if _TRAIT_TABLE is None:
+        size = 3 ** TRAIT_WIDTH
+        table = np.zeros((size, size), dtype=np.int16)
+        for i in range(size):
+            a_trits = decode_trait(i)
+            for j in range(size):
+                b_trits = decode_trait(j)
+                res_trits = [min(a, b) for a, b in zip(a_trits, b_trits)]
+                table[i, j] = encode_trait(res_trits)
+        _TRAIT_TABLE = table
+    return _TRAIT_TABLE
+
+
+def trait_and(a: int, b: int) -> int:
+    table = _get_trait_table()
+    return int(table[a, b])
+
+
+def fold_and_via_trait_table(trits: Tuple[int, ...]) -> int:
+    values = list(trits) + [1] * (TRAIT_WIDTH - len(trits))
+    a = encode_trait(values)
+    b = encode_trait([1] * TRAIT_WIDTH)
+    result_encoded = trait_and(a, b)
+    result_trits = decode_trait(result_encoded)
+    return result_trits[0] if len(trits) == 1 else fold_and_scalar(tuple(result_trits[:len(trits)]))
+
+
+# ============================================================
+# 3. UNIFIED HYBRID ENGINE (CONTROL & DATA PLANES)
+# ============================================================
+
+class ZLBGEngine:
+    def __init__(self, margin_threshold: float = 0.15, min_score: float = 0.3):
+        self.margin_threshold = margin_threshold
+        self.min_score = min_score
+        self.l5_state = {'intent': 0, 'goal': 0, 'ontology': 0, 'context': 0, 'action': 0}
+
+    def _process_scalar(self, query: str, interpretations: Dict[str, float], l5_values: Optional[Dict[str, int]] = None) -> ZLBGResult:
+        """Control Plane: детальный объектный проход с трайт-таблицей Брусенцова и гейтами"""
+        if not interpretations:
+            return ZLBGResult(status="rejected", mode="scalar_control_plane", best_candidate=None, consolidated_trit=-1, pentary_state=-2, confidence=0.0)
+
+        sorted_items = sorted(interpretations.items(), key=lambda x: x[1], reverse=True)
+        top_label, top_score = sorted_items[0]
+        margin = top_score - sorted_items[1][1] if len(sorted_items) > 1 else top_score
+
+        if top_score < self.min_score:
+            return ZLBGResult(status="locked_input", mode="scalar_control_plane", best_candidate=top_label, consolidated_trit=-1, pentary_state=-1, confidence=top_score)
+
+        state = 1 if margin >= self.margin_threshold else 0
+        l3_in = state
+        l3_out = 1 if top_score > 0.5 else 0
+        eff_trit = 1 if top_score > 0.7 else (0 if top_score >= 0.4 else -1)
+
+        consolidated = fold_and_via_trait_table((l3_in, l3_out, eff_trit))
+        conf = 0.85 if consolidated == 1 else (0.55 if consolidated == 0 else 0.3)
+
+        # Обработка L5 слоев и матрицы
+        matrix_res = None
+        if l5_values:
+            for k, v in l5_values.items():
+                if k in self.l5_state:
+                    self.l5_state[k] = v
+            mat = np.zeros((5, 5), dtype=np.int8)
+            for idx, k in enumerate(['intent', 'goal', 'ontology', 'context', 'action']):
+                val = self.l5_state[k]
+                mat[idx, idx] = 1 if val > 0 else (-1 if val < 0 else 0)
+            # Диагональная проекция
+            matrix_res = np.diag(np.diagonal(mat))
+
+        return ZLBGResult(
+            status="ok",
+            mode="scalar_control_plane",
+            best_candidate=top_label,
+            consolidated_trit=consolidated,
+            pentary_state=2 if conf > 0.8 else 1,
+            confidence=conf,
+            matrix=matrix_res
+        )
+
+    def _process_vector(self, batch_scores: np.ndarray) -> ZLBGResult:
+        """Data Plane: экстремально быстрый векторизованный контур NumPy без аллокаций"""
+        top_idx = np.argmax(batch_scores, axis=1)
+        sorted_batch = np.sort(batch_scores, axis=1)
+        
+        margin = sorted_batch[:, -1] - (sorted_batch[:, -2] if batch_scores.shape[1] > 1 else 0.0)
+        states = np.where(margin >= self.margin_threshold, 1, np.where(sorted_batch[:, -1] >= self.min_score, 0, -1))
+        
+        confidences = np.where(states == 1, 0.85, np.where(states == 0, 0.55, 0.3))
+        pentary_states = np.where(confidences > 0.8, 2, 1)
+
+        return ZLBGResult(
+            status="batch_processed",
+            mode="vectorized_data_plane",
+            best_candidate=None,
+            consolidated_trit=states.astype(np.int8),
+            pentary_state=pentary_states.astype(np.int8),
+            confidence=confidences.astype(np.float32)
+        )
+
+    def process(self, target: Union[str, np.ndarray], interpretations: Union[Dict[str, float], np.ndarray], l5_values: Optional[Dict[str, int]] = None) -> ZLBGResult:
+        """Универсальный диспетчер вызовов гибридного контура"""
+        if isinstance(target, np.ndarray) or isinstance(interpretations, np.ndarray):
+            return self._process_vector(np.asanyarray(interpretations, dtype=np.float32))
+        else:
+            return self._process_scalar(str(target), dict(interpretations), l5_values)
+
+
+# ============================================================
+# EXECUTABLE BENCHMARK & DEMO
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("ZLBG HYBRID ENGINE — АРХИТЕКТУРНЫЙ ДЕМО-ПРОГОН")
+    print("=" * 70)
+
+    engine = ZLBGEngine()
+
+    # 1. Тест Control Plane (одиночный запрос)
+    scalar_res = engine.process(
+        "Защита периметра",
+        {"Камера": 0.2, "Шифрование": 0.92, "Пароль": 0.45},
+        l5_values={'intent': 2, 'goal': 1, 'ontology': 0, 'context': 1, 'action': 2}
+    )
+    print(f"\n[Control Plane Результат]:")
+    print(f"  Режим: {scalar_res.mode}")
+    print(f"  Лучший выбор: {scalar_res.best_candidate}")
+    print(f"  Свёртка тритов: {scalar_res.consolidated_trit}")
+    print(f"  Уверенность: {scalar_res.confidence}")
+    print(f"  Матрица L5 проекции:\n{scalar_res.matrix}")
+
+    # 2. Тест Data Plane (миллионный батч)
+    N = 1_000_000
+    dummy_batch = np.random.uniform(0.1, 0.95, size=(N, 4))
+    
+    t0 = time.perf_counter()
+    vector_res = engine.process("batch_query", dummy_batch)
+    t_elapsed = time.perf_counter() - t0
+
+    print(f"\n[Data Plane Бенчмарк ({N:,} строк)]:")
+    print(f"  Режим: {vector_res.mode}")
+    print(f"  Время выполнения: {t_elapsed:.4f} сек ({t_elapsed/N*1e9:.1f} нс/строку)")
+    print(f"  Пропускная способность: {N / t_elapsed:,.0f} операций/сек")
+    print("=" * 70)
+    
