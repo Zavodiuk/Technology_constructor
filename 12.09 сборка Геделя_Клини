@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved
+# Vladimir Zavodiuk
+
+"""
+================================================================================
+ПОЛНАЯ СБОРКА НА ЛОГИКЕ ГЁДЕЛЯ/КЛИНИ
+================================================================================
+  ВХОД -> [BXOS: входной гейт] -> [ТРОИЧНЫЙ БЛОК] ->
+          [ГЁДЕЛЬ/КЛИНИ: min-свёртка тритов] -> [ПЕНТАРНЫЙ БЛОК] ->
+          (опц.) [ТРОИЧНЫЕ МАТРИЦЫ] -> [BXOS: выходной гейт] -> ВЫХОД
+
+Отличие от full_pipeline.py (вариант Лукасевича):
+  - Свёртка трёх тритов (l3_in, l3_out, efficiency_trit) идёт через
+    godel_logic.fold_and_scalar (min), а не через brusentsov_trits.fold_and
+    (сильная конъюнкция Лукасевича). Разница в поведении: AND(0,0)=0
+    (Гёдель) против AND(0,0)=-1 (Лукасевич) — нейтральное остаётся
+    нейтральным, не эскалирует в отрицание.
+  - Никаких таблиц упаковки (trait/pentait) — доказано, что они не
+    ускоряют, а замедляют Гёделя/Клини (см. godel_logic.py).
+  - Остальные блоки (ternary_block, pentary_final, ternary_matrix_block,
+    bxos_gate) идентичны варианту Лукасевича — они не зависят от выбора
+    логики AND/OR.
+
+ГЛАВНОЕ ОТЛИЧИЕ ОТ ПРИСЛАННЫХ СЕГОДНЯ АЛЬТЕРНАТИВНЫХ ФАЙЛОВ (ZLBG и др.):
+  Здесь есть явный, обязательный тест scalar_path == batch_path на большом
+  числе случайных входов (см. self_check() ниже) — то, чего не было в
+  разобранном файле, где batch-путь физически не мог вернуть отрицательное
+  пентарное состояние даже на мусорном входе. Без такой проверки любая
+  "быстрая" реализация не заслуживает доверия, независимо от логики внутри.
+================================================================================
+"""
+
+import sys
+import os
+import time
+from dataclasses import dataclass
+from typing import Dict, Any, Optional
+import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from ternary_block import TernaryBlock, TernaryResult
+from godel_logic import fold_and_scalar, fold_and_batch
+from pentary_final import PentaryBlock, PentarnyStateData
+from ternary_matrix_block import TernaryMatrixBlock, from_pentary, TernaryMatrix
+from bxos_gate import BXOSGate, GateResult, GateStatus
+
+
+def trit_to_confidence(trit: int) -> float:
+    """Та же таблица перевода, что и в варианте Лукасевича — отличается
+    только то, ЧТО сворачивается (min вместо сильного AND), не то, как
+    результат переводится в уверенность."""
+    return {-1: 0.3, 0: 0.55, 1: 0.85}[trit]
+
+
+@dataclass
+class GodelPipelineResult:
+    status: str
+    ternary: Optional[TernaryResult]
+    consolidated_trit: Optional[int]
+    pentary_confidence: Optional[float]
+    pentary_state: Optional[PentarnyStateData]
+    matrix: Optional[TernaryMatrix]
+    l5_used: bool
+    gate_input: Optional[GateResult]
+    gate_output: Optional[GateResult]
+
+
+class GodelPipeline:
+    """Полный пайплайн на логике Гёделя/Клини. API идентичен
+    full_pipeline.FullPipeline (вариант Лукасевича) — можно менять местами
+    для сравнения на одних и тех же входных данных."""
+
+    def __init__(self):
+        self.ternary = TernaryBlock()
+        self.pentary = PentaryBlock()
+        self.matrix = TernaryMatrixBlock()
+        self.gate = BXOSGate()
+
+    def process(self, query: str, interpretations: Dict[str, float],
+                l5_values: Optional[Dict[str, int]] = None) -> GodelPipelineResult:
+        gate_in = self.gate.check_input(interpretations)
+        if gate_in.status == GateStatus.LOCKED:
+            return GodelPipelineResult(status="locked_input", ternary=None, consolidated_trit=None,
+                                        pentary_confidence=None, pentary_state=None, matrix=None,
+                                        l5_used=False, gate_input=gate_in, gate_output=None)
+
+        tr = self.ternary.process(query, interpretations)
+        if tr.final_decision == "REJECT":
+            return GodelPipelineResult(status="rejected", ternary=tr, consolidated_trit=None,
+                                        pentary_confidence=None, pentary_state=None, matrix=None,
+                                        l5_used=False, gate_input=gate_in, gate_output=None)
+
+        # ГЁДЕЛЬ/КЛИНИ: свёртка через min, не через сильный AND Лукасевича
+        trits = [tr.l3_in, tr.l3_out, tr.efficiency_trit]
+        consolidated = fold_and_scalar(trits)
+        confidence = trit_to_confidence(consolidated)
+
+        pentary_state = self.pentary.receive_from_ternary(
+            best_candidate=tr.best_candidate, score=tr.efficiency, confidence=confidence,
+        )
+
+        matrix_result = None
+        l5_used = False
+        if l5_values and set(l5_values.keys()) == {'intent', 'goal', 'ontology', 'context', 'action'}:
+            for layer, value in l5_values.items():
+                self.pentary.set_l5_state(layer, value)
+            l5_used = True
+            mat = from_pentary(l5_values)
+            self.matrix.state = mat
+            self.matrix.apply('diagonal_projection')
+            matrix_result = self.matrix.state
+
+        gate_out = self.gate.check_output(pentary_value=pentary_state.value.value, confidence=confidence)
+
+        return GodelPipelineResult(
+            status="locked_output" if gate_out.status == GateStatus.LOCKED else "ok",
+            ternary=tr, consolidated_trit=consolidated, pentary_confidence=confidence,
+            pentary_state=pentary_state, matrix=matrix_result, l5_used=l5_used,
+            gate_input=gate_in, gate_output=gate_out,
+        )
+
+
+def batch_consolidate(l3_in: np.ndarray, l3_out: np.ndarray, eff_trit: np.ndarray) -> np.ndarray:
+    """Векторизованная версия ТОЧНО ТОЙ ЖЕ свёртки, что в process() выше —
+    используется ТОЛЬКО для проверки scalar==batch, не для отдельного пути
+    с собственной логикой (это и была ошибка в разобранном файле)."""
+    stacked = np.stack([l3_in, l3_out, eff_trit], axis=1).astype(np.int8)
+    return fold_and_batch(stacked)
+
+
+def self_check(n_trials: int = 20_000, seed: int = 0) -> int:
+    """ОБЯЗАТЕЛЬНАЯ проверка перед использованием: scalar-путь и
+    батч-версия ТОЙ ЖЕ формулы должны совпадать на случайных данных.
+    Возвращает число расхождений (должно быть 0)."""
+    rng = np.random.default_rng(seed)
+    l3_in = rng.integers(-1, 2, size=n_trials).astype(np.int8)
+    l3_out = rng.integers(-1, 2, size=n_trials).astype(np.int8)
+    eff_trit = rng.integers(-1, 2, size=n_trials).astype(np.int8)
+
+    batch_result = batch_consolidate(l3_in, l3_out, eff_trit)
+
+    mismatches = 0
+    for i in range(n_trials):
+        scalar_result = fold_and_scalar([int(l3_in[i]), int(l3_out[i]), int(eff_trit[i])])
+        if scalar_result != batch_result[i]:
+            mismatches += 1
+    return mismatches
+
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("ПОЛНАЯ СБОРКА НА ГЁДЕЛЕ/КЛИНИ")
+    print("=" * 70)
+
+    # 0. ОБЯЗАТЕЛЬНАЯ проверка scalar==batch ПЕРЕД демонстрацией
+    print("\n--- Обязательная проверка scalar == batch ---")
+    mismatches = self_check(n_trials=20_000)
+    print(f"Расхождений на 20,000 случайных троек тритов: {mismatches}")
+    if mismatches > 0:
+        print("⚠️ ОСТАНОВКА: пайплайн не прошёл самопроверку, дальше запускать нельзя.")
+        sys.exit(1)
+    print("✅ Пройдено — можно доверять обоим путям.")
+
+    pipeline = GodelPipeline()
+
+    # 1. Обычный запрос
+    print("\n--- Запрос 1: обычный ---")
+    r1 = pipeline.process(
+        "Хочу телефон с хорошей камерой",
+        {"Камера": 0.9, "Цена": 0.4, "Автономность": 0.6, "Бренд": 0.7},
+    )
+    print(f"Статус: {r1.status}")
+    print(f"Троичный: L3_in={r1.ternary.l3_in}, L3_out={r1.ternary.l3_out}, eff_trit={r1.ternary.efficiency_trit}")
+    print(f"Свёртка Гёделя (min): {r1.consolidated_trit}")
+    print(f"Пентарное состояние: {r1.pentary_state.value.name}, conf={r1.pentary_confidence}")
+
+    # 2. Сравнение с тем, что дал бы Лукасевич на тех же тритах (для наглядности разницы)
+    print("\n--- Сравнение поведения на тритах (1,1,1) и (0,0,0) ---")
+    for trits in [(1, 1, 1), (0, 0, 0), (1, -1, 0)]:
+        godel_result = fold_and_scalar(list(trits))
+        print(f"  Триты {trits}: Гёдель(min)={godel_result}")
+    print("  (для сравнения: Лукасевич на (0,0,0) даёт -1, Гёдель даёт 0 — см. обсуждение)")
+
+    # 3. Явный брак — должен быть отклонён на входном гейте
+    print("\n--- Запрос 2: явный брак (ожидаем отклонение) ---")
+    r2 = pipeline.process("тест", {"A": 0.1, "B": 0.15})
+    print(f"Статус: {r2.status} (гейт: {r2.gate_input.status.value})")
+
+    # 4. Замер скорости полного пайплайна
+    print("\n--- Замер скорости (20,000 вызовов) ---")
+    query, interp = "Хочу телефон с хорошей камерой", {"Камера": 0.9, "Цена": 0.4, "Автономность": 0.6, "Бренд": 0.7}
+    for _ in range(200):
+        pipeline.process(query, interp)
+    N = 20_000
+    t0 = time.perf_counter()
+    for _ in range(N):
+        pipeline.process(query, interp)
+    dt = time.perf_counter() - t0
+    print(f"Гёдель/Клини пайплайн: {dt/N*1e6:.2f} мкс/вызов, {N/dt:,.0f} решений/сек")
+
+    print("\n✅ демонстрация завершена")
