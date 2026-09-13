@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved
+# Vladimir Zavodiuk
+
+"""
+================================================================================
+БЕНЧМАРК: ПАЙПЛАЙН НА ГЁДЕЛЕ/КЛИНИ vs ПАЙПЛАЙН НА ЛУКАСЕВИЧЕ
+================================================================================
+Два полных, независимо проверенных пайплайна с одинаковым API
+(process(query, interpretations, l5_values=None) -> результат):
+
+  GodelPipeline (full_pipeline_godel.py)  — свёртка через min/max
+  FullPipeline (full_pipeline.py)          — свёртка через сильную
+                                              конъюнкцию Лукасевича
+
+Оба содержат BXOS-гейт (вход + выход) и работают через один и тот же
+троичный/пентарный/матричный стек — отличается только правило свёртки
+трёх тритов в один консолидированный сигнал.
+
+ПЕРЕД ЛЮБЫМ СРАВНЕНИЕМ СКОРОСТИ — обязательная самопроверка
+scalar == batch для логики Гёделя (см. self_check() в full_pipeline_godel.py
+и обсуждение, почему это нужно: без такой проверки "быстрый" путь может
+незаметно отличаться от "надёжного" — см. историю разбора в репозитории).
+
+Запуск:
+  python3 benchmark_godel_vs_lukasiewicz.py
+================================================================================
+"""
+
+import sys
+import os
+import time
+from typing import Dict
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from full_pipeline_godel import GodelPipeline, self_check as godel_self_check
+from full_pipeline import FullPipeline
+
+QUERY = "Хочу телефон с хорошей камерой"
+INTERPRETATIONS = {"Камера": 0.9, "Цена": 0.4, "Автономность": 0.6, "Бренд": 0.7}
+REJECT_CASE = {"A": 0.1, "B": 0.15}
+N_CALLS = 20_000
+
+
+def run_self_checks() -> bool:
+    print("=" * 78)
+    print("ШАГ 1: ОБЯЗАТЕЛЬНЫЕ САМОПРОВЕРКИ")
+    print("=" * 78)
+    mismatches = godel_self_check(n_trials=20_000)
+    print(f"Гёдель: scalar == batch на 20,000 случайных троек тритов: "
+          f"{mismatches} расхождений")
+    ok = mismatches == 0
+    print("✅ Пройдено" if ok else "⚠️ ПРОВАЛЕНО — дальше нельзя доверять числам ниже")
+    return ok
+
+
+def compare_behavior():
+    print("\n" + "=" * 78)
+    print("ШАГ 2: СРАВНЕНИЕ ПОВЕДЕНИЯ НА ОДНИХ И ТЕХ ЖЕ ДАННЫХ")
+    print("=" * 78)
+
+    godel = GodelPipeline()
+    luka = FullPipeline(use_trait_table=False)
+
+    print(f"\n--- Обычный запрос: {QUERY!r} ---")
+    rg = godel.process(QUERY, INTERPRETATIONS)
+    rl = luka.process(QUERY, INTERPRETATIONS)
+    print(f"  Гёдель:     статус={rg.status:10s} свёртка={rg.consolidated_trit:2d} "
+          f"пентарно={rg.pentary_state.value.name}")
+    print(f"  Лукасевич:  статус={rl.status:10s} свёртка={rl.consolidated_trit:2d} "
+          f"пентарно={rl.pentary_state.value.name}")
+
+    print(f"\n--- Явный брак: {REJECT_CASE} (оба должны отклонить) ---")
+    rg2 = godel.process("тест", REJECT_CASE)
+    rl2 = luka.process("тест", REJECT_CASE)
+    print(f"  Гёдель:    статус={rg2.status}")
+    print(f"  Лукасевич: статус={rl2.status}")
+
+    print("\n--- Ключевое различие: свёртка тритов (1,1,1) и (0,0,0) ---")
+    from godel_logic import fold_and_scalar as godel_fold
+    from brusentsov_trits import fold_and as luka_fold
+    for trits in [(1, 1, 1), (0, 0, 0), (1, -1, 0)]:
+        g = godel_fold(list(trits))
+        l = luka_fold(trits)
+        marker = "  <-- РАЗНЫЕ" if g != l else ""
+        print(f"  Триты {trits}: Гёдель={g:2d}  Лукасевич={l:2d}{marker}")
+
+
+def benchmark_speed():
+    print("\n" + "=" * 78)
+    print(f"ШАГ 3: СКОРОСТЬ ({N_CALLS:,} вызовов каждый)")
+    print("=" * 78)
+
+    godel = GodelPipeline()
+    luka = FullPipeline(use_trait_table=False)
+
+    for _ in range(200):
+        godel.process(QUERY, INTERPRETATIONS)
+        luka.process(QUERY, INTERPRETATIONS)
+
+    t0 = time.perf_counter()
+    for _ in range(N_CALLS):
+        godel.process(QUERY, INTERPRETATIONS)
+    dt_godel = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    for _ in range(N_CALLS):
+        luka.process(QUERY, INTERPRETATIONS)
+    dt_luka = time.perf_counter() - t0
+
+    print(f"\n{'Пайплайн':<15} {'мкс/вызов':>12} {'решений/сек':>15}")
+    print(f"{'Гёдель':<15} {dt_godel/N_CALLS*1e6:>12.2f} {N_CALLS/dt_godel:>15,.0f}")
+    print(f"{'Лукасевич':<15} {dt_luka/N_CALLS*1e6:>12.2f} {N_CALLS/dt_luka:>15,.0f}")
+    diff_pct = (dt_luka / dt_godel - 1) * 100
+    print(f"\nРазница: {diff_pct:+.1f}% "
+          f"({'Гёдель быстрее' if diff_pct > 0 else 'Лукасевич быстрее'})")
+    print("(на уровне ВСЕГО пайплайна разница обычно небольшая — свёртка")
+    print(" тритов малая часть общего времени; см. README про уровни детализации)")
+
+
+if __name__ == "__main__":
+    ok = run_self_checks()
+    if not ok:
+        print("\nОстановлено: самопроверка провалена.")
+        sys.exit(1)
+    compare_behavior()
+    benchmark_speed()
+    print("\n✅ Бенчмарк завершён")
