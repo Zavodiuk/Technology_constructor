@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+ТРОИЧНЫЙ БЛОК (Fast-Path) — первый слой схемы
+================================================================================
+Место в пайплайне:
+  ВХОД -> [ТРОИЧНЫЙ БЛОК] -> пентарный слой -> троичные матрицы ->
+          пентарные матрицы -> BXOS -> Game-модуль -> (оркестратор сверху)
+
+Задача слоя: быстро и дёшево отсеять явный брак, пропустить явных лидеров,
+а всё неопределённое — эскалировать выше, в пентарный слой.
+
+Отличия от исходной V6.4 (архив: archive/block_x_v6_4_original.py):
+  - Убран LearningGuard. Его функция (ограничение роста, аварийный veto/
+    resume) по смыслу — это функция гейта безопасности (BXOS), а не
+    троичного Fast-Path. В прежнем виде она к тому же не работала как
+    заявлено: get_best_threshold усреднял сам себя и не учился на входных
+    данных. Если самообучение нужно именно на этом слое — это отдельная
+    задача с реальным сигналом обратной связи, не решённая пока нигде.
+  - Убран самообучаемый порог quantize — пороги теперь фиксированные
+    параметры блока (можно передать явно при создании).
+  - Кандидат для L3_out выбирается по эффективности, а не по сырому score
+    (раньше efficiency считалась, но не влияла на выбор).
+  - История ограничена по размеру (max_history), утечки нет.
+================================================================================
+"""
+
+import time
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+
+
+def quantize(value: float, low: float = 0.3, high: float = 0.7) -> int:
+    """Число -> трит {-1, 0, +1}."""
+    if value >= high:
+        return 1
+    if value <= low:
+        return -1
+    return 0
+
+
+def normalize_sign(x: float) -> int:
+    if x > 0:
+        return 1
+    if x < 0:
+        return -1
+    return 0
+
+
+def ternary_fold(vector: Tuple[int, ...]) -> int:
+    """Свёртка вектора тритов в один трит по знаку суммы."""
+    return normalize_sign(sum(vector))
+
+
+def ternary_diff(vec_a: Tuple[int, ...], vec_b: Tuple[int, ...]) -> Tuple[int, ...]:
+    if len(vec_a) != len(vec_b):
+        raise ValueError(f"Размерности не совпадают: {len(vec_a)} != {len(vec_b)}")
+    return tuple(a - b for a, b in zip(vec_a, vec_b))
+
+
+def rashomon_analyze(interpretations: Dict[str, float],
+                      margin_threshold: float = 0.15,
+                      min_score: float = 0.3) -> Dict:
+    """Входной триаж: явный брак (-1) / неопределённость (0) / уверенный лидер (1)."""
+    if not interpretations:
+        return {'state': -1, 'top': None, 'margin': 0.0, 'top_score': 0.0, 'reason': 'Нет интерпретаций'}
+
+    sorted_items = sorted(interpretations.items(), key=lambda x: x[1], reverse=True)
+    top_label, top_score = sorted_items[0]
+    margin = top_score - sorted_items[1][1] if len(sorted_items) > 1 else top_score
+
+    if top_score < min_score:
+        state, reason = -1, f"Низкая оценка: {top_score:.2f}"
+    elif margin >= margin_threshold:
+        state, reason = 1, f"Устойчивое ядро: отрыв {margin:.2f}"
+    else:
+        state, reason = 0, f"Неопределённость: отрыв {margin:.2f}"
+
+    return {
+        'state': state, 'top': top_label, 'margin': margin,
+        'top_score': top_score, 'reason': reason, 'all_scores': dict(sorted_items),
+    }
+
+
+def efficiency(value: float, cost: float) -> float:
+    """Защищённый от деления на ноль расчёт эффективности."""
+    if cost == 0.0:
+        cost = 0.001
+    total = value + cost
+    return value / total if total > 0 else 0.0
+
+
+@dataclass
+class TernaryResult:
+    query: str
+    l3_in: int
+    l3_in_reason: str
+    l3_out: int
+    best_candidate: Optional[str]
+    efficiency: float
+    efficiency_trit: int
+    final_decision: str  # "REJECT" | "CLARIFY" | "PASS"
+    rollback_needed: bool
+
+
+class TernaryBlock:
+    """
+    Троичный блок — минимальное рабочее ядро Fast-Path слоя.
+    Без самообучения и без функций безопасности (это к BXOS).
+    """
+
+    def __init__(self, low: float = 0.3, high: float = 0.7,
+                 margin_threshold: float = 0.15, min_score: float = 0.3,
+                 max_history: int = 500):
+        self.low = low
+        self.high = high
+        self.margin_threshold = margin_threshold
+        self.min_score = min_score
+        self.max_history = max_history
+        self.history: List[Dict] = []
+
+    def process(self, query: str, interpretations: Dict[str, float]) -> TernaryResult:
+        triage = rashomon_analyze(interpretations, self.margin_threshold, self.min_score)
+        l3_in = triage['state']
+
+        if l3_in == -1:
+            result = TernaryResult(
+                query=query, l3_in=-1, l3_in_reason=triage['reason'],
+                l3_out=-1, best_candidate=None, efficiency=0.0, efficiency_trit=-1,
+                final_decision="REJECT", rollback_needed=True,
+            )
+            self._log(result)
+            return result
+
+        best_name, best_score = None, -1.0
+        best_eff = 0.0
+        for name, score in interpretations.items():
+            eff = efficiency(score, 1.0 - score)
+            if eff > best_eff:
+                best_eff, best_name, best_score = eff, name, score
+
+        l3_out = quantize(best_score, self.low, self.high)
+        eff_trit = quantize(best_eff, self.low, self.high)
+
+        final_decision = "PASS" if l3_out == 1 else ("CLARIFY" if l3_out == 0 else "REJECT")
+
+        result = TernaryResult(
+            query=query, l3_in=l3_in, l3_in_reason=triage['reason'],
+            l3_out=l3_out, best_candidate=best_name, efficiency=best_eff,
+            efficiency_trit=eff_trit, final_decision=final_decision,
+            rollback_needed=(l3_out == -1),
+        )
+        self._log(result)
+        return result
+
+    def _log(self, result: TernaryResult):
+        self.history.append({'time': time.time(), 'query': result.query, 'decision': result.final_decision})
+        if len(self.history) > self.max_history:
+            self.history.pop(0)
+
+
+# ============================================================
+# ДЕМОНСТРАЦИЯ (те же запросы, что были в исходной версии — для сверки)
+# ============================================================
+
+if __name__ == "__main__":
+    block = TernaryBlock()
+
+    queries = [
+        ("Хочу телефон с камерой", {"Камера": 0.9, "Цена": 0.4, "Автономность": 0.6}),
+        ("Нужен бюджетный вариант", {"Цена": 0.8, "Камера": 0.2, "Бренд": 0.3}),
+        ("Флагман до 1000 евро", {"Камера": 0.95, "Бренд": 0.85, "Автономность": 0.7}),
+    ]
+
+    print("=" * 70)
+    print("ТРОИЧНЫЙ БЛОК — ДЕМОНСТРАЦИЯ")
+    print("=" * 70)
+
+    for query, interpretations in queries:
+        r = block.process(query, interpretations)
+        print(f"\nЗапрос: {query}")
+        print(f"  L3_in: {r.l3_in} ({r.l3_in_reason})")
+        print(f"  Кандидат: {r.best_candidate}  L3_out: {r.l3_out}  "
+              f"Эффективность: {r.efficiency:.3f} ({r.efficiency_trit})")
+        print(f"  Решение: {r.final_decision}")
+        if r.rollback_needed:
+            print("  ⚠️ ROLLBACK")
