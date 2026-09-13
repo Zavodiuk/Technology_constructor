@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+================================================================================
+БЛОК ОБРАБОТКИ ТРИТОВ ПО МЕТОДИКЕ БРУСЕНЦОВА
+================================================================================
+Место в пайплайне:
+  троичный блок -> [ТРИТЫ ПО БРУСЕНЦОВУ] -> пентарный блок -> ...
+
+Основание (см. источники по Н.П. Брусенцову и ЭВМ "Сетунь"/"Сетунь-70"):
+  - Элементарная единица — трит: {-1, 0, +1} (Ложь, Неопределённость, Истина).
+  - Все логические операции выводятся из ДВУХ законов — отрицания и
+    импликации. И/ИЛИ — не берутся отдельно как min/max, а получаются из
+    отрицания+импликации (де-моргановское выведение). Из-за этого это
+    "сильные" (Лукасевич) операции, а не простые Kleene min/max — они
+    иногда дают другой результат на неопределённости (см. AND(0,0)=-1
+    в тестах ниже — это не баг, так работает импликационная логика).
+  - Числовая единица памяти "Сетуни-70" — трайт = 6 тритов, диапазон
+    целого числа −364..+364 (3^6 = 729 состояний, знаковое представление).
+
+Если у тебя в других материалах зафиксирована другая таблица истинности
+(например, более ранняя пороговая реализация "Сетуни" отличалась от
+трёхзначной логики Лукасевича) — скажи, заменю таблицу импликации.
+================================================================================
+"""
+
+from typing import List, Tuple
+
+Trit = int  # -1, 0, 1
+
+
+def _check_trit(t: Trit) -> Trit:
+    if t not in (-1, 0, 1):
+        raise ValueError(f"Не трит: {t} (допустимо -1, 0, 1)")
+    return t
+
+
+# ============================================================
+# 1. ДВА ЗАКОНА: ОТРИЦАНИЕ И ИМПЛИКАЦИЯ
+# ============================================================
+
+def trit_not(t: Trit) -> Trit:
+    """Отрицание: -t. F<->T меняются местами, N (0) остаётся собой."""
+    return -_check_trit(t)
+
+
+# Таблица импликации (трёхзначная логика, F=-1, N=0, T=1)
+_IMPL_TABLE = {
+    (-1, -1): 1, (-1, 0): 1, (-1, 1): 1,
+    (0, -1): 0, (0, 0): 1, (0, 1): 1,
+    (1, -1): -1, (1, 0): 0, (1, 1): 1,
+}
+
+
+def trit_impl(a: Trit, b: Trit) -> Trit:
+    """Импликация a -> b."""
+    return _IMPL_TABLE[(_check_trit(a), _check_trit(b))]
+
+
+# ============================================================
+# 2. ВЫВЕДЕННЫЕ ОПЕРАЦИИ (через отрицание + импликацию)
+# ============================================================
+
+def trit_and(a: Trit, b: Trit) -> Trit:
+    """a AND b := NOT(a -> NOT(b))."""
+    return trit_not(trit_impl(a, trit_not(b)))
+
+
+def trit_or(a: Trit, b: Trit) -> Trit:
+    """a OR b := (NOT a) -> b."""
+    return trit_impl(trit_not(a), b)
+
+
+def fold_and(vector: Tuple[Trit, ...]) -> Trit:
+    """Свёртка вектора тритов через AND (цепочкой)."""
+    if not vector:
+        return 1  # пустая конъюнкция = истина (нейтральный элемент)
+    result = vector[0]
+    for t in vector[1:]:
+        result = trit_and(result, t)
+    return result
+
+
+def fold_or(vector: Tuple[Trit, ...]) -> Trit:
+    """Свёртка вектора тритов через OR (цепочкой)."""
+    if not vector:
+        return -1  # пустая дизъюнкция = ложь (нейтральный элемент)
+    result = vector[0]
+    for t in vector[1:]:
+        result = trit_or(result, t)
+    return result
+
+
+# ============================================================
+# 3. СБАЛАНСИРОВАННАЯ ТРОИЧНАЯ АРИФМЕТИКА
+# ============================================================
+
+TRAIT_SIZE = 6  # трайт = 6 тритов (как в "Сетуни-70"), диапазон -364..+364
+
+
+def to_balanced_ternary(n: int, width: int = TRAIT_SIZE) -> List[Trit]:
+    """Целое число -> список тритов (младший разряд первым)."""
+    max_val = (3 ** width - 1) // 2
+    if abs(n) > max_val:
+        raise ValueError(f"Число {n} не помещается в {width} тритов (диапазон ±{max_val})")
+    trits = []
+    v = n
+    for _ in range(width):
+        v, rem = divmod(v, 3)
+        if rem == 2:
+            rem = -1
+            v += 1
+        trits.append(rem)
+    return trits
+
+
+def from_balanced_ternary(trits: List[Trit]) -> int:
+    """Список тритов (младший разряд первым) -> целое число."""
+    value = 0
+    for i, t in enumerate(trits):
+        value += _check_trit(t) * (3 ** i)
+    return value
+
+
+def trit_add_with_carry(a: Trit, b: Trit, carry_in: Trit = 0) -> Tuple[Trit, Trit]:
+    """Сложение двух тритов с переносом. Возвращает (результат, перенос)."""
+    total = _check_trit(a) + _check_trit(b) + _check_trit(carry_in)
+    carry_out = 0
+    while total > 1:
+        total -= 3
+        carry_out += 1
+    while total < -1:
+        total += 3
+        carry_out -= 1
+    return total, carry_out
+
+
+def add_balanced_ternary(vec_a: List[Trit], vec_b: List[Trit]) -> List[Trit]:
+    """Поразрядное сложение двух троичных чисел (списков тритов, младший разряд первым)."""
+    width = max(len(vec_a), len(vec_b))
+    a = vec_a + [0] * (width - len(vec_a))
+    b = vec_b + [0] * (width - len(vec_b))
+    result = []
+    carry = 0
+    for i in range(width):
+        digit, carry = trit_add_with_carry(a[i], b[i], carry)
+        result.append(digit)
+    if carry != 0:
+        result.append(carry)
+    return result
+
+
+# ============================================================
+# ДЕМОНСТРАЦИЯ
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("БЛОК ОБРАБОТКИ ТРИТОВ ПО МЕТОДИКЕ БРУСЕНЦОВА")
+    print("=" * 70)
+
+    print("\nТаблица AND/OR, выведенная из NOT+IMPL:")
+    for a in (-1, 0, 1):
+        for b in (-1, 0, 1):
+            print(f"  AND({a:2d},{b:2d})={trit_and(a,b):2d}   OR({a:2d},{b:2d})={trit_or(a,b):2d}")
+
+    vector = (1, 0, 1, -1, 1)
+    print(f"\nСвёртка вектора {vector}:")
+    print(f"  fold_and = {fold_and(vector)}   fold_or = {fold_or(vector)}")
+
+    n = 42
+    trits = to_balanced_ternary(n)
+    back = from_balanced_ternary(trits)
+    print(f"\n{n} -> {trits} (трайт, {TRAIT_SIZE} тритов) -> обратно {back}")
+
+    a = to_balanced_ternary(100)
+    b = to_balanced_ternary(50)
+    s = add_balanced_ternary(a, b)
+    print(f"\n100 ({a}) + 50 ({b}) = {from_balanced_ternary(s)} ({s})")
+
+    print("\n✅ демонстрация завершена")
