@@ -1,0 +1,527 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved
+# Vladimir Zavodiuk
+
+"""
+================================================================================
+ПЕНТАРНЫЙ БЛОК — ФИНАЛЬНАЯ СВЁРТКА ВСЕХ НАРАБОТОК
+================================================================================
+Место в пайплайне:
+  троичный блок -> Брусенцов (триты) -> [ПЕНТАРНЫЙ БЛОК] -> троичные матрицы
+  -> пентарные матрицы -> BXOS -> Game-модуль -> оркестратор
+
+Собрано из трёх файлов, обсуждённых и проверенных в чате:
+  1. pentary_block.py          — PentarnyState, L5-слои, AuditChain, мостик
+                                  из троичного слоя, Rashomon-отчёт
+  2. pentary_brusentsov_numpy.py — два закона (отрицание+импликация) и
+                                  выведенные AND/OR, обобщённые с троичного
+                                  случая (k=1) на пентарный (k=2) по формуле
+                                  impl(a,b) = min(k, k-a+b); векторизовано
+                                  NumPy; батч-свёртка деревом (log K шагов)
+  3. Улучшение из этого разговора: aggregate_l5_to_state() теперь может
+     использовать честную AND/OR-свёртку вместо простого среднего —
+     принципиальнее, потому что использует ту же логику, что и весь
+     остальной пентарный слой, а не отдельную ad hoc формулу.
+
+ЧТО ПРОВЕРЕНО ЧИСЛЕННО (не принято на веру):
+  - Формула impl(a,b)=min(k,k-a+b) при k=1 совпадает с ранее проверенной
+    троичной таблицей — 0 расхождений
+  - AND/OR при k=2 ассоциативны на всех 125 тройках -2..2 — 0 нарушений
+  - Нейтральные элементы: AND(2,x)=x, OR(-2,x)=x для любого x
+  - Батч-свёртка (дерево) даёт тот же результат, что последовательный fold,
+    сверено на выборке
+================================================================================
+"""
+
+import json
+import time
+import hashlib
+import numpy as np
+from enum import Enum
+from dataclasses import dataclass, field
+from typing import Dict, Any, List, Optional, Tuple
+
+K = 2  # параметр домена пентарной логики: значения -2..2
+
+
+# ============================================================
+# 1. ПЕНТАРНОЕ СОСТОЯНИЕ
+# ============================================================
+
+class PentarnyState(Enum):
+    """
+    -2: сильное "нет"   (STRONG_FALSE)
+    -1: "нет"           (FALSE)
+     0: неопределённость / точка свёртки (UNDEFINED)
+     1: "да"            (TRUE)
+     2: сильное "да"    (STRONG_TRUE)
+    """
+    STRONG_FALSE = -2
+    FALSE = -1
+    UNDEFINED = 0
+    TRUE = 1
+    STRONG_TRUE = 2
+
+    def is_positive(self) -> bool:
+        return self.value > 0
+
+    def is_negative(self) -> bool:
+        return self.value < 0
+
+    def is_undefined(self) -> bool:
+        return self.value == 0
+
+    def strength(self) -> float:
+        return abs(self.value) / 2.0
+
+
+@dataclass
+class PentarnyStateData:
+    value: PentarnyState
+    confidence: float
+    timestamp: float
+    metadata: Dict[str, Any]
+
+    def to_dict(self) -> Dict:
+        return {
+            'value': self.value.value, 'label': self.value.name,
+            'confidence': self.confidence, 'timestamp': self.timestamp,
+            'metadata': self.metadata,
+        }
+
+
+# ============================================================
+# 2. ДВА ЗАКОНА (векторизованные, NumPy) + ВЫВЕДЕННЫЕ AND/OR
+# ============================================================
+
+Penta = np.ndarray  # dtype=np.int8, значения -2..2
+
+
+def _check_penta(arr: Penta) -> Penta:
+    if not np.all(np.isin(arr, [-2, -1, 0, 1, 2])):
+        raise ValueError("Массив содержит значения вне {-2,-1,0,1,2}")
+    return arr
+
+
+def penta_not(a: Penta) -> Penta:
+    return -_check_penta(a)
+
+
+def penta_impl(a: Penta, b: Penta) -> Penta:
+    """impl(a,b) = min(K, K - a + b). Закрытая формула, таблица не нужна."""
+    a, b = _check_penta(a), _check_penta(b)
+    if a.shape != b.shape:
+        raise ValueError(f"Размеры не совпадают: {a.shape} != {b.shape}")
+    return np.minimum(K, K - a + b).astype(np.int8)
+
+
+def penta_and(a: Penta, b: Penta) -> Penta:
+    """AND(a,b) = NOT(a -> NOT(b)) = max(-K, a+b-K). "Сильная" конъюнкция."""
+    return penta_not(penta_impl(a, penta_not(b)))
+
+
+def penta_or(a: Penta, b: Penta) -> Penta:
+    """OR(a,b) = (NOT a) -> b = min(K, a+b+K)."""
+    return penta_impl(penta_not(a), b)
+
+
+def penta_and_scalar(a: int, b: int) -> int:
+    """Удобная обёртка для одиночных значений (не массивов)."""
+    return int(penta_and(np.array([a], dtype=np.int8), np.array([b], dtype=np.int8))[0])
+
+
+def penta_or_scalar(a: int, b: int) -> int:
+    return int(penta_or(np.array([a], dtype=np.int8), np.array([b], dtype=np.int8))[0])
+
+
+def _tree_reduce_batch(matrix: Penta, op, neutral: int) -> np.ndarray:
+    """Векторизованная свёртка M независимых пентарных векторов (MxK) в M
+    чисел деревом (log2(K) шагов). Корректно только для ассоциативной op —
+    проверено для penta_and/penta_or на всех 125 тройках (см. чат)."""
+    m = _check_penta(matrix).copy()
+    while m.shape[1] > 1:
+        k = m.shape[1]
+        if k % 2 == 1:
+            m = np.concatenate([m, np.full((m.shape[0], 1), neutral, dtype=np.int8)], axis=1)
+        left, right = m[:, 0::2], m[:, 1::2]
+        m = op(left, right)
+    return m[:, 0]
+
+
+def fold_and_batch(matrix: Penta) -> np.ndarray:
+    """Нейтральный элемент AND = +2 (сильное 'да' не мешает конъюнкции)."""
+    return _tree_reduce_batch(matrix, penta_and, neutral=2)
+
+
+def fold_or_batch(matrix: Penta) -> np.ndarray:
+    """Нейтральный элемент OR = -2 (сильное 'нет' не мешает дизъюнкции)."""
+    return _tree_reduce_batch(matrix, penta_or, neutral=-2)
+
+
+def fold_and_scalar(values: List[int]) -> int:
+    """Свёртка одного вектора значений через AND (для удобства без NumPy)."""
+    if not values:
+        return 2  # нейтральный элемент
+    result = values[0]
+    for v in values[1:]:
+        result = penta_and_scalar(result, v)
+    return result
+
+
+def fold_or_scalar(values: List[int]) -> int:
+    if not values:
+        return -2
+    result = values[0]
+    for v in values[1:]:
+        result = penta_or_scalar(result, v)
+    return result
+
+
+# ============================================================
+# 3. L5 — ПЯТЬ СЛОЁВ УРОВНЕЙ
+# ============================================================
+
+class L5Layer(Enum):
+    INTENT = "intent"
+    GOAL = "goal"
+    ONTOLOGY = "ontology"
+    CONTEXT = "context"
+    ACTION = "action"
+
+
+@dataclass
+class L5State:
+    layer: L5Layer
+    state: PentarnyStateData
+    transition_energy: float
+
+    def to_dict(self) -> Dict:
+        return {'layer': self.layer.value, 'state': self.state.to_dict(),
+                'transition_energy': self.transition_energy}
+
+
+class L5Engine:
+    """Управление пятью слоями пентарной логики. История ограничена."""
+
+    def __init__(self, max_history: int = 500):
+        self.states: Dict[L5Layer, Optional[PentarnyStateData]] = {l: None for l in L5Layer}
+        self.history: List[L5State] = []
+        self.energy = 0.5
+        self.max_history = max_history
+
+    def set_state(self, layer: L5Layer, value: int, confidence: float = 0.5,
+                  metadata: Optional[Dict[str, Any]] = None) -> PentarnyStateData:
+        if value not in (-2, -1, 0, 1, 2):
+            raise ValueError("Значение должно быть -2, -1, 0, 1 или 2")
+
+        p_state = PentarnyState(value)
+        state_data = PentarnyStateData(value=p_state, confidence=confidence,
+                                        timestamp=time.time(), metadata=metadata or {})
+        self.states[layer] = state_data
+
+        transition_energy = abs(value) / 2.0
+        self.history.append(L5State(layer, state_data, transition_energy))
+        if len(self.history) > self.max_history:
+            self.history.pop(0)
+        self.energy = (self.energy + transition_energy) / 2.0
+
+        return state_data
+
+    def get_state(self, layer: L5Layer) -> Optional[PentarnyStateData]:
+        return self.states.get(layer)
+
+    def evaluate(self) -> Dict[str, Any]:
+        result = {}
+        total_energy = 0.0
+        count = 0
+        for layer in L5Layer:
+            state = self.states.get(layer)
+            if state:
+                result[layer.value] = state.to_dict()
+                total_energy += abs(state.value.value) / 2.0
+                count += 1
+            else:
+                result[layer.value] = None
+
+        avg_energy = total_energy / count if count > 0 else 0.0
+
+        values = [s.value.value for s in self.states.values() if s is not None]
+        if values:
+            avg_val = sum(values) / len(values)
+            consistency = "positive" if avg_val > 0.5 else ("negative" if avg_val < -0.5 else "neutral")
+        else:
+            consistency = "undefined"
+
+        return {
+            'states': result, 'avg_energy': avg_energy, 'consistency': consistency,
+            'system_energy': self.energy, 'history_len': len(self.history),
+        }
+
+
+# ============================================================
+# 4. RASHOMON-ОТЧЁТ (несколько формул от одного состояния — отчёт, не решение)
+# ============================================================
+
+class PentarnyRashomon:
+    """Внимание: все четыре формулы читают ОДНО состояние под разными
+    углами — это не независимые эксперты, а компактный отчёт."""
+
+    def __init__(self):
+        self.perspectives = {
+            'technical': self._technical, 'legal': self._legal,
+            'business': self._business, 'strategic': self._strategic,
+        }
+
+    def _technical(self, state: PentarnyStateData) -> Dict:
+        return {'score': state.value.value / 2.0, 'stability': state.confidence,
+                'complexity': abs(state.value.value) / 2.0}
+
+    def _legal(self, state: PentarnyStateData) -> Dict:
+        return {'score': 0.5 if state.value.is_positive() else -0.5,
+                'risk': 1.0 - state.confidence,
+                'compliance': 1.0 if state.value != PentarnyState.UNDEFINED else 0.0}
+
+    def _business(self, state: PentarnyStateData) -> Dict:
+        return {'score': state.value.value / 2.0 * state.confidence,
+                'roi': state.confidence * 0.8, 'market_fit': abs(state.value.value) / 2.0}
+
+    def _strategic(self, state: PentarnyStateData) -> Dict:
+        return {'score': state.value.value / 2.0, 'urgency': 1.0 - state.confidence,
+                'recommendation': self._get_recommendation(state)}
+
+    def _get_recommendation(self, state: PentarnyStateData) -> str:
+        return {
+            PentarnyState.STRONG_TRUE: "Активно действовать",
+            PentarnyState.TRUE: "Продолжать",
+            PentarnyState.UNDEFINED: "Требуется анализ",
+            PentarnyState.FALSE: "Пересмотреть",
+            PentarnyState.STRONG_FALSE: "Немедленно остановиться",
+        }[state.value]
+
+    def analyze(self, state: PentarnyStateData) -> Dict[str, Dict]:
+        return {name: func(state) for name, func in self.perspectives.items()}
+
+    def to_dict(self, state: PentarnyStateData) -> Dict:
+        return {'state': state.to_dict(), 'analysis': self.analyze(state)}
+
+
+# ============================================================
+# 5. ЛЁГКАЯ ХЭШ-ЦЕПОЧКА (без proof-of-work — см. обсуждение майнинга)
+# ============================================================
+
+@dataclass
+class ChainRecord:
+    index: int
+    timestamp: float
+    prev_hash: str
+    state: PentarnyStateData
+    payload: Dict[str, Any]
+
+    @property
+    def hash(self) -> str:
+        data = f"{self.index}{self.timestamp}{self.prev_hash}{json.dumps(self.payload, sort_keys=True)}"
+        return hashlib.sha256(data.encode()).hexdigest()
+
+    def to_dict(self) -> Dict:
+        return {'index': self.index, 'timestamp': self.timestamp,
+                'prev_hash': self.prev_hash[:16] + '...' if len(self.prev_hash) > 16 else self.prev_hash,
+                'state': self.state.to_dict(), 'payload': self.payload,
+                'hash': self.hash[:16] + '...'}
+
+
+class AuditChain:
+    def __init__(self, max_length: int = 500):
+        self.records: List[ChainRecord] = []
+        self.max_length = max_length
+
+    def add(self, state: PentarnyStateData, payload: Dict[str, Any]) -> ChainRecord:
+        record = ChainRecord(
+            index=len(self.records), timestamp=time.time(),
+            prev_hash=self.records[-1].hash if self.records else 'GENESIS',
+            state=state, payload=payload,
+        )
+        self.records.append(record)
+        if len(self.records) > self.max_length:
+            self.records.pop(0)
+        return record
+
+    def verify(self) -> Tuple[bool, int]:
+        for i, record in enumerate(self.records):
+            if i > 0 and record.prev_hash != self.records[i - 1].hash:
+                return False, i
+        return True, -1
+
+    def to_dict(self) -> Dict:
+        verified, error_idx = self.verify()
+        return {'length': len(self.records), 'verified': verified,
+                'error_index': error_idx if not verified else None,
+                'records': [r.to_dict() for r in self.records[-5:]]}
+
+
+# ============================================================
+# 6. МОСТИК ИЗ ТРОИЧНОГО СЛОЯ
+# ============================================================
+
+def value_to_pentarny(score: float) -> PentarnyState:
+    """Непрерывный скор [0,1] (как из троичного блока) -> 5 состояний."""
+    if score <= 0.1:
+        return PentarnyState.STRONG_FALSE
+    elif score <= 0.35:
+        return PentarnyState.FALSE
+    elif score < 0.65:
+        return PentarnyState.UNDEFINED
+    elif score < 0.9:
+        return PentarnyState.TRUE
+    else:
+        return PentarnyState.STRONG_TRUE
+
+
+# ============================================================
+# 7. ПЕНТАРНЫЙ БЛОК — ГЛАВНЫЙ КЛАСС
+# ============================================================
+
+class PentaryBlock:
+    """Пентарный блок пайплайна: L5 + логика Брусенцова (2 закона) +
+    Rashomon-отчёт + AuditChain."""
+
+    def __init__(self):
+        self.l5 = L5Engine()
+        self.rashomon = PentarnyRashomon()
+        self.chain = AuditChain()
+        self.current_state: Optional[PentarnyStateData] = None
+
+    def set_state(self, value: int, confidence: float = 0.5,
+                  metadata: Optional[Dict[str, Any]] = None) -> PentarnyStateData:
+        if value not in (-2, -1, 0, 1, 2):
+            raise ValueError("Значение должно быть -2, -1, 0, 1 или 2")
+        self.current_state = PentarnyStateData(
+            value=PentarnyState(value), confidence=confidence,
+            timestamp=time.time(), metadata=metadata or {},
+        )
+        self.chain.add(self.current_state, {'type': 'state_set', 'value': value, 'confidence': confidence})
+        return self.current_state
+
+    def receive_from_ternary(self, best_candidate: Optional[str], score: float,
+                              confidence: float = 0.5) -> PentarnyStateData:
+        """Точка стыковки с троичным блоком: CLARIFY-эскалация -> пентарное состояние."""
+        p_state = value_to_pentarny(score)
+        return self.set_state(p_state.value, confidence=confidence,
+                               metadata={'source': 'ternary_clarify', 'candidate': best_candidate, 'raw_score': score})
+
+    def set_l5_state(self, layer: str, value: int, confidence: float = 0.5,
+                     metadata: Optional[Dict[str, Any]] = None):
+        layer_map = {l.value: l for l in L5Layer}
+        if layer not in layer_map:
+            raise ValueError(f"Допустимые слои: {', '.join(layer_map)}")
+        self.l5.set_state(layer_map[layer], value, confidence, metadata)
+
+    def aggregate_l5_to_state(self, method: str = 'fold_and',
+                              confidence: Optional[float] = None) -> Optional[PentarnyStateData]:
+        """Свести все выставленные L5-слои в единое current_state.
+
+        method:
+          'fold_and' — AND-свёртка (та же логика Брусенцова, что и везде в
+                       слое): результат тянется к самому слабому звену —
+                       "консенсус настолько силён, насколько слаб самый
+                       слабый слой". Обоснованный выбор по умолчанию, если
+                       нужна осторожная (консервативная) оценка.
+          'fold_or'  — OR-свёртка: тянется к самому сильному звену —
+                       "достаточно, чтобы хоть один слой был уверен".
+                       Оптимистичная оценка.
+          'average'  — простое среднее с округлением (прежнее поведение,
+                       оставлено для сравнения/обратной совместимости).
+
+        Не вызывается автоматически."""
+        values = [s.value.value for s in self.l5.states.values() if s is not None]
+        if not values:
+            return None
+
+        if method == 'fold_and':
+            result_value = fold_and_scalar(values)
+        elif method == 'fold_or':
+            result_value = fold_or_scalar(values)
+        elif method == 'average':
+            avg = sum(values) / len(values)
+            result_value = max(-2, min(2, round(avg)))
+        else:
+            raise ValueError("method должен быть 'fold_and', 'fold_or' или 'average'")
+
+        conf = confidence if confidence is not None else (
+            sum(s.confidence for s in self.l5.states.values() if s is not None) / len(values))
+        return self.set_state(result_value, confidence=conf,
+                               metadata={'source': f'l5_aggregate_{method}', 'input_values': values})
+
+    def evaluate_l5(self) -> Dict:
+        return self.l5.evaluate()
+
+    def analyze_rashomon(self) -> Dict:
+        if self.current_state is None:
+            return {'error': 'Состояние не установлено'}
+        return self.rashomon.to_dict(self.current_state)
+
+    def run(self) -> Dict:
+        if self.current_state is None:
+            return {'status': 'error', 'message': 'Состояние не установлено'}
+        return {
+            'status': 'ok',
+            'current_state': self.current_state.to_dict(),
+            'l5': self.l5.evaluate(),
+            'rashomon': self.rashomon.to_dict(self.current_state),
+            'audit_chain': self.chain.to_dict(),
+        }
+
+
+# ============================================================
+# ДЕМОНСТРАЦИЯ
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("ПЕНТАРНЫЙ БЛОК — ФИНАЛЬНАЯ СВЁРТКА")
+    print("=" * 70)
+
+    # 1. Проверка двух законов (сверка с ранее выведенной формулой)
+    print("\nПроверка импликации (несколько пар из ранее выведенной таблицы):")
+    checks = [(-2, -2, 2), (1, -1, 0), (2, 2, 2), (0, 1, 2)]
+    for a, b, expected in checks:
+        got = int(penta_impl(np.array([a], dtype=np.int8), np.array([b], dtype=np.int8))[0])
+        status = "OK" if got == expected else "MISMATCH"
+        print(f"  impl({a},{b}) = {got} (ожидалось {expected}) [{status}]")
+
+    # 2. Стыковка с троичным блоком
+    block = PentaryBlock()
+    state = block.receive_from_ternary(best_candidate="Камера", score=0.95, confidence=0.8)
+    print(f"\nПентарное состояние из CLARIFY: {state.value.name} ({state.value.value}), conf={state.confidence}")
+
+    # 3. L5-слои (тот же пример, что и раньше)
+    block.set_l5_state('intent', 2, confidence=0.9, metadata={'priority': 'high'})
+    block.set_l5_state('goal', 1, confidence=0.8)
+    block.set_l5_state('ontology', 0, confidence=0.5)
+    block.set_l5_state('context', 1, confidence=0.7)
+    block.set_l5_state('action', 2, confidence=0.9)
+
+    print("\nL5 evaluate:", block.evaluate_l5()['consistency'], "| avg_energy =",
+          round(block.evaluate_l5()['avg_energy'], 3))
+
+    # 4. Сравнение трёх методов агрегации L5 -> current_state
+    print("\nСравнение методов агрегации L5 (значения: 2,1,0,1,2):")
+    for method in ('fold_and', 'fold_or', 'average'):
+        agg = block.aggregate_l5_to_state(method=method)
+        print(f"  {method:10s} -> {agg.value.name} ({agg.value.value}), conf={agg.confidence:.3f}")
+
+    result = block.run()
+    print("\nAudit chain verified:", result['audit_chain']['verified'], "length:", result['audit_chain']['length'])
+    print("Rashomon strategic recommendation:", result['rashomon']['analysis']['strategic']['recommendation'])
+
+    # 5. Батч-свёртка на масштабе (замер, как в обсуждении)
+    print("\nЗамер батч-свёртки на масштабе:")
+    rng = np.random.default_rng(7)
+    batch = rng.choice([-2, -1, 0, 1, 2], size=(50_000, 16)).astype(np.int8)
+    t0 = time.perf_counter()
+    vec = fold_and_batch(batch)
+    dt = time.perf_counter() - t0
+    print(f"  fold_and_batch на 50,000 векторов x 16: {dt:.4f} сек")
+
+    print("\n✅ демонстрация завершена")
