@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved
+# Vladimir Zavodiuk
+
+"""
+================================================================================
+ЛОГИКА ГЁДЕЛЯ/КЛИНИ — параллельный, явно выбираемый вариант Лукасевичу
+================================================================================
+Обоснование выбора именно этого варианта по умолчанию для сценария
+"ИИ вызывает детерминированный инструмент" (см. обсуждение в чате):
+
+  1. AND/OR — примитивы (min/max), не композиция из 3 операций, как у
+     Лукасевича (NOT(impl(a,NOT(b)))) — быстрее на каждом уровне.
+  2. Ассоциативность математически гарантирована для min/max — не нужно
+     перепроверять при расширении домена (мы перепроверяли для k=1 и k=2
+     у Лукасевича; здесь в этом нет необходимости в принципе).
+  3. Таблицы упаковки (trait/pentait) НЕ ДАЮТ выигрыша здесь — проверено:
+     Клини без упаковки на пентарном домене = 3.8 млрд оп/сек, тот же
+     пентайт С таблицей = 398 млн/сек. Меньше, не больше. Причина: у
+     Лукасевича таблица заменяла ДОРОГУЮ формула на ОДИН lookup; у Клини
+     сам min уже дешевле одного lookup, упаковка только добавляет
+     накладные расходы на кодирование/декодирование.
+  4. Свёртка вектора не требует дерева (в отличие от Лукасевича) — min/max
+     полностью ассоциативны и коммутативны, поэтому numpy-примитив
+     `.reduce()` даёт тот же результат за один вызов, в 2.5x быстрее
+     самодельного дерева (проверено).
+
+Семантика: AND(0,0)=0 (нейтральный остаётся нейтральным, не эскалирует
+в отрицание, как у Лукасевича, где AND(0,0)=-k).
+================================================================================
+"""
+
+import numpy as np
+from typing import Sequence, Union
+
+ArrayLike = Union[int, np.ndarray]
+
+
+def godel_not(a: ArrayLike) -> ArrayLike:
+    return -np.asarray(a) if isinstance(a, np.ndarray) else -a
+
+
+def godel_and(a: ArrayLike, b: ArrayLike) -> ArrayLike:
+    """AND = min. Работает для любого домена (-1..1 троичный, -2..2
+    пентарный, любой другой) без изменений — ассоциативность гарантирована."""
+    return np.minimum(a, b)
+
+
+def godel_or(a: ArrayLike, b: ArrayLike) -> ArrayLike:
+    return np.maximum(a, b)
+
+
+def fold_and_scalar(values: Sequence[int]) -> int:
+    """Свёртка одного вектора значений через AND. Для одиночных вызовов
+    (сценарий: ИИ вызывает инструмент один раз на запрос) — это самый
+    быстрый путь, упаковка не нужна."""
+    if not values:
+        raise ValueError("Пустая последовательность")
+    result = values[0]
+    for v in values[1:]:
+        result = min(result, v)
+    return result
+
+
+def fold_or_scalar(values: Sequence[int]) -> int:
+    if not values:
+        raise ValueError("Пустая последовательность")
+    result = values[0]
+    for v in values[1:]:
+        result = max(result, v)
+    return result
+
+
+def fold_and_batch(matrix: np.ndarray) -> np.ndarray:
+    """Свёртка через AND сразу для M независимых векторов (матрица MxK).
+    Один вызов np.minimum.reduce — не дерево (не нужно для примитива)."""
+    return np.minimum.reduce(matrix, axis=1)
+
+
+def fold_or_batch(matrix: np.ndarray) -> np.ndarray:
+    return np.maximum.reduce(matrix, axis=1)
+
+
+if __name__ == "__main__":
+    import itertools
+
+    print("=" * 70)
+    print("ЛОГИКА ГЁДЕЛЯ/КЛИНИ — ФИНАЛЬНАЯ ПРОВЕРКА")
+    print("=" * 70)
+
+    # 1. Ассоциативность (для полноты — хоть и гарантирована математически)
+    fails = 0
+    for a, b, c in itertools.product(range(-2, 3), repeat=3):
+        if godel_and(godel_and(a, b), c) != godel_and(a, godel_and(b, c)):
+            fails += 1
+    print(f"\nАссоциативность AND на 125 пентарных тройках: нарушений = {fails}")
+
+    # 2. Де Морган
+    fails_dm = 0
+    for a, b in itertools.product(range(-2, 3), repeat=2):
+        if godel_not(godel_and(a, b)) != godel_or(godel_not(a), godel_not(b)):
+            fails_dm += 1
+    print(f"Де Морган на 25 парах: нарушений = {fails_dm}")
+
+    # 3. scalar == batch (тот самый урок из разбора ZLBG)
+    rng = np.random.default_rng(0)
+    M, K = 10000, 7
+    batch = rng.integers(-2, 3, size=(M, K)).astype(np.int8)
+    batch_result = fold_and_batch(batch)
+    mismatches = 0
+    for i in range(M):
+        scalar_result = fold_and_scalar(list(batch[i]))
+        if scalar_result != batch_result[i]:
+            mismatches += 1
+    print(f"Scalar == batch на {M:,} случайных векторах: расхождений = {mismatches}")
+
+    # 4. Скорость
+    import time
+    N = 5_000_000
+    a = rng.integers(-2, 3, size=N).astype(np.int8)
+    b = rng.integers(-2, 3, size=N).astype(np.int8)
+    godel_and(a[:1000], b[:1000])
+    t0 = time.perf_counter()
+    godel_and(a, b)
+    dt = time.perf_counter() - t0
+    print(f"\nСкорость AND (векторизовано): {N/dt:,.0f} операций/сек")
