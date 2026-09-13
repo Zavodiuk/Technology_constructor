@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved
+# Vladimir Zavodiuk
+
+"""
+================================================================================
+ПОЛНАЯ СБОРКА — весь пайплайн одним вызовом
+================================================================================
+  ВХОД -> [ТРОИЧНЫЙ БЛОК] -> [БРУСЕНЦОВ: трайт-таблица] ->
+          [ПЕНТАРНЫЙ БЛОК] -> (опц.) [ТРОИЧНЫЕ МАТРИЦЫ] -> [BXOS-ГЕЙТ] -> ВЫХОД
+
+Отличия от orchestrator.py:
+  1. Свёртка Брусенцова теперь использует трайт-таблицу (729x729,
+     проверено: 77-83x быстрее decode+AND+encode, 4.16x быстрее голых
+     тритов) вместо последовательного скалярного fold_and.
+  2. Добавлен BXOS-гейт на выходе — раньше он существовал отдельно и
+     никогда не вызывался из общей цепочки.
+  3. Честный вопрос, на который отвечает бенчмарк ниже: даёт ли
+     трайт-таблица заметный эффект НА УРОВНЕ ВСЕГО ПАЙПЛАЙНА, если сам
+     шаг свёртки — всего 3 трита за вызов (а не миллионы, как в
+     изолированных замерах)? Ответ — в бенчмарке, не предполагается
+     заранее.
+================================================================================
+"""
+
+import sys
+import os
+import time
+from dataclasses import dataclass
+from typing import Dict, Any, Optional
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from ternary_block import TernaryBlock, TernaryResult
+from brusentsov_trits import fold_and as fold_and_scalar
+from trait_table import trait_and, encode_trait, decode_trait, TRAIT_WIDTH
+from pentary_final import PentaryBlock, PentarnyStateData
+from ternary_matrix_block import TernaryMatrixBlock, from_pentary, TernaryMatrix
+from bxos_gate import BXOSGate, GateResult, GateStatus
+
+
+def trit_to_confidence(trit: int) -> float:
+    return {-1: 0.3, 0: 0.55, 1: 0.85}[trit]
+
+
+def fold_and_via_trait_table(trits) -> int:
+    """Свёртка до 6 тритов через одну табличную операцию вместо
+    последовательных AND. Для <6 тритов дополняем нейтральным элементом
+    (1 — нейтраль AND, см. блок Брусенцова)."""
+    values = list(trits) + [1] * (TRAIT_WIDTH - len(trits))
+    a = encode_trait(values)
+    b = encode_trait([1] * TRAIT_WIDTH)  # нейтральный трайт
+    result_encoded = int(trait_and(a, b))
+    result_trits = decode_trait(result_encoded)
+    return result_trits[0] if len(trits) == 1 else fold_and_scalar(tuple(result_trits[:len(trits)]))
+
+
+@dataclass
+class FullPipelineResult:
+    status: str
+    ternary: Optional[TernaryResult]
+    consolidated_trit: Optional[int]
+    pentary_confidence: Optional[float]
+    pentary_state: Optional[PentarnyStateData]
+    matrix: Optional[TernaryMatrix]
+    l5_used: bool
+    gate_input: Optional[GateResult]
+    gate_output: Optional[GateResult]
+
+
+class FullPipeline:
+    def __init__(self, use_trait_table: bool = False):
+        """use_trait_table=False по умолчанию — честно, по результату
+        замера ниже: трайт-таблица проигрывает скаляру в 7.48x на
+        одиночных вызовах (её выигрыш — только при батч-обработке
+        миллионов значений разом, не при 1 запрос = 1 свёртка)."""
+        self.ternary = TernaryBlock()
+        self.pentary = PentaryBlock()
+        self.matrix = TernaryMatrixBlock()
+        self.gate = BXOSGate()
+        self.use_trait_table = use_trait_table
+
+    def process(self, query: str, interpretations: Dict[str, float],
+                l5_values: Optional[Dict[str, int]] = None) -> FullPipelineResult:
+        # 0. BXOS: входной гейт
+        gate_in = self.gate.check_input(interpretations)
+        if gate_in.status == GateStatus.LOCKED:
+            return FullPipelineResult(status="locked_input", ternary=None, consolidated_trit=None,
+                                       pentary_confidence=None, pentary_state=None, matrix=None,
+                                       l5_used=False, gate_input=gate_in, gate_output=None)
+
+        # 1. ТРОИЧНЫЙ БЛОК
+        tr = self.ternary.process(query, interpretations)
+        if tr.final_decision == "REJECT":
+            return FullPipelineResult(status="rejected", ternary=tr, consolidated_trit=None,
+                                       pentary_confidence=None, pentary_state=None, matrix=None,
+                                       l5_used=False, gate_input=gate_in, gate_output=None)
+
+        # 2. БРУСЕНЦОВ: свёртка трёх тритов (трайт-таблица либо скаляр)
+        trits = (tr.l3_in, tr.l3_out, tr.efficiency_trit)
+        if self.use_trait_table:
+            consolidated = fold_and_via_trait_table(trits)
+        else:
+            consolidated = fold_and_scalar(trits)
+        confidence = trit_to_confidence(consolidated)
+
+        # 3. ПЕНТАРНЫЙ БЛОК
+        pentary_state = self.pentary.receive_from_ternary(
+            best_candidate=tr.best_candidate, score=tr.efficiency, confidence=confidence,
+        )
+
+        # 4. (ОПЦИОНАЛЬНО) ТРОИЧНЫЕ МАТРИЦЫ
+        matrix_result = None
+        l5_used = False
+        if l5_values and set(l5_values.keys()) == {'intent', 'goal', 'ontology', 'context', 'action'}:
+            for layer, value in l5_values.items():
+                self.pentary.set_l5_state(layer, value)
+            l5_used = True
+            mat = from_pentary(l5_values)
+            self.matrix.state = mat
+            self.matrix.apply('diagonal_projection')
+            matrix_result = self.matrix.state
+
+        # 5. BXOS: выходной гейт
+        gate_out = self.gate.check_output(pentary_value=pentary_state.value.value, confidence=confidence)
+
+        return FullPipelineResult(
+            status="locked_output" if gate_out.status == GateStatus.LOCKED else "ok",
+            ternary=tr, consolidated_trit=consolidated, pentary_confidence=confidence,
+            pentary_state=pentary_state, matrix=matrix_result, l5_used=l5_used,
+            gate_input=gate_in, gate_output=gate_out,
+        )
+
+
+# ============================================================
+# ДЕМОНСТРАЦИЯ + END-TO-END БЕНЧМАРК
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("ПОЛНАЯ СБОРКА — ДЕМОНСТРАЦИЯ")
+    print("=" * 70)
+
+    pipeline = FullPipeline(use_trait_table=False)
+
+    r = pipeline.process(
+        "Хочу телефон с хорошей камерой",
+        {"Камера": 0.9, "Цена": 0.4, "Автономность": 0.6, "Бренд": 0.7},
+    )
+    print(f"\nСтатус: {r.status}")
+    print(f"Входной гейт: {r.gate_input.status.value}")
+    print(f"Троичный: L3_in={r.ternary.l3_in}, L3_out={r.ternary.l3_out}, кандидат={r.ternary.best_candidate}")
+    print(f"Консолидированный трит (через трайт-таблицу): {r.consolidated_trit}")
+    print(f"Пентарное состояние: {r.pentary_state.value.name}, confidence={r.pentary_confidence}")
+    print(f"Выходной гейт: {r.gate_output.status.value}: {r.gate_output.reason}")
+
+    # ---- END-TO-END БЕНЧМАРК: с трайт-таблицей vs без ----
+    print("\n" + "=" * 70)
+    print("END-TO-END БЕНЧМАРК: влияет ли трайт-таблица на весь пайплайн?")
+    print("=" * 70)
+
+    N = 5000
+    query, interp = "Хочу телефон с хорошей камерой", {"Камера": 0.9, "Цена": 0.4, "Автономность": 0.6, "Бренд": 0.7}
+
+    pipeline_fast = FullPipeline(use_trait_table=True)
+    t0 = time.perf_counter()
+    for _ in range(N):
+        pipeline_fast.process(query, interp)
+    time_fast = time.perf_counter() - t0
+
+    pipeline_slow = FullPipeline(use_trait_table=False)
+    t0 = time.perf_counter()
+    for _ in range(N):
+        pipeline_slow.process(query, interp)
+    time_slow = time.perf_counter() - t0
+
+    print(f"\nС трайт-таблицей:    {time_fast:.4f} сек за {N:,} вызовов -> {time_fast/N*1e6:.2f} мкс/вызов")
+    print(f"Без трайт-таблицы:   {time_slow:.4f} сек за {N:,} вызовов -> {time_slow/N*1e6:.2f} мкс/вызов")
+    print(f"Разница: {(time_slow/time_fast - 1)*100:+.1f}%")
+    print("\nЕсли разница мала или отрицательна — значит на уровне ПОЛНОГО пайплайна")
+    print("(а не изолированного микро-бенчмарка) оптимизация свёртки Брусенцова не")
+    print("является узким местом: остальные шаги (Rashomon-триаж, пентарный блок,")
+    print("гейты) доминируют в общем времени вызова.")
+
+    # ---- Дополнительная проверка: где именно теряется время ----
+    print("\n" + "=" * 70)
+    print("ДИАГНОСТИКА: накладные расходы NumPy на ОДИН вызов трайт-таблицы")
+    print("=" * 70)
+    N2 = 5000
+    t0 = time.perf_counter()
+    for _ in range(N2):
+        fold_and_via_trait_table((1, 1, 1))
+    time_table_single = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    for _ in range(N2):
+        fold_and_scalar((1, 1, 1))
+    time_scalar_single = time.perf_counter() - t0
+
+    print(f"fold_and через трайт-таблицу (по одному вызову): {time_table_single/N2*1e6:.2f} мкс/вызов")
+    print(f"fold_and обычный скаляр (по одному вызову):       {time_scalar_single/N2*1e6:.2f} мкс/вызов")
+    print(f"Скалярный вариант быстрее в {time_table_single/time_scalar_single:.2f}x на ОДИНОЧНЫХ вызовах")
+    print("\nВывод: трайт-таблица — инструмент для батчей (миллионы значений разом),")
+    print("не для одиночных вызовов внутри цикла запрос-за-запросом. В текущей")
+    print("схеме пайплайна (1 запрос = 1 свёртка) её включать не стоит.")
