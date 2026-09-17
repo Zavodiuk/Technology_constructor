@@ -1,0 +1,415 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved / Все права защищены
+# Vladimir Zavodiuk / Заводюк Владимир
+
+"""
+================================================================================
+Harmony3 / BXOS: 3D Tensor Cube 5x5x5 with 6 Face-Ports, Membrane & Pentary Logic
+================================================================================
+
+[EN] 
+Monolithic deterministic cybernetic pipeline featuring a 3D cubic tensor grid 
+(5x5x5 = 125 mini-cubes). Each mini-cube possesses 6 face-ports mapped to semantic axes:
+  - Axis X (±X): Intent / Goal
+  - Axis Y (±Y): Context / Ontology
+  - Axis Z (±Z): Action / Result
+Integrated with a dynamic 3-attractor plane membrane, micro-graph physics, 
+and strict BXOS security gates.
+
+[RU] 
+Монолитный детерминированный кибернетический контур, включающий трехмерный 
+тензорный куб 5x5x5 (125 мини-кубиков). Каждый мини-куб имеет 6 граней-портов, 
+соотнесенных со смысловыми осями:
+  - Ось X (±X): Намерение / Цель
+  - Ось Y (±Y): Контекст / Онтология
+  - Ось Z (±Z): Действие / Результат
+Интегрирован с динамической плоскостью-мембраной из трех аттракторов, графовой 
+физикой и строгими гейтами безопасности BXOS.
+
+### CLI Arguments / Аргументы командной строки:
+  $ python harmony_cube_v18.py            # Standard demo / Стандартная демо-раскадровка
+  $ python harmony_cube_v18.py --readme     # Dual-language documentation / Двуязычная документация
+  $ python harmony_cube_v18.py --benchmark  # Full performance test / Полный бенчмарк
+================================================================================
+"""
+
+import sys
+import time
+import random
+import numpy as np
+from enum import Enum
+from dataclasses import dataclass
+from typing import Dict, Any, List, Optional, Tuple, Set
+
+# ============================================================================
+# 1. PENTARY LOGIC BASIS & MASKS
+# ============================================================================
+
+LOGIC_BASIS = [2, 1, 0, -1, -2]
+
+MASKS = {
+     2: "Бригелла (Да / Пик / Источник / Истина)",
+     1: "Коломбина (Скорее Да / Восходящий фронт / Вероятность)",
+     0: "Доктор Грациано (Наверное / Центр / Баланс)",
+    -1: "Пьеро (Скорее Нет / Нисходящий фронт / Сомнение)",
+    -2: "Арлекин (Нет / Впадина / Ложь)"
+}
+
+PENTAR_CODE = {
+    -2: "КАТЕГОРИЧЕСКОЕ НЕТ (Полная блокировка / Обрыв канала)",
+    -1: "МЯГКОЕ НЕТ (Торможение потока)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Свободный транзит)",
+     1: "МЯГКОЕ ДА (Активация / Рост проводимости)",
+     2: "КАТЕГОРИЧЕСКОЕ ДА (Максимальное ускорение / Сверхпроводимость)"
+}
+
+def quantize_pentarny(value: float) -> int:
+    if value > 0.75: return 2
+    elif value > 0.25: return 1
+    elif value >= -0.25: return 0
+    elif value >= -0.75: return -1
+    else: return -2
+
+
+# ============================================================================
+# 2. 3D TENSOR CUBE (5x5x5) WITH 6 FACE-PORTS
+# ============================================================================
+
+@dataclass
+class FacePortState:
+    negative_axis: int  # -X, -Y, or -Z
+    positive_axis: int  # +X, +Y, or +Z
+    permeability: float
+
+
+class TensorCube5x5x5:
+    """
+    Кубическая тензорная сетка 5x5x5 (125 элементов).
+    Каждый мини-кубик имеет 6 граней-портов по осям X, Y, Z:
+      - Ось X: Намерение / Цель (-X / +X)
+      - Ось Y: Контекст / Онтология (-Y / +Y)
+      - Ось Z: Действие / Результат (-Z / +Z)
+    """
+    def __init__(self, size: int = 5):
+        self.size = size
+        self.grid = np.zeros((size, size, size), dtype=int)
+        self.permeability_grid = np.ones((size, size, size, 6), dtype=float) # 6 граней: -X, +X, -Y, +Y, -Z, +Z
+
+    def set_cell(self, coords: Tuple[int, int, int], value: int):
+        if all(0 <= c < self.size for c in coords):
+            self.grid[coords] = max(-2, min(2, value))
+
+    def get_cell(self, coords: Tuple[int, int, int]) -> int:
+        if all(0 <= c < self.size for c in coords):
+            return int(self.grid[coords])
+        return 0
+
+    def get_face_neighbors(self, coords: Tuple[int, int, int]) -> List[Tuple[Tuple[int, int, int], int]]:
+        """Возвращает список соседей через 6 граней (индексы 0..5)"""
+        x, y, z, = coords
+        directions = [
+            ((-1, 0, 0), 0), # -X (Intent down)
+            ((1, 0, 0), 1),  # +X (Intent up)
+            ((0, -1, 0), 2), # -Y (Context down)
+            ((0, 1, 0), 3),  # +Y (Context up)
+            ((0, 0, -1), 4), # -Z (Action down)
+            ((0, 0, 1), 5)   # +Z (Action up)
+        ]
+        neighbors = []
+        for (dx, dy, dz), face_idx in directions:
+            nx, ny, nz = x + dx, y + dy, z + dz
+            if 0 <= nx < self.size and 0 <= ny < self.size and 0 <= nz < self.size:
+                neighbors.append(((nx, ny, nz), face_idx))
+        return neighbors
+
+    def propagate_through_faces(self):
+        """Распространение сигнала строго через 6 граней соседних мини-кубиков"""
+        new_grid = self.grid.copy()
+        for x in range(self.size):
+            for y in range(self.size):
+                for z in range(self.size):
+                    current_coords = (x, y, z)
+                    current_val = self.grid[current_coords]
+                    if current_val == 0:
+                        continue
+                    
+                    neighbors = self.get_face_neighbors(current_coords)
+                    for n_coords, face_idx in neighbors:
+                        perm = self.permeability_grid[current_coords][face_idx]
+                        if perm > 0.1:
+                            neighbor_val = self.grid[n_coords]
+                            # Импульс затухает или усиливается через грань
+                            delta = int(np.sign(current_val) * (1 if abs(current_val) > 1 else 0))
+                            propagated = max(-2, min(2, neighbor_val + delta))
+                            new_grid[n_coords] = propagated
+        self.grid = new_grid
+
+    def calculate_cube_entropy(self) -> float:
+        total = self.grid.size
+        extremes = np.sum(np.abs(self.grid) >= 2)
+        return float(extremes / total)
+
+
+# ============================================================================
+# 3. MICRO-GRAPH & CHANNELS
+# ============================================================================
+
+class PentarNode:
+    def __init__(self, node_id: str):
+        self.node_id = node_id
+        self.internal_state = 0
+        self.mass = 0.0
+        self.decision = 0
+
+    def process_signals(self, sig_a: int, sig_b: int) -> int:
+        sig_a = max(-2, min(2, sig_a))
+        sig_b = max(-2, min(2, sig_b))
+        s_sum = sig_a + sig_b
+        conflict = abs(sig_a - sig_b)
+        
+        if conflict >= 3:
+            self.mass = conflict * 2.5
+            self.internal_state = 0
+        else:
+            self.mass = conflict * 0.5
+            self.internal_state = max(-2, min(2, s_sum))
+        self.decision = self.internal_state
+        return self.internal_state
+
+
+class PentarEdge:
+    def __init__(self, source: PentarNode, target: PentarNode):
+        self.source = source
+        self.target = target
+        self.energy_flow = 1.0
+        self.temp = 1.0
+
+    def update_dynamics(self):
+        dec_sum = self.source.decision + self.target.decision
+        mass_sum = self.source.mass + self.target.mass
+        old_temp = self.temp
+        self.temp = max(0.05, 1.0 + (dec_sum * 0.25) - (mass_sum * 0.2))
+        if self.source.decision == -2 or self.target.decision == -2:
+            self.energy_flow = 0.0
+        else:
+            self.energy_flow = (self.temp * 1.5) + (mass_sum * 0.5)
+
+
+class PentarUniverseGraph:
+    def __init__(self):
+        self.nodes: Dict[str, PentarNode] = {}
+        self.edges: List[PentarEdge] = []
+        self.time_step = 0
+
+    def add_node(self, name: str):
+        self.nodes[name] = PentarNode(name)
+
+    def add_edge(self, src: str, tgt: str):
+        self.edges.append(PentarEdge(self.nodes[src], self.nodes[tgt]))
+
+    def pulse(self):
+        self.time_step += 1
+        for name, node in self.nodes.items():
+            sigs = []
+            for edge in self.edges:
+                if edge.target == node:
+                    sigs.append(quantize_pentarny((edge.energy_flow - 1.5) / 1.5))
+                elif edge.source == node:
+                    sigs.append(quantize_pentarny(edge.energy_flow / 3.0 - 0.5))
+            if not sigs:
+                sigs = [random.choice([-2, -1, 0, 1, 2])]
+            node.process_signals(int(sigs[0]), int(sigs[-1]))
+        for edge in self.edges:
+            edge.update_dynamics()
+
+
+# ============================================================================
+# 4. DYNAMIC PLANE MEMBRANE (3 ATTRACTORS IN 3D CUBE)
+# ============================================================================
+
+class ConflictAttractorPoint:
+    def __init__(self, name: str, initial_coords: Tuple[int, int, int], cube_size: int):
+        self.name = name
+        self.coords = list(initial_coords)
+        self.cube_size = cube_size
+
+    def drift(self, tensor_grid: np.ndarray):
+        best = list(self.coords)
+        max_tension = -1.0
+        for d in range(3):
+            for delta in [-1, 1]:
+                test_c = list(self.coords)
+                test_c[d] += delta
+                if all(0 <= test_c[i] < self.cube_size for i in range(3)):
+                    tension = abs(tensor_grid[tuple(test_c)])
+                    if tension > max_tension:
+                        max_tension = tension
+                        best = test_c
+        self.coords = best
+
+
+class DynamicPlaneMembrane3D:
+    """
+    Трехточечная плоскость-мембрана, разрезающая куб 5x5x5 изнутри
+    и блокирующая/модифицирующая пропускную способность граней мини-кубиков.
+    """
+    def __init__(self, cube_size: int = 5):
+        self.cube_size = cube_size
+        self.v1 = ConflictAttractorPoint("Vertex-A", (0, 0, 2), cube_size)
+        self.v2 = ConflictAttractorPoint("Vertex-B", (4, 4, 2), cube_size)
+        self.v3 = ConflictAttractorPoint("Vertex-C", (2, 4, 0), cube_size)
+
+    def update_membrane(self, tensor_grid: np.ndarray):
+        self.v1.drift(tensor_grid)
+        self.v2.drift(tensor_grid)
+        self.v3.drift(tensor_grid)
+
+    def apply_barrier_to_cube(self, tensor_cube: TensorCube5x5x5):
+        # Вершины мембраны инжектируют крайние состояния в куб
+        tensor_cube.set_cell(tuple(self.v1.coords), 2)
+        tensor_cube.set_cell(tuple(self.v2.coords), 0)
+        tensor_cube.set_cell(tuple(self.v3.coords), -2)
+
+        # Перекрытие граней для ячеек на пути мембраны
+        for v in [self.v1.coords, self.v2.coords, self.v3.coords]:
+            for face_idx in range(6):
+                tensor_cube.permeability_grid[tuple(v)][face_idx] = 0.2 # Замедление потока через барьер
+
+
+# ============================================================================
+# 5. BXOS GATES & ORCHESTRATOR
+# ============================================================================
+
+class GateStatus(Enum):
+    READY = "ready_for_simulation"
+    LOCKED = "locked_critical"
+
+
+@dataclass
+class GateResult:
+    status: GateStatus
+    reason: str
+    timestamp: float
+
+
+class BXOSGate:
+    def __init__(self, critical_states=(-2, -1)):
+        self.critical_states = set(critical_states)
+        self.log: List[GateResult] = []
+
+    def check(self, entropy: float, divergence: float) -> GateResult:
+        if entropy > 0.6 or divergence > 15.0:
+            status = GateStatus.LOCKED
+            reason = f"Критическая энтропия ({entropy:.2f}) или дивергенция ({divergence:.2f})"
+        else:
+            status = GateStatus.READY
+            reason = "Контур стабилен, пропуск разрешен"
+        res = GateResult(status=status, reason=reason, timestamp=time.time())
+        self.log.append(res)
+        return res
+
+
+class FullHarmonyCubePipeline:
+    def __init__(self, cube_size: int = 5):
+        self.cube_size = cube_size
+        self.tensor_cube = TensorCube5x5x5(cube_size)
+        self.graph = PentarUniverseGraph()
+        self.membrane = DynamicPlaneMembrane3D(cube_size)
+        self.gate = BXOSGate()
+        self.node_mapping: Dict[str, Tuple[int, int, int]] = {}
+
+    def register_node(self, name: str, coords: Tuple[int, int, int]):
+        self.graph.add_node(name)
+        self.node_mapping[name] = coords
+
+    def add_edge(self, src: str, tgt: str):
+        self.graph.add_edge(src, tgt)
+
+    def step(self) -> Dict[str, Any]:
+        # 1. Шаг графа
+        self.graph.pulse()
+
+        # 2. Инъекция решений графа в куб 5x5x5 через грани
+        for name, coords in self.node_mapping.items():
+            node = self.graph.nodes[name]
+            self.tensor_cube.set_cell(coords, node.decision)
+
+        # 3. Распространение сигнала через 6 граней-портов кубиков
+        self.tensor_cube.propagate_through_faces()
+
+        # 4. Обновление деформирующейся плоскости-мембраны
+        self.membrane.update_membrane(self.tensor_cube.grid)
+        self.membrane.apply_barrier_to_cube(self.tensor_cube)
+
+        # 5. Проверка гейтом BXOS
+        entropy = self.tensor_cube.calculate_cube_entropy()
+        divergence = float(np.sum(np.abs(np.gradient(self.tensor_cube.grid.astype(float)))))
+        gate_res = self.gate.check(entropy, divergence)
+
+        return {
+            'step': self.graph.time_step,
+            'entropy': entropy,
+            'divergence': divergence,
+            'gate': gate_res,
+            'membrane_vertices': (self.membrane.v1.coords, self.membrane.v2.coords, self.membrane.v3.coords)
+        }
+
+
+# ============================================================================
+# 6. BENCHMARKS & CLI
+# ============================================================================
+
+def run_benchmark():
+    print("=" * 70)
+    print("HARMONY3 / BXOS — 3D CUBE 5x5x5 BENCHMARK")
+    print("=" * 70)
+    N = 2000
+    pipeline = FullHarmonyCubePipeline(5)
+    pipeline.register_node("Alpha", (1, 1, 2))
+    pipeline.register_node("Beta", (3, 3, 2))
+    pipeline.add_edge("Alpha", "Beta")
+
+    t0 = time.perf_counter()
+    for _ in range(N):
+        pipeline.step()
+    elapsed = time.perf_counter() - t0
+
+    print(f"Выполнено {N:,} тактов трехмерного куба за {elapsed:.4f} сек.")
+    print(f"Среднее время такта: {elapsed/N*1e6:.2f} мкс/такт.")
+    print("=" * 70)
+
+
+if __name__ == "__main__":
+    if "--readme" in sys.argv:
+        print(__doc__)
+        sys.exit(0)
+    elif "--benchmark" in sys.argv:
+        run_benchmark()
+        sys.exit(0)
+
+    print("=" * 70)
+    print("🧠 HARMONY3 / BXOS — 3D TENSOR CUBE (5x5x5) DEMO")
+    print("👤 Автор / Author: Заводюк Владимир (Vladimir Zavodiuk)")
+    print("=" * 70)
+
+    pipe = FullHarmonyCubePipeline(5)
+    pipe.register_node("Intent-Node", (1, 2, 2))   # Axis X/Y
+    pipe.register_node("Context-Node", (3, 2, 2))  # Axis Y/Z
+    pipe.add_edge("Intent-Node", "Context-Node")
+
+    for i in range(3):
+        res = pipe.step()
+        print(f"\n--- ТАКТ {res['step']} ---")
+        print(f"  Энтропия куба 5x5x5 : {res['entropy']:.4f}")
+        print(f"  Дивергенция граней   : {res['divergence']:.2f}")
+        print(f"  Статус гейта BXOS    : {res['gate'].status.value} ({res['gate'].reason})")
+        print(f"  Вершины мембраны     : A={res['membrane_vertices'][0]}, B={res['membrane_vertices'][1]}, C={res['membrane_vertices'][2]}")
+
+    print("\n" + "=" * 70)
+    print("💡 Подсказка: запустите бенчмарк командой: python harmony_cube_v18.py --benchmark")
+    print("📖 Справка (--readme) доступна через: python harmony_cube_v18.py --readme")
+    print("✅ Демонстрация успешно завершена.")
+    print("=" * 70)
+    
