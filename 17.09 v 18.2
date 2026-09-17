@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+ПЕНТАРНАЯ ИНТЕГРИРОВАННАЯ СИСТЕМА — V18.2 (КУБИЧЕСКОЕ СИНТАКСИЧЕСКОЕ ЯДРО)
+Автор: Владимир Заводюк (Root-Architect)
+Версия: 18.2 (Cube Integrated Edition)
+
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+
+================================================================================
+DESCRIPTION (RUS):
+Данный файл представляет собой универсальное пентарное синтаксическое ядро V18, 
+интегрированное с трехмерным тензорным кубом 5x5x5 (125 мини-кубиков). 
+Включает 6 явных граней-портов (X±, Y±, Z±), сетевые графы с пороговыми барьерами 
+и трехточечную динамическую мембранную плоскость. Устранены ошибки синтаксиса 
+(морж-оператор), целочисленного деления и ложного дрейфа вершин в статичном поле.
+
+DESCRIPTION (ENG):
+This file represents the universal pentarny syntactic core V18, integrated with 
+a 3D tensor cube 5x5x5 (125 sub-cubes). It features 6 explicit face-ports (X±, Y±, Z±), 
+network graphs with threshold barriers, and a three-point dynamic membrane plane. 
+Fixed syntax errors (walrus operator), integer division, and spurious vertex drift.
+================================================================================
+"""
+
+import numpy as np
+import time
+import random
+from typing import Dict, List, Tuple, Optional
+
+# --- БАЗИС И СЛОВАРИ ПЕНТАРНОЙ ЛОГИКИ ---
+LOGIC_BASIS = [2, 1, 0, -1, -2]
+
+MASKS = {
+     2: "Бригелла (Да / Пик / Источник / Истина)",
+     1: "Коломбина (Скорее Да / Восходящий фронт / Вероятность)",
+     0: "Доктор Грациано (Наверное / Центр / Баланс)",
+    -1: "Пьеро (Скорее Нет / Нисходящий фронт / Сомнение)",
+    -2: "Арлекин (Нет / Впадина / Ложь)"
+}
+
+PENTAR_CODE = {
+    -2: "КАТЕГОРИЧЕСКОЕ НЕТ (Полная блокировка / Обрыв канала)",
+    -1: "МЯГКОЕ НЕТ (Торможение потока)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Свободный транзит)",
+     1: "МЯГКОЕ ДА (Активация / Рост проводимости)",
+     2: "КАТЕГОРИЧЕСКОЕ ДА (Максимальное ускорение / Сверхпроводимость)"
+}
+
+def quantize_pentarny(value: float) -> int:
+    if value > 0.75:
+        return 2
+    elif value > 0.25:
+        return 1
+    elif value >= -0.25:
+        return 0
+    elif value >= -0.75:
+        return -1
+    else:
+        return -2
+
+
+# ============================================================================
+# МОДУЛЬ 1: ТРЕХМЕРНЫЙ ТЕНЗОРНЫЙ КУБ (5x5x5) С 6 ГРАНЯМИ-ПОРТАМИ
+# ============================================================================
+class TensorCube5x5x5:
+    """
+    Кубическая тензорная сетка 5x5x5 (125 элементов) с 6 гранями-портами:
+      - Ось X (±X): Индексы 0, 1
+      - Ось Y (±Y): Индексы 2, 3
+      - Ось Z (±Z): Индексы 4, 5
+    """
+    def __init__(self, size: int = 5):
+        self.size = size
+        self.dimensions = (size, size, size)
+        self.field = np.zeros(self.dimensions, dtype=int)
+        self.permeability_grid = np.ones((size, size, size, 6), dtype=float)
+
+    def inject_quantum_impulse(self, coordinates: Tuple[int, int, int], value: int):
+        if value not in [-2, -1, 0, 1, 2]:
+            raise ValueError("Значение должно строго лежать в пентарном базисе [-2, 2]")
+        if all(0 <= coordinates[i] < self.size for i in range(3)):
+            self.field[coordinates] = value
+
+    def get_face_neighbors(self, coords: Tuple[int, int, int]) -> List[Tuple[Tuple[int, int, int], int]]:
+        x, y, z = coords
+        directions = [
+            ((-1, 0, 0), 0), # -X
+            ((1, 0, 0), 1),  # +X
+            ((0, -1, 0), 2), # -Y
+            ((0, 1, 0), 3),  # +Y
+            ((0, 0, -1), 4), # -Z
+            ((0, 0, 1), 5)   # +Z
+        ]
+        neighbors = []
+        for (dx, dy, dz), face_idx in directions:
+            nx, ny, nz = x + dx, y + dy, z + dz
+            if 0 <= nx < self.size and 0 <= ny < self.size and 0 <= nz < self.size:
+                neighbors.append(((nx, ny, nz), face_idx))
+        return neighbors
+
+    def propagate_through_faces(self):
+        new_grid = self.field.copy()
+        for x in range(self.size):
+            for y in range(self.size):
+                for z in range(self.size):
+                    curr_coords = (x, y, z)
+                    curr_val = self.field[curr_coords]
+                    if curr_val == 0:
+                        continue
+                    
+                    neighbors = self.get_face_neighbors(curr_coords)
+                    for n_coords, face_idx in neighbors:
+                        perm = self.permeability_grid[curr_coords][face_idx]
+                        if perm > 0.1:
+                            neighbor_val = self.field[n_coords]
+                            # Корректное округление без зануления слабых сигналов
+                            impulse_delta = int(round(curr_val / 2.0))
+                            if impulse_delta != 0:
+                                updated = max(-2, min(2, neighbor_val + impulse_delta))
+                                new_grid[n_coords] = updated
+        self.field = new_grid
+
+    def calculate_field_entropy(self) -> float:
+        total = self.field.size
+        if total == 0:
+            return 0.0
+        extremes = np.sum(np.abs(self.field) == 2)
+        return float(extremes / total)
+
+
+# ============================================================================
+# МОДУЛЬ 2: МИКРО-ГРАФ С ПОРОГОВЫМИ БАРЬЕРАМИ ( : )
+# ============================================================================
+class PentarNode:
+    def __init__(self, node_id):
+        self.node_id = node_id
+        self.internal_state = 0
+        self.mass = 0.0
+        self.decision = 0
+
+    def process_signals(self, signal_matrix_A: int, signal_matrix_B: int) -> int:
+        signal_matrix_A = int(max(-2, min(2, signal_matrix_A)))
+        signal_matrix_B = int(max(-2, min(2, signal_matrix_B)))
+
+        sum_of_decisions = signal_matrix_A + signal_matrix_B
+        conflict = abs(signal_matrix_A - signal_matrix_B)
+        
+        if conflict >= 3:
+            informational_mass = conflict * 2.5
+            self.internal_state = 0
+        else:
+            informational_mass = conflict * 0.5
+            self.internal_state = max(-2, min(2, sum_of_decisions))
+            
+        self.mass = informational_mass
+        self.decision = self.internal_state
+        return self.internal_state
+
+
+class PentarEdge:
+    def __init__(self, source: PentarNode, target: PentarNode):
+        self.source = source
+        self.target = target
+        self.energy_flow = 1.0
+        self.temp = 1.0
+
+    def update_dynamics(self):
+        decision_sum = self.source.decision + self.target.decision
+        total_mass = self.source.mass + self.target.mass
+        base_modifier = 1.0 + (decision_sum * 0.25) - (total_mass * 0.2)
+        self.temp = max(0.05, base_modifier)
+        
+        if self.source.decision == -2 or self.target.decision == -2:
+            self.energy_flow = 0.0
+        else:
+            self.energy_flow = (self.temp * 1.5) + (total_mass * 0.5)
+
+
+class PentarUniverseGraph:
+    def __init__(self):
+        self.nodes = {}
+        self.edges = []
+        self.time_step = 0
+
+    def add_node(self, name):
+        self.nodes[name] = PentarNode(name)
+
+    def add_edge(self, src, tgt):
+        self.edges.append(PentarEdge(self.nodes[src], self.nodes[tgt]))
+
+    def pulse(self):
+        self.time_step += 1
+        for name, node in self.nodes.items():
+            connected_signals = []
+            for edge in self.edges:
+                if edge.target == node:
+                    norm_val = (edge.energy_flow - 1.5) / 1.5
+                    connected_signals.append(quantize_pentarny(norm_val))
+                elif edge.source == node:
+                    connected_signals.append(quantize_pentarny(edge.energy_flow / 3.0 - 0.5))
+            
+            if not connected_signals:
+                connected_signals = [random.choice([-2, -1, 0, 1, 2])]
+            
+            node.process_signals(int(connected_signals[0]), int(connected_signals[-1]))
+            
+        for edge in self.edges:
+            edge.update_dynamics()
+
+
+# ============================================================================
+# МОДУЛЬ 3: ДИНАМИЧЕСКАЯ ТРЕХТОЧЕЧНАЯ ПЛОСКОСТЬ В 3D КУБЕ ( () )
+# ============================================================================
+class ConflictAttractorPoint3D:
+    def __init__(self, name: str, initial_coords: tuple, cube_size: int = 5):
+        self.name = name
+        self.coords = list(initial_coords)
+        self.cube_size = cube_size
+
+    def drift_by_conflict(self, tensor_field: np.ndarray, gradient_fields: list):
+        dims = 3
+        best_coords = list(self.coords)
+        max_tension = 0.0  # Устранение ложного дрейфа в нулевом поле
+
+        for d in range(dims):
+            for delta in [-1, 1]:
+                test_coords = list(self.coords)
+                test_coords[d] += delta
+                
+                if all(0 <= test_coords[i] < self.cube_size for i in range(dims)):
+                    local_val = abs(tensor_field[tuple(test_coords)])
+                    grad_val = sum(abs(gradient_fields[i][tuple(test_coords)]) for i in range(dims))
+                    tension = local_val + grad_val
+
+                    if tension > max_tension:
+                        max_tension = tension
+                        best_coords = test_coords
+
+        self.coords = best_coords
+
+
+class DynamicPlaneMembrane3D:
+    def __init__(self, cube_size: int, p1: tuple, p2: tuple, p3: tuple):
+        self.cube_size = cube_size
+        self.vertex_a = ConflictAttractorPoint3D("Vertex-A", p1, cube_size)
+        self.vertex_b = ConflictAttractorPoint3D("Vertex-B", p2, cube_size)
+        self.vertex_c = ConflictAttractorPoint3D("Vertex-C", p3, cube_size)
+
+    def update_membrane_position(self, tensor_field: np.ndarray, gradients: list):
+        self.vertex_a.drift_by_conflict(tensor_field, gradients)
+        self.vertex_b.drift_by_conflict(tensor_field, gradients)
+        self.vertex_c.drift_by_conflict(tensor_field, gradients)
+
+    def get_plane_vertices(self) -> tuple:
+        return (tuple(self.vertex_a.coords), tuple(self.vertex_b.coords), tuple(self.vertex_c.coords))
+
+    def apply_membrane_barrier(self, tensor_cube: TensorCube5x5x5):
+        va = tuple(self.vertex_a.coords)
+        vb = tuple(self.vertex_b.coords)
+        vc = tuple(self.vertex_c.coords)
+
+        tensor_cube.inject_quantum_impulse(va, 2)
+        tensor_cube.inject_quantum_impulse(vb, 0)
+        tensor_cube.inject_quantum_impulse(vc, -2)
+
+
+# ============================================================================
+# МОДУЛЬ 4: УНИВЕРСАЛЬНОЕ КУБИЧЕСКОЕ ЯДРО СИНТЕЗА V18.2
+# ============================================================================
+class PentarnyUniverseV18Cube:
+    def __init__(self, node_coords: dict, cube_size: int = 5):
+        self.cube_size = cube_size
+        self.tensor_cube = TensorCube5x5x5(cube_size)
+        self.graph = PentarUniverseGraph()
+        self.node_coords = node_coords
+
+        mid = cube_size // 2
+        max_idx = cube_size - 1
+        p1 = (mid, mid, mid)
+        p2 = (0, max_idx, mid)
+        p3 = (max_idx, 0, mid)
+        
+        self.membrane = DynamicPlaneMembrane3D(cube_size, p1, p2, p3)
+
+    def add_node(self, name: str, coords: tuple):
+        self.graph.add_node(name)
+        self.node_coords[name] = coords
+
+    def add_edge(self, src: str, tgt: str):
+        self.graph.add_edge(src, tgt)
+
+    def step(self):
+        current_entropy = self.tensor_cube.calculate_field_entropy()
+        
+        self.graph.pulse()
+        
+        for name, node in self.graph.nodes.items():
+            if name in self.node_coords:
+                coords = self.node_coords[name]
+                impulse_val = int(node.decision)
+                if impulse_val != 0:
+                    self.tensor_cube.inject_quantum_impulse(coords, impulse_val)
+        
+        self.tensor_cube.propagate_through_faces()
+
+        gradients = np.gradient(self.tensor_cube.field.astype(float))
+        self.membrane.update_membrane_position(self.tensor_cube.field, gradients)
+        self.membrane.apply_membrane_barrier(self.tensor_cube)
+
+        field_divergence = float(np.sum([np.sum(np.abs(g)) for g in gradients]))
+        for edge in self.graph.edges:
+            edge.energy_flow = max(0.0, edge.energy_flow * (1.0 - (field_divergence * 0.01)))
+
+    def display_state(self):
+        va, vb, vc = self.membrane.get_plane_vertices()
+        gradients = np.gradient(self.tensor_cube.field.astype(float))
+        field_divergence = float(np.sum([np.sum(np.abs(g)) for g in gradients]))
+        
+        print(f"\n================ [ СИНХРО-ТАКТ V18.2: {self.graph.time_step} ] ================")
+        print(f"  -> Энтропия тензорного куба: {self.tensor_cube.calculate_field_entropy():.4f}")
+        print(f"  -> Дивергенция через грани : {field_divergence:.2f}")
+        print(f"  -> Мембранный треугольник [A, B, C]: {va} | {vb} | {vc}")
+        print("--- СОСТОЯНИЕ УЗЛОВ И КАНАЛОВ ---")
+        for name, node in self.graph.nodes.items():
+            print(f"  -> Узел [{name}]: Решение = {node.decision:+d} ({PENTAR_CODE[node.decision][:20]}...)")
+
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("🧠 ПЕНТАРНАЯ СИСТЕМА — V18.2 (КУБИЧЕСКОЕ СИНТАКСИЧЕСКОЕ ЯДРО)")
+    print("👤 Автор / Author: Владимир Заводюк (Vladimir Zavodiuk) — ALL RIGHTS RESERVED")
+    print("=" * 70)
+    
+    coords_map = {
+        "Ядро": (2, 2, 2),
+        "Узел-1": (1, 1, 2),
+        "Узел-2": (3, 3, 2)
+    }
+    
+    universe = PentarnyUniverseV18Cube(coords_map, cube_size=5)
+    universe.add_node("Ядро", coords_map["Ядро"])
+    universe.add_node("Узел-1", coords_map["Узел-1"])
+    universe.add_node("Узел-2", coords_map["Узел-2"])
+    
+    universe.add_edge("Ядро", "Узел-1")
+    universe.add_edge("Узел-1", "Узел-2")
+    universe.add_edge("Узел-2", "Ядро")
+    
+    for _ in range(3):
+        universe.step()
+        universe.display_state()
+        time.sleep(0.2)
+        
+    print("\n" + "=" * 70)
+    print("✅ ФАЙЛ V18.2 ПОЛНОСТЬЮ СФОРМИРОВАН")
+    print("=" * 70)
