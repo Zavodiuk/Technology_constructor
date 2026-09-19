@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# ==============================================================================
+# Harmony3 / BXOS: Unified Datacenter Node & Configuration Engine
+# All rights reserved
+# Vladimir Zavodiuk
+# ==============================================================================
+
+"""
+================================================================================
+КОНЦЕПТУАЛЬНОЕ ОПИСАНИЕ И ИНСТРУКЦИЯ ДАТА-ЦЕНТРА
+================================================================================
+Этот единый файл объединяет математический троично-пентарный контур, 
+высокоскоростной веб-сервис и конфигурации кластера.
+
+АРХИТЕКТУРА УЗЛА:
+  ВХОД -> [TernaryProcessor (L3)] -> [BrusentsovLogic] -> 
+          [PentaryMatrixEngine (Куб 5x5x5)] -> [BXOSGate] -> ВЫХОД / КЛАСТЕР
+
+АВТОМАТИЧЕСКАЯ ГЕНЕРАЦИЯ МАНИФЕСТОВ КЛАСТЕРА:
+  Запустите скрипт с флагом --generate-manifests, чтобы он автоматически 
+  создал Dockerfile, docker-compose.yml и nginx.conf в текущей директории.
+
+ЗАПУСК СЕРВИСА НА УЗЛЕ:
+  $ python harmony_datacenter_node.py
+================================================================================
+"""
+
+import sys
+import os
+import time
+import numpy as np
+from enum import Enum
+from dataclasses import dataclass
+from typing import Dict, Any, List, Optional, Tuple
+from collections import deque
+
+# Проверка зависимостей
+try:
+    from fastapi import FastAPI, HTTPException
+    from pydantic import BaseModel, Field
+    import uvicorn
+except ImportError:
+    print("[-] Ошибка: Требуются библиотеки FastAPI, Uvicorn и NumPy.")
+    print("    Установка: pip install fastapi uvicorn numpy")
+    sys.exit(1)
+
+
+# ============================================================
+# 1. TERNARY PROCESSOR (L3) & RASHOMON VECTOR ANALYSIS
+# ============================================================
+
+class TernaryProcessor:
+    """Оптимизированный троичный блок (L3) на NumPy без циклов."""
+    
+    @staticmethod
+    def analyze_interpretations(scores: np.ndarray, margin_threshold: float = 0.15, min_score: float = 0.3) -> Tuple[int, int, float]:
+        if scores.size == 0:
+            return -1, -1, 0.0
+            
+        if scores.size > 1:
+            top_2_idx = np.argpartition(scores, -2)[-2:]
+            top_2_idx = top_2_idx[np.argsort(scores[top_2_idx])[::-1]]
+            best_idx = top_2_idx[0]
+            margin = scores[best_idx] - scores[top_2_idx[1]]
+        else:
+            best_idx = 0
+            margin = scores[0]
+            
+        best_score = scores[best_idx]
+        
+        if best_score < min_score:
+            state = -1
+        elif margin >= margin_threshold:
+            state = 1
+        else:
+            state = 0
+            
+        return state, best_idx, margin
+
+
+# ============================================================
+# 2. BRUSENTSOV LOGIC & BROADCASTED TRAIT TABLE
+# ============================================================
+
+class BrusentsovLogic:
+    """Логика Брусенцова и динамические трайт-таблицы на NumPy (бродкастинг)."""
+    
+    def __init__(self, width: int = 3):
+        self.width = width
+        self.size = 3 ** width
+        steps = np.arange(self.size, dtype=np.int16)
+        
+        power_weights = 3 ** np.arange(width - 1, -1, -1)
+        trits_matrix = (steps[:, None] // power_weights) % 3 - 1
+        
+        min_trits = np.minimum(trits_matrix[:, None, :], trits_matrix[None, :, :])
+        encoded = np.sum((min_trits + 1) * power_weights, axis=-1)
+        self.trait_table = encoded
+
+    def fold_and_vector(self, trits: np.ndarray) -> int:
+        return int(np.min(trits))
+
+
+# ============================================================
+# 3. PENTARY CUBIC MATRIX ENGINE (L5 Tensor 5x5x5)
+# ============================================================
+
+class PentaryMatrixEngine:
+    """Пентарный блок и генерация кубических матриц 5x5x5 (Автор: Владимир Заводюк)."""
+    
+    LAYERS = ['intent', 'goal', 'ontology', 'context', 'action']
+    
+    @staticmethod
+    def build_cubic_matrix(l5_vector: np.ndarray) -> np.ndarray:
+        """Строит трехмерную кубическую матрицу 5x5x5 через тензорный бродкастинг."""
+        ternary_vector = np.sign(l5_vector).astype(np.int8)
+        v1 = ternary_vector[:, None, None]
+        v2 = ternary_vector[None, :, None]
+        v3 = ternary_vector[None, None, :]
+        return np.minimum(np.minimum(v1, v2), v3)
+
+
+# ============================================================
+# 4. BXOS GATE (SECURITY & TELEMETRY)
+# ============================================================
+
+class BXOSGate:
+    """Высокоскоростной предохранитель контура с микросекундной точностью."""
+    
+    def __init__(self, min_confidence: float = 0.4, critical_states: Tuple[int, ...] = (-2, -1), max_log: int = 1000):
+        self.min_confidence = min_confidence
+        self.critical_states = set(critical_states)
+        self.log: deque = deque(maxlen=max_log)
+
+    def verify_input_shape(self, data: np.ndarray, expected_dim: int):
+        if data.ndim != expected_dim:
+            raise ValueError(f"Критическая ошибка размерности! Ожидалось осей: {expected_dim}, получено: {data.ndim}")
+
+    def check_output(self, pentary_value: int, confidence: float) -> str:
+        timestamp = time.perf_counter()
+        if pentary_value in self.critical_states or confidence < self.min_confidence:
+            status = "LOCKED"
+        else:
+            status = "READY"
+        self.log.append({"status": status, "ts": timestamp})
+        return status
+
+    def summary(self) -> Dict[str, Any]:
+        locked = sum(1 for r in self.log if r["status"] == "LOCKED")
+        ready = len(self.log) - locked
+        return {'total': len(self.log), 'ready': ready, 'locked': locked}
+
+
+# ============================================================
+# 5. BXOS PIPELINE ORCHESTRATOR
+# ============================================================
+
+class BXOSPipeline:
+    """Сквозной оркестратор троично-пентарных вычислений узла."""
+    
+    def __init__(self):
+        self.ternary = TernaryProcessor()
+        self.brusentsov = BrusentsovLogic(width=3)
+        self.matrix_engine = PentaryMatrixEngine()
+        self.gate = BXOSGate()
+
+    def run(self, interpretations_scores: list, l5_values_list: list) -> dict:
+        scores = np.array(interpretations_scores, dtype=np.float64)
+        l5_vector = np.array(l5_values_list, dtype=np.int8)
+        
+        self.gate.verify_input_shape(scores, expected_dim=1)
+        self.gate.verify_input_shape(l5_vector, expected_dim=1)
+        if l5_vector.size != 5:
+            raise ValueError("Пентарный вектор L5 должен содержать ровно 5 элементов.")
+
+        state, best_idx, margin = self.ternary.analyze_interpretations(scores)
+        if state == -1:
+            return {"status": "LOCKED_INPUT", "matrix_l5": None, "confidence": 0.0, "best_candidate_idx": -1}
+
+        feature_trits = np.array([state, 1 if scores[best_idx] > 0.5 else 0, 1], dtype=np.int8)
+        consolidated_trit = self.brusentsov.fold_and_vector(feature_trits)
+        
+        confidence = { -1: 0.3, 0: 0.55, 1: 0.85 }[consolidated_trit]
+        matrix_5x5x5 = self.matrix_engine.build_cubic_matrix(l5_vector)
+
+        gate_status = self.gate.check_output(pentary_value=int(l5_vector[0]), confidence=confidence)
+
+        return {
+            "status": "OK" if gate_status == "READY" else "LOCKED_OUTPUT",
+            "best_candidate_idx": best_idx,
+            "confidence": confidence,
+            "matrix_l5": matrix_5x5x5
+        }
+
+
+# ============================================================
+# 6. FASTAPI DATACENTER NODE API
+# ============================================================
+
+app = FastAPI(
+    title="Harmony3 / BXOS Datacenter Node",
+    description="Универсальный узел дата-центра: троичная логика Брусенцова и кубические тензоры 5x5x5",
+    version="1.0.0"
+)
+
+node_pipeline = BXOSPipeline()
+
+class NodePayload(BaseModel):
+    interpretations_scores: List[float] = Field(..., example=[0.85, 0.62, 0.41, 0.15, 0.05])
+    l5_values_list: List[int] = Field(..., example=[1, 0, -1, 2, -2])
+
+
+@app.get("/")
+def node_status():
+    return {
+        "author": "Vladimir Zavodiuk",
+        "rights": "All rights reserved",
+        "node_status": "active",
+        "telemetry": node_pipeline.gate.summary()
+    }
+
+
+@app.post("/compute-cube")
+def compute_cube(payload: NodePayload):
+    """Главный эндпоинт дата-центра для расчета кубического тензора 5x5x5."""
+    try:
+        res = node_pipeline.run(payload.interpretations_scores, payload.l5_values_list)
+        matrix_list = res["matrix_l5"].tolist() if res["matrix_l5"] is not None else None
+        return {
+            "status": res["status"],
+            "best_candidate_idx": res["best_candidate_idx"],
+            "confidence": res["confidence"],
+            "matrix_shape": [5, 5, 5] if matrix_list else None,
+            "cubic_matrix_5x5x5": matrix_list
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ============================================================
+# 7. EMBEDDED MANIFEST GENERATOR (Docker / Nginx / Compose)
+# ============================================================
+
+def generate_cluster_manifests():
+    """Автоматически разворачивает конфигурации кластера дата-центра на диске."""
+    print("[*] Генерация конфигурационных файлов кластера...")
+    
+    dockerfile_content = """# Harmony3 / BXOS Datacenter Worker
+# All rights reserved - Vladimir Zavodiuk
+FROM python:3.10-slim
+WORKDIR /app
+RUN pip install --no-cache-dir numpy fastapi uvicorn pydantic
+COPY harmony_datacenter_node.py .
+EXPOSE 8000
+CMD ["python", "harmony_datacenter_node.py", "--serve"]
+"""
+    
+    compose_content = """# Harmony3 / BXOS Datacenter Cluster Orchestration
+# All rights reserved - Vladimir Zavodiuk
+version: '3.8'
+services:
+  load_balancer:
+    image: nginx:alpine
+    container_name: bxos_cluster_gateway
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - node_1
+      - node_2
+  node_1:
+    build: .
+    environment:
+      - NODE_ID=1
+  node_2:
+    build: .
+    environment:
+      - NODE_ID=2
+"""
+
+    nginx_content = """# Harmony3 / BXOS Nginx Load Balancer
+# All rights reserved - Vladimir Zavodiuk
+events { worker_connections 1024; }
+http {
+    upstream bxos_cluster {
+        server node_1:8000;
+        server node_2:8000;
+    }
+    server {
+        listen 80;
+        location / {
+            proxy_pass http://bxos_cluster;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+    }
+}
+"""
+
+    with open("Dockerfile", "w", encoding="utf-8") as f:
+        f.write(dockerfile_content)
+    with open("docker-compose.yml", "w", encoding="utf-8") as f:
+        f.write(compose_content)
+    with open("nginx.conf", "w", encoding="utf-8") as f:
+        f.write(nginx_content)
+        
+    print("[+] Манифесты успешно созданы: Dockerfile, docker-compose.yml, nginx.conf")
+
+
+# ============================================================
+# MAIN ENTRY POINT
+# ============================================================
+
+if __name__ == "__main__":
+    if "--generate-manifests" in sys.argv:
+        generate_cluster_manifests()
+        sys.exit(0)
+
+    print("=" * 70)
+    print("ХАРМОНИЯ3 / BXOS — ЗАПУСК УЗЛА ДАТА-ЦЕНТРА (Vladimir Zavodiuk)")
+    print("=" * 70)
+    print("💡 Подсказка: для генерации файлов кластера запустите:")
+    print("   python harmony_datacenter_node.py --generate-manifests")
+    print("=" * 70)
+    
+    # Запуск локального узла на порту 8000
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
