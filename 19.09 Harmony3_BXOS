@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved
+# Vladimir Zavodiuk
+
+"""
+================================================================================
+Harmony3 / BXOS: Monolithic NumPy-Powered Deterministic Pipeline & Benchmarks
+================================================================================
+
+**Архитектура пайплайна:**
+  ВХОД -> [TernaryProcessor (L3)] -> [BrusentsovLogic (Трайт-таблица)] ->
+          [PentaryMatrixEngine (L5)] -> [BXOSGate (Контроль)] -> ВЫХОД
+
+Этот скрипт объединяет векторные ядра NumPy, механизмы безопасности BXOS, 
+а также встроенные бенчмарки в единый автономный контур.
+
+### Аргументы командной строки:
+  $ python harmony_pipeline.py              # Запуск стандартной демо-раскадровки
+  $ python harmony_pipeline.py --readme     # Вывод встроенной документации (README)
+  $ python harmony_pipeline.py --benchmark  # Запуск энду-ту-энд бенчмарка (5000 итераций)
+================================================================================
+"""
+
+import sys
+import time
+import numpy as np
+from enum import Enum
+from dataclasses import dataclass
+from typing import Dict, Any, List, Optional, Tuple
+from collections import deque
+
+
+# ============================================================
+# 1. TERNARY PROCESSOR (L3) & RASHOMON VECTOR ANALYSIS
+# ============================================================
+
+class TernaryProcessor:
+    """Оптимизированный троичный блок (L3) на NumPy без циклов."""
+    
+    @staticmethod
+    def analyze_interpretations(scores: np.ndarray, margin_threshold: float = 0.15, min_score: float = 0.3) -> Tuple[int, int, float]:
+        if scores.size == 0:
+            return -1, -1, 0.0
+            
+        if scores.size > 1:
+            top_2_idx = np.argpartition(scores, -2)[-2:]
+            top_2_idx = top_2_idx[np.argsort(scores[top_2_idx])[::-1]]
+            best_idx = top_2_idx[0]
+            margin = scores[best_idx] - scores[top_2_idx[1]]
+        else:
+            best_idx = 0
+            margin = scores[0]
+            
+        best_score = scores[best_idx]
+        
+        if best_score < min_score:
+            state = -1
+        elif margin >= margin_threshold:
+            state = 1
+        else:
+            state = 0
+            
+        return state, best_idx, margin
+
+
+# ============================================================
+# 2. BRUSENTSOV LOGIC & BROADCASTED TRAIT TABLE
+# ============================================================
+
+class BrusentsovLogic:
+    """Логика Брусенцова и динамические трайт-таблицы на NumPy (бродкастинг)."""
+    
+    def __init__(self, width: int = 3):
+        self.width = width
+        self.size = 3 ** width
+        steps = np.arange(self.size, dtype=np.int16)
+        
+        power_weights = 3 ** np.arange(width - 1, -1, -1)
+        trits_matrix = (steps[:, None] // power_weights) % 3 - 1
+        
+        min_trits = np.minimum(trits_matrix[:, None, :], trits_matrix[None, :, :])
+        encoded = np.sum((min_trits + 1) * power_weights, axis=-1)
+        self.trait_table = encoded
+
+    def fold_and_vector(self, trits: np.ndarray) -> int:
+        """Безопасная и точная свертка вектора тритов."""
+        return int(np.min(trits))
+
+
+# ============================================================
+# 3. PENTARY MATRIX ENGINE (L5)
+# ============================================================
+
+class PentaryMatrixEngine:
+    """Пентарный блок (L5) и иммутабельные троичные матрицы 5x5."""
+    
+    LAYERS = ['intent', 'goal', 'ontology', 'context', 'action']
+    
+    @staticmethod
+    def build_diagonal_matrix(l5_vector: np.ndarray) -> np.ndarray:
+        """Переводит пентарные состояния (-2..2) в триты и строит диагональную матрицу."""
+        ternary_vector = np.sign(l5_vector).astype(np.int8)
+        return np.diag(ternary_vector)
+
+
+# ============================================================
+# 4. BXOS GATE (SECURITY & TELEMETRY)
+# ============================================================
+
+class BXOSGate:
+    """Высокоскоростной предохранитель контура вычислений с микросекундной точностью."""
+    
+    def __init__(self, min_confidence: float = 0.4, critical_states: Tuple[int, ...] = (-2, -1), max_log: int = 1000):
+        self.min_confidence = min_confidence
+        self.critical_states = set(critical_states)
+        self.log: deque = deque(maxlen=max_log)
+
+    def verify_input_shape(self, data: np.ndarray, expected_dim: int):
+        """Строгая проверка осей NumPy перед расчетом."""
+        if data.ndim != expected_dim:
+            raise ValueError(f"Критическая ошибка размерности! Ожидалось осей: {expected_dim}, получено: {data.ndim}")
+
+    def check_output(self, pentary_value: int, confidence: float) -> str:
+        timestamp = time.perf_counter()
+        
+        if pentary_value in self.critical_states or confidence < self.min_confidence:
+            status = "LOCKED"
+        else:
+            status = "READY"
+            
+        self.log.append({"status": status, "ts": timestamp})
+        return status
+
+    def summary(self) -> Dict[str, Any]:
+        locked = sum(1 for r in self.log if r["status"] == "LOCKED")
+        ready = len(self.log) - locked
+        return {'total': len(self.log), 'ready': ready, 'locked': locked}
+
+
+# ============================================================
+# 5. BXOS PIPELINE ORCHESTRATOR
+# ============================================================
+
+class BXOSPipeline:
+    """Сквозной оркестратор троично-пентарных вычислений."""
+    
+    def __init__(self):
+        self.ternary = TernaryProcessor()
+        self.brusentsov = BrusentsovLogic(width=3)
+        self.matrix_engine = PentaryMatrixEngine()
+        self.gate = BXOSGate()
+
+    def run(self, interpretations_scores: list, l5_values_list: list) -> dict:
+        scores = np.array(interpretations_scores, dtype=np.float64)
+        l5_vector = np.array(l5_values_list, dtype=np.int8)
+        
+        self.gate.verify_input_shape(scores, expected_dim=1)
+        self.gate.verify_input_shape(l5_vector, expected_dim=1)
+        if l5_vector.size != 5:
+            raise ValueError("Пентарный вектор L5 должен содержать ровно 5 элементов.")
+
+        state, best_idx, margin = self.ternary.analyze_interpretations(scores)
+        if state == -1:
+            return {"status": "LOCKED_INPUT", "matrix": None, "confidence": 0.0, "best_candidate_idx": -1}
+
+        feature_trits = np.array([state, 1 if scores[best_idx] > 0.5 else 0, 1], dtype=np.int8)
+        consolidated_trit = self.brusentsov.fold_and_vector(feature_trits)
+        
+        confidence = { -1: 0.3, 0: 0.55, 1: 0.85 }[consolidated_trit]
+        matrix_5x5 = self.matrix_engine.build_diagonal_matrix(l5_vector)
+
+        gate_status = self.gate.check_output(pentary_value=int(l5_vector[0]), confidence=confidence)
+
+        return {
+            "status": "OK" if gate_status == "READY" else "LOCKED_OUTPUT",
+            "best_candidate_idx": best_idx,
+            "confidence": confidence,
+            "matrix_l5": matrix_5x5
+        }
+
+
+# ============================================================
+# 6. EMBEDDED BENCHMARK SUITE (5000 ITERATIONS)
+# ============================================================
+
+def run_benchmark():
+    print("=" * 70)
+    print("HARMONY3 / BXOS — ВСТРОЕННЫЙ БЕНЧМАРК (5000 итераций)")
+    print("=" * 70)
+    
+    pipeline = BXOSPipeline()
+    
+    mock_scores = [0.85, 0.62, 0.41, 0.15, 0.05]
+    mock_l5_vector = [1, 0, -1, 2, -2]
+    
+    iterations = 5000
+    
+    # Прогрев (warm-up)
+    for _ in range(100):
+        pipeline.run(mock_scores, mock_l5_vector)
+        
+    start_time = time.perf_counter()
+    
+    for _ in range(iterations):
+        pipeline.run(mock_scores, mock_l5_vector)
+        
+    total_time = time.perf_counter() - start_time
+    avg_time_ms = (total_time / iterations) * 1000
+    ops_per_sec = iterations / total_time
+    
+    print(f"[+] Всего итераций: {iterations}")
+    print(f"[+] Общее время выполнения: {total_time:.4f} сек")
+    print(f"[+] Среднее время одного вызова: {avg_time_ms:.4f} мс")
+    print(f"[+] Пропускная способность: {ops_per_sec:,.2f} опер/сек")
+    print("=" * 70)
+
+
+# ============================================================
+# MAIN ENTRY POINT
+# ============================================================
+
+if __name__ == "__main__":
+    if "--readme" in sys.argv:
+        print(__doc__)
+        sys.exit(0)
+    elif "--benchmark" in sys.argv:
+        run_benchmark()
+        sys.exit(0)
+
+    print("=" * 70)
+    print("HARMONY3 / BXOS — МОНОЛИТНЫЙ ВЕКТОРНЫЙ ПАЙПЛАЙН (ДЕМО)")
+    print("=" * 70)
+
+    pipeline = BXOSPipeline()
+    res = pipeline.run(
+        interpretations_scores=[0.85, 0.62, 0.41, 0.15, 0.05],
+        l5_values_list=[1, 0, -1, 2, -2]
+    )
+
+    print(f"\n[Результат прогона]:")
+    print(f"  Статус контура:     {res['status']}")
+    print(f"  Лучший кандидат ID: {res['best_candidate_idx']}")
+    print(f"  Уверенность:        {res['confidence']:.2f}")
+    print(f"  Матрица L5 (5x5):\n{res['matrix_l5']}")
+    print(f"  Сводка гейта BXOS:  {pipeline.gate.summary()}")
+    
+    print("\n💡 Доступные флаги запуска:")
+    print("   python harmony_pipeline.py --benchmark  (Бенчмарк на 5000 итераций)")
+    print("   python harmony_pipeline.py --readme     (Справка)")
+    print("✅ Демонстрация успешно завершена")
