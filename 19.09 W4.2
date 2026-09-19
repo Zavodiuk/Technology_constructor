@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved
+# Vladimir Zavodiuk
+
+"""
+================================================================================
+W4 (19.09): ИСПРАВЛЕННЫЙ ПРОИЗВОДСТВЕННЫЙ КОНТУР (ИИ-АКСЕЛЕРАТОР)
+================================================================================
+Математические исправления:
+  1. Реализована строгая логика Лукасевича для пентарного домена (K=2):
+     penta_and(a, b) = max(-2, a + b - 2).
+  2. Разделены ветки Гёделя (min) и Лукасевича (аддитивное сужение).
+  3. Сохранены все ключевые компоненты: L3-триаж, L5-онтология, 
+     многоракурсный PentarnyRashomon и защитный BXOS-гейт.
+================================================================================
+"""
+
+import numpy as np
+from typing import Literal, Dict, Union, Sequence
+from dataclasses import dataclass
+
+
+class BXOSGate:
+    """Детерминированный входной/выходной фильтр критических состояний с нулевой задержкой."""
+    
+    @staticmethod
+    def guard(signal: np.ndarray) -> np.ndarray:
+        return np.clip(signal, -2.0, 2.0)
+
+
+class L3Triage:
+    """Блок быстрого триажа (Fast-Path): квантование сигналов на три уровня {-1, 0, 1}."""
+    
+    @staticmethod
+    def process(value: float, low: float = 0.3, high: float = 0.7) -> int:
+        if value >= high:
+            return 1
+        if value <= low:
+            return -1
+        return 0
+
+    @staticmethod
+    def process_vector(arr: np.ndarray, low: float = 0.3, high: float = 0.7) -> np.ndarray:
+        res = np.zeros_like(arr, dtype=int)
+        res[arr >= high] = 1
+        res[arr <= low] = -1
+        return res
+
+
+class MultivaluedLogicEngine:
+    """Универсальный контур свёртки: Гёдель/Клини (min) vs Сильный Лукасевич (K=2)."""
+    
+    def __init__(self, strategy: Literal["godel", "luka"] = "godel"):
+        if strategy not in ("godel", "luka"):
+            raise ValueError("Стратегия должна быть 'godel' или 'luka'")
+        self.strategy = strategy
+
+    def fold(self, data: Union[Sequence[int], np.ndarray]) -> Union[int, np.ndarray]:
+        arr = np.asarray(data, dtype=np.int8)
+        clean_data = BXOSGate.guard(arr)
+        
+        if clean_data.ndim == 1:
+            return int(self._reduce_1d(clean_data))
+        return self._reduce_batch(clean_data)
+
+    def _reduce_1d(self, arr: np.ndarray) -> int:
+        if self.strategy == "godel":
+            return int(np.minimum.reduce(arr))
+        else:
+            # Истинный сильный Лукасевич для пентарного домена (K=2): max(-2, a + b - 2)
+            res = int(arr[0])
+            for val in arr[1:]:
+                res = max(-2, res + int(val) - 2)
+            return res
+
+    def _reduce_batch(self, batch: np.ndarray) -> np.ndarray:
+        if self.strategy == "godel":
+            return np.minimum.reduce(batch, axis=-1)
+        else:
+            # Пошаговый эквивалент сильного Лукасевича для батчей без аллокационного мусора
+            res = batch[..., 0].astype(np.int16)
+            for i in range(1, batch.shape[-1]):
+                res = np.maximum(-2, res + batch[..., i] - 2)
+            return res.astype(np.int8)
+
+
+class PentarnyRashomon:
+    """Многоракурсный блок валидации (Rashomon): проверка цепи под разными углами без истории."""
+    
+    PERSPECTIVES = ("technical", "operational", "structural", "boundary", "risk")
+
+    @staticmethod
+    def evaluate(matrix: np.ndarray) -> Dict[str, Union[float, np.ndarray]]:
+        if matrix.size == 0:
+            return {p: 0.0 for p in PentarnyRashomon.PERSPECTIVES}
+            
+        float_m = matrix.astype(float)
+        return {
+            "technical": np.mean(float_m, axis=-1),
+            "operational": np.min(float_m, axis=-1),
+            "structural": np.max(float_m, axis=-1),
+            "boundary": np.std(float_m, axis=-1) if float_m.ndim > 0 else 0.0,
+            "risk": -np.mean(np.abs(float_m), axis=-1)
+        }
+
+
+class L5OntologyLayer:
+    """Пять векторизованных слоёв онтологии без лишних аллокаций."""
+    LAYERS = ("intent", "goal", "ontology", "context", "action")
+
+    def __init__(self):
+        self.state = np.zeros(5, dtype=np.int8)
+
+    def update(self, values: Sequence[int]) -> np.ndarray:
+        if len(values) != 5:
+            raise ValueError("L5-слой требует ровно 5 значений")
+        self.state = BXOSGate.guard(np.array(values, dtype=np.int8))
+        return self.state
+
+    @property
+    def system_energy(self) -> float:
+        return float(np.sum(np.abs(self.state)) / 10.0)
+
+
+@dataclass
+class ProductionPipelineResult:
+    status: str
+    triage_state: int
+    folded_result: int
+    system_energy: float
+    rashomon_audit: Dict[str, Union[float, np.ndarray]]
+    l5_state: list
+
+
+class W4ProductionPipeline:
+    """Собранный производственный пайплайн: L3 -> L5 -> Логика -> Rashomon -> BXOS."""
+    
+    def __init__(self, strategy: Literal["godel", "luka"] = "godel"):
+        self.logic_engine = MultivaluedLogicEngine(strategy=strategy)
+        self.ontology = L5OntologyLayer()
+        self.rashomon = PentarnyRashomon()
+
+    def process(self, raw_score: float, l5_inputs: Sequence[int]) -> ProductionPipelineResult:
+        # 1. Быстрый Fast-Path триаж
+        triage_state = L3Triage.process(raw_score)
+        if triage_state == -1:
+            return ProductionPipelineResult(
+                status="REJECTED_BY_TRIAGE",
+                triage_state=-1,
+                folded_result=-2,
+                system_energy=0.0,
+                rashomon_audit={},
+                l5_state=list(l5_inputs)
+            )
+
+        # 2. Обновление L5 онтологии
+        l5_arr = self.ontology.update(l5_inputs)
+        
+        # 3. Свёртка через выбранный математический движок (Гёдель или Лукасевич)
+        folded = self.logic_engine.fold(l5_arr)
+
+        # 4. Многоракурсный Rashomon-анализ текущего среза
+        audit_res = self.rashomon.evaluate(l5_arr)
+
+        return ProductionPipelineResult(
+            status="OK",
+            triage_state=triage_state,
+            folded_result=folded,
+            system_energy=self.ontology.system_energy,
+            rashomon_audit=audit_res,
+            l5_state=l5_arr.tolist()
+        )
