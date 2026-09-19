@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# ==============================================================================
+# Harmony3 / BXOS: Binary Packed Datacenter Node & Pipeline
+# All rights reserved
+# Vladimir Zavodiuk
+# ==============================================================================
+
+"""
+================================================================================
+АРХИТЕКТУРА УЗЛА С БИНАРНОЙ УПАКОВКОЙ (BXOSBinaryPacker)
+================================================================================
+  ВХОД (bxos_token / Int16) -> [Распаковка в L5] -> [TernaryProcessor (L3)] -> 
+  [BrusentsovLogic] -> [BXOSGate] -> [Упаковка в bxos_token] -> ВЫХОД ПО СЕТИ
+
+Этот подход исключает передачу громоздких структур: весь пентарный вектор 
+сжимается в 15-битную маску, которая пересылается по сети дата-центра за микросекунды.
+================================================================================
+"""
+
+import sys
+import os
+import time
+import numpy as np
+from typing import Dict, Any, List, Optional, Tuple
+from collections import deque
+
+# Проверка зависимостей
+try:
+    from fastapi import FastAPI, HTTPException
+    from pydantic import BaseModel, Field
+    import uvicorn
+except ImportError:
+    print("[-] Ошибка: Требуются библиотеки FastAPI, Uvicorn и NumPy.")
+    print("    Установка: pip install fastapi uvicorn numpy")
+    sys.exit(1)
+
+
+# ============================================================
+# 1. BXOS BINARY PACKER (15-бит маска для сети дата-центра)
+# ============================================================
+
+class BXOSBinaryPacker:
+    """Сверхбыстрый упаковщик пентарного вектора L5 в бинарную маску (15 бит)."""
+    
+    @staticmethod
+    def pack_l5_to_int16(l5_vector: List[int]) -> int:
+        """
+        Упаковывает 5 пентарных элементов (состояния -2...2) в одну 15-битную маску (Int16).
+        Каждый элемент занимает ровно 3 бита.
+        """
+        binary_mask = 0
+        for i, val in enumerate(l5_vector):
+            normalized_val = val + 2  # Перевод диапазона [-2..2] в [0..4]
+            binary_mask |= (normalized_val & 0x7) << (i * 3)
+        return binary_mask
+
+    @staticmethod
+    def unpack_int16_to_l5(binary_mask: int) -> List[int]:
+        """Распаковывает 15-битную маску обратно в пентарный вектор L5."""
+        l5_vector = []
+        for i in range(5):
+            normalized_val = (binary_mask >> (i * 3)) & 0x7
+            l5_vector.append(normalized_val - 2)  # Возврат в диапазон [-2..2]
+        return l5_vector
+
+
+# ============================================================
+# 2. TERNARY PROCESSOR (L3) & RASHOMON VECTOR ANALYSIS
+# ============================================================
+
+class TernaryProcessor:
+    """Оптимизированный троичный блок (L3) на NumPy без циклов."""
+    
+    @staticmethod
+    def analyze_interpretations(scores: np.ndarray, margin_threshold: float = 0.15, min_score: float = 0.3) -> Tuple[int, int, float]:
+        if scores.size == 0:
+            return -1, -1, 0.0
+            
+        if scores.size > 1:
+            top_2_idx = np.argpartition(scores, -2)[-2:]
+            top_2_idx = top_2_idx[np.argsort(scores[top_2_idx])[::-1]]
+            best_idx = top_2_idx[0]
+            margin = scores[best_idx] - scores[top_2_idx[1]]
+        else:
+            best_idx = 0
+            margin = scores[0]
+            
+        best_score = scores[best_idx]
+        
+        if best_score < min_score:
+            state = -1
+        elif margin >= margin_threshold:
+            state = 1
+        else:
+            state = 0
+            
+        return state, best_idx, margin
+
+
+# ============================================================
+# 3. BRUSENTSOV LOGIC & BROADCASTED TRAIT TABLE
+# ============================================================
+
+class BrusentsovLogic:
+    """Логика Брусенцова и динамические трайт-таблицы на NumPy (бродкастинг)."""
+    
+    def __init__(self, width: int = 3):
+        self.width = width
+        self.size = 3 ** width
+        steps = np.arange(self.size, dtype=np.int16)
+        
+        power_weights = 3 ** np.arange(width - 1, -1, -1)
+        trits_matrix = (steps[:, None] // power_weights) % 3 - 1
+        
+        min_trits = np.minimum(trits_matrix[:, None, :], trits_matrix[None, :, :])
+        encoded = np.sum((min_trits + 1) * power_weights, axis=-1)
+        self.trait_table = encoded
+
+    def fold_and_vector(self, trits: np.ndarray) -> int:
+        return int(np.min(trits))
+
+
+# ============================================================
+# 4. BXOS GATE (SECURITY & TELEMETRY)
+# ============================================================
+
+class BXOSGate:
+    """Высокоскоростной предохранитель контура с микросекундной точностью."""
+    
+    def __init__(self, min_confidence: float = 0.4, critical_states: Tuple[int, ...] = (-2, -1), max_log: int = 1000):
+        self.min_confidence = min_confidence
+        self.critical_states = set(critical_states)
+        self.log: deque = deque(maxlen=max_log)
+
+    def verify_input_shape(self, data: np.ndarray, expected_dim: int):
+        if data.ndim != expected_dim:
+            raise ValueError(f"Критическая ошибка размерности! Ожидалось осей: {expected_dim}, получено: {data.ndim}")
+
+    def check_output(self, pentary_value: int, confidence: float) -> str:
+        timestamp = time.perf_counter()
+        if pentary_value in self.critical_states or confidence < self.min_confidence:
+            status = "LOCKED"
+        else:
+            status = "READY"
+        self.log.append({"status": status, "ts": timestamp})
+        return status
+
+    def summary(self) -> Dict[str, Any]:
+        locked = sum(1 for r in self.log if r["status"] == "LOCKED")
+        ready = len(self.log) - locked
+        return {'total': len(self.log), 'ready': ready, 'locked': locked}
+
+
+# ============================================================
+# 5. BXOS PIPELINE ORCHESTRATOR (Binary-In, Binary-Out)
+# ============================================================
+
+class BXOSPipeline:
+    """Сквозной оркестратор: прием бинарного токена -> обработка -> упаковка в bxos_token."""
+    
+    def __init__(self):
+        self.ternary = TernaryProcessor()
+        self.brusentsov = BrusentsovLogic(width=3)
+        self.packer = BXOSBinaryPacker()
+        self.gate = BXOSGate()
+
+    def run_with_token(self, interpretations_scores: list, bxos_token_in: Optional[int] = None, l5_fallback_list: Optional[list] = None) -> dict:
+        scores = np.array(interpretations_scores, dtype=np.float64)
+        self.gate.verify_input_shape(scores, expected_dim=1)
+
+        # Получаем пентарный вектор L5 либо из входного бинарного токена, либо из списка
+        if bxos_token_in is not None:
+            l5_vector_list = self.packer.unpack_int16_to_l5(bxos_token_in)
+        elif l5_fallback_list is not None:
+            l5_vector_list = l5_fallback_list
+        else:
+            l5_vector_list = [0, 0, 0, 0, 0]
+
+        l5_vector = np.array(l5_vector_list, dtype=np.int8)
+        if l5_vector.size != 5:
+            raise ValueError("Пентарный вектор L5 должен содержать ровно 5 элементов.")
+
+        state, best_idx, margin = self.ternary.analyze_interpretations(scores)
+        if state == -1:
+            return {
+                "status": "LOCKED_INPUT",
+                "best_candidate_idx": -1,
+                "confidence": 0.0,
+                "bxos_token": self.packer.pack_l5_to_int16(l5_vector_list)
+            }
+
+        feature_trits = np.array([state, 1 if scores[best_idx] > 0.5 else 0, 1], dtype=np.int8)
+        consolidated_trit = self.brusentsov.fold_and_vector(feature_trits)
+        
+        confidence = { -1: 0.3, 0: 0.55, 1: 0.85 }[consolidated_trit]
+        
+        # Проверка через защитный гейт BXOS
+        gate_status = self.gate.check_output(pentary_value=int(l5_vector[0]), confidence=confidence)
+
+        # Запаковываем финальный результат обратно в бинарный масковый токен
+        output_token = self.packer.pack_l5_to_int16(l5_vector.tolist())
+
+        return {
+            "status": "OK" if gate_status == "READY" else "LOCKED_OUTPUT",
+            "best_candidate_idx": best_idx,
+            "confidence": confidence,
+            "bxos_token": output_token
+        }
+
+
+# ============================================================
+# 6. FASTAPI DATACENTER NODE API
+# ============================================================
+
+app = FastAPI(
+    title="Harmony3 / BXOS Binary Datacenter Node",
+    description="Узел дата-центра с бинарной упаковкой по протоколу BXOSBinaryPacker",
+    version="2.0.0"
+)
+
+node_pipeline = BXOSPipeline()
+
+class BinaryNodePayload(BaseModel):
+    interpretations_scores: List[float] = Field(..., example=[0.85, 0.62, 0.41, 0.15, 0.05])
+    bxos_token: Optional[int] = Field(None, description="Входной бинарный токен (15 бит / Int16)", example=18463)
+    l5_values_list: Optional[List[int]] = Field(None, description="Альтернативный сырой ввод L5", example=[1, 0, -1, 2, -2])
+
+
+@app.get("/")
+def node_status():
+    return {
+        "author": "Vladimir Zavodiuk",
+        "rights": "All rights reserved",
+        "node_status": "active",
+        "telemetry": node_pipeline.gate.summary()
+    }
+
+
+@app.post("/process-binary")
+def process_binary_stream(payload: BinaryNodePayload):
+    """
+    Эндпоинт дата-центра: принимает двоичный пакет (bxos_token), 
+    прогоняет через логику Брусенцова и возвращает свернутый бинарный результат.
+    """
+    try:
+        res = node_pipeline.run_with_token(
+            interpretations_scores=payload.interpretations_scores,
+            bxos_token_in=payload.bxos_token,
+            l5_fallback_list=payload.l5_values_list
+        )
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ============================================================
+# MAIN ENTRY POINT
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("ХАРМОНИЯ3 / BXOS — УЗЕЛ ДАТА-ЦЕНТРА С БИНАРНОЙ УПАКОВКОЙ")
+    print("Автор: Vladimir Zavodiuk (All rights reserved)")
+    print("=" * 70)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
