@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved
+# Vladimir Zavodiuk
+
+"""
+================================================================================
+BXOS: ПРОМЫШЛЕННЫЙ ЧИСТЫЙ ПЕНТАРНО-БИНАРНЫЙ КОНТУР (ХАРДЕНИНГ)
+================================================================================
+Исправления безопасности и математики:
+  1. Безопасный пентарно-тритный мост (без ловушек целочисленного деления).
+  2. Строгая валидация сетевого пакета (защита от мусора в 3-битных слотах > 4).
+  3. Аппаратный контроль четности (16-й бит Int16 как Parity Bit).
+  4. Оптимизированная свёртка Лукасевича с приоритетом онтологии при наличии нуля.
+================================================================================
+"""
+
+import math
+from dataclasses import dataclass
+from typing import List, Sequence
+
+
+# ============================================================================
+# 1. ЗАЩИЩЕННЫЙ БИНАРНЫЙ УПАКОВЩИК СЕТИ (BXOS Binary Packer + Parity)
+# ============================================================================
+
+class BXOSBinaryPacker:
+    """Упаковщик пентарного вектора L5 в 16-битную маску с битом четности."""
+    
+    @staticmethod
+    def pack_l5_to_int16(l5_vector: List[int]) -> int:
+        payload_mask = 0
+        for i, val in enumerate(l5_vector):
+            clamped_val = max(-2, min(2, val))
+            normalized_val = clamped_val + 2  # Диапазон [-2..2] -> [0..4]
+            payload_mask |= (normalized_val & 0x7) << (i * 3)
+        
+        # Расчет бита четности (Parity Bit) для 15-битного полезного блока
+        # Если количество единиц нечетное, устанавливаем 16-й бит (индекс 15) в 1
+        ones_count = bin(payload_mask).count('1')
+        parity_bit = 1 if ones_count % 2 != 0 else 0
+        
+        final_token = payload_mask | (parity_bit << 15)
+        return final_token
+
+    @staticmethod
+    def unpack_int16_to_l5(token: int) -> List[int]:
+        # 1. Выделение бита четности и полезного блока (15 бит)
+        stored_parity = (token >> 15) & 0x1
+        payload_mask = token & 0x7FFF
+        
+        # 2. Аппаратная проверка целостности по четности
+        actual_ones = bin(payload_mask).count('1')
+        computed_parity = 1 if actual_ones % 2 != 0 else 0
+        
+        if stored_parity != computed_parity:
+            raise ValueError("Критическая ошибка: нарушение бита четности BXOS (пакет поврежден в сети)")
+
+        l5_vector = []
+        for i in range(5):
+            normalized_val = (payload_mask >> (i * 3)) & 0x7
+            
+            # 3. Защита от сетевого мусора: значения 5, 6, 7 недопустимы для пентарной системы
+            if normalized_val > 4:
+                raise ValueError(f"Критическая ошибка целостности сетевого токена BXOS: недопустимое значение {normalized_val}")
+            
+            val = normalized_val - 2
+            l5_vector.append(max(-2, min(2, val)))
+            
+        return l5_vector
+
+
+# ============================================================================
+# 2. БЕЗОПАСНЫЙ ПЕНТАРНО-ТРИТНЫЙ МОСТ
+# ============================================================================
+
+def pentary_to_trit(val: int) -> int:
+    """Безопасное преобразование пентарного значения (-2..2) в трит (-1, 0, 1) без багов отрицательного деления."""
+    if abs(val) == 2:
+        return int(val / 2)  # Безопасное деление для границ
+    return max(-1, min(1, val))
+
+
+# ============================================================================
+# 3. КОНТУР ЛОГИКИ ЛУКАСЕВИЧА / БРУСЕНЦОВА (С приоритетом онтологии)
+# ============================================================================
+
+Trit = int
+
+def _check_trit(t: Trit) -> Trit:
+    if t not in (-1, 0, 1):
+        raise ValueError(f"Не трит: {t}")
+    return t
+
+def trit_not(t: Trit) -> Trit:
+    return -_check_trit(t)
+
+_IMPL_TABLE = {
+    (-1, -1): 1, (-1, 0): 1, (-1, 1): 1,
+    (0, -1): 0, (0, 0): 1, (0, 1): 1,
+    (1, -1): -1, (1, 0): 0, (1, 1): 1,
+}
+
+def trit_impl(a: Trit, b: Trit) -> Trit:
+    return _IMPL_TABLE[(_check_trit(a), _check_trit(b))]
+
+def trit_and(a: Trit, b: Trit) -> Trit:
+    return trit_not(trit_impl(a, trit_not(b)))
+
+def luka_fold_and(vector: Sequence[Trit]) -> Trit:
+    if not vector:
+        return 1
+    
+    # Защита от затухания: проверка на наличие троичного нуля Брусенцова (неопределенности)
+    if 0 in vector:
+        # Приоритет онтологии: ядро системы фиксируется по центральному элементу (индекс 2 в L5)
+        center_idx = len(vector) // 2
+        core_trit = vector[center_idx]
+        if core_trit == 0:
+            return 0
+        return core_trit
+
+    # Если нулей нет, выполняем строгую свёртку Лукасевича
+    result = vector[0]
+    for t in vector[1:]:
+        result = trit_and(result, t)
+    return result
+
+
+# ============================================================================
+# 4. КОНТУР ЛОГИКИ ГЁДЕЛЯ / КЛИНИ
+# ============================================================================
+
+def godel_fold_and(values: Sequence[int]) -> int:
+    if not values:
+        return 1
+    result = values[0]
+    for v in values[1:]:
+        result = min(result, v)
+    return result
+
+
+# ============================================================================
+# 5. УНИВЕРСАЛЬНЫЙ ПЕНТАРНО-БИНАРНЫЙ ОРКЕСТРАТОР
+# ============================================================================
+
+@dataclass
+class PurePipelineResult:
+    logic_type: str
+    input_l5: List[int]
+    folded_state: int
+    bxos_token: int
+
+
+class PureBinaryPipeline:
+    """Закаленный оркестратор: безопасный мост -> логика -> бинарный токен с четностью."""
+    
+    def __init__(self, logic_type: str = "godel"):
+        if logic_type not in ("godel", "luka"):
+            raise ValueError("Параметр logic_type должен быть 'godel' или 'luka'")
+        self.logic_type = logic_type
+        self.packer = BXOSBinaryPacker()
+
+    def process(self, l5_vector: List[int]) -> PurePipelineResult:
+        # 1. Безопасный перевод пентарного вектора в триты
+        trits = [pentary_to_trit(val) for val in l5_vector]
+
+        # 2. Выполнение свёртки выбранным математическим контуром
+        if self.logic_type == "godel":
+            folded = godel_fold_and(trits)
+        else:
+            folded = luka_fold_and(trits)
+
+        # 3. Интеграция результата в ведущий элемент вектора
+        output_l5 = list(l5_vector)
+        output_l5[0] = folded * 2 if abs(folded) == 1 else folded
+
+        # 4. Упаковка в защищенный сетевой токен
+        bxos_token = self.packer.pack_l5_to_int16(output_l5)
+
+        return PurePipelineResult(
+            logic_type=self.logic_type,
+            input_l5=l5_vector,
+            folded_state=folded,
+            bxos_token=bxos_token
+        )
+
+
+# ============================================================================
+# ДЕМОНСТРАЦИЯ РАБОТЫ И ТЕСТЫ НА ИСКЛЮЧЕНИЯ
+# ============================================================================
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("BXOS: ТЕСТИРОВАНИЕ ПРОМЫШЛЕННОГО КОНТУРА (ХАРДЕНИНГ)")
+    print("=" * 70)
+
+    sample_l5 = [2, -1, 0, 1, -2]
+    print(f"\nВходной вектор L5: {sample_l5}")
+
+    # Тест Гёделя
+    pipeline_godel = PureBinaryPipeline(logic_type="godel")
+    res_g = pipeline_godel.process(sample_l5)
+    print(f"\n[Гёдель / Клини] Токен: {res_g.bxos_token:#06x} | Распаковка: {BXOSBinaryPacker.unpack_int16_to_l5(res_g.bxos_token)}")
+
+    # Тест Лукасевича с учетом приоритета онтологии
+    pipeline_luka = PureBinaryPipeline(logic_type="luka")
+    res_l = pipeline_luka.process(sample_l5)
+    print(f"\n[Лукасевич / Брусенцов] Токен: {res_l.bxos_token:#06x} | Распаковка: {BXOSBinaryPacker.unpack_int16_to_l5(res_l.bxos_token)}")
+
+    # Тест защиты от сетевого мусора и битых битов
+    print("\n--- Тестирование сетевой защиты (Инжекция шума) ---")
+    corrupted_token = res_l.bxos_token ^ 0x0001  # грязный инвертированный бит
+    try:
+        BXOSBinaryPacker.unpack_int16_to_l5(corrupted_token)
+    except ValueError as e:
+        print(f"✅ Перехвачено исключение безопасности: {e}")
