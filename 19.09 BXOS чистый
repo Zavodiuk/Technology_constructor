@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved
+# Vladimir Zavodiuk
+
+"""
+================================================================================
+BXOS: ЧИСТЫЙ ПЕНТАРНО-БИНАРНЫЙ КОНТУР (БЕЗ МАТРИЦ И ФАЙЛОВ)
+================================================================================
+Пайплайн: Входной пентарный вектор -> Логическая свёртка (Гёдель ИЛИ Лукасевич) 
+-> Прямая упаковка в бинарный код (bxos_token / Int16) без промежуточных структур.
+================================================================================
+"""
+
+import numpy as np
+from dataclasses import dataclass
+from typing import List, Sequence, Union
+
+
+# ============================================================================
+# 1. БИНАРНЫЙ УПАКОВЩИК СЕТИ (BXOS Binary Packer)
+# ============================================================================
+
+class BXOSBinaryPacker:
+    """Упаковщик пентарного вектора L5 (-2..2) в 15-битную бинарную маску (Int16)."""
+    
+    @staticmethod
+    def pack_l5_to_int16(l5_vector: List[int]) -> int:
+        binary_mask = 0
+        for i, val in enumerate(l5_vector):
+            clamped_val = max(-2, min(2, val))
+            normalized_val = clamped_val + 2  # Диапазон [-2..2] -> [0..4]
+            binary_mask |= (normalized_val & 0x7) << (i * 3)
+        return binary_mask
+
+    @staticmethod
+    def unpack_int16_to_l5(binary_mask: int) -> List[int]:
+        l5_vector = []
+        for i in range(5):
+            normalized_val = (binary_mask >> (i * 3)) & 0x7
+            val = normalized_val - 2
+            l5_vector.append(max(-2, min(2, val)))
+        return l5_vector
+
+
+# ============================================================================
+# 2. КОНТУР ЛОГИКИ ЛУКАСЕВИЧА / БРУСЕНЦОВА
+# ============================================================================
+
+Trit = int
+
+def _check_trit(t: Trit) -> Trit:
+    if t not in (-1, 0, 1):
+        raise ValueError(f"Не трит: {t}")
+    return t
+
+def trit_not(t: Trit) -> Trit:
+    return -_check_trit(t)
+
+_IMPL_TABLE = {
+    (-1, -1): 1, (-1, 0): 1, (-1, 1): 1,
+    (0, -1): 0, (0, 0): 1, (0, 1): 1,
+    (1, -1): -1, (1, 0): 0, (1, 1): 1,
+}
+
+def trit_impl(a: Trit, b: Trit) -> Trit:
+    return _IMPL_TABLE[(_check_trit(a), _check_trit(b))]
+
+def trit_and(a: Trit, b: Trit) -> Trit:
+    return trit_not(trit_impl(a, trit_not(b)))
+
+def luka_fold_and(vector: Sequence[Trit]) -> Trit:
+    if not vector:
+        return 1
+    result = vector[0]
+    for t in vector[1:]:
+        result = trit_and(result, t)
+    return result
+
+
+# ============================================================================
+# 3. КОНТУР ЛОГИКИ ГЁДЕЛЯ / КЛИНИ
+# ============================================================================
+
+def godel_fold_and(values: Sequence[int]) -> int:
+    if not values:
+        return 1
+    result = values[0]
+    for v in values[1:]:
+        result = min(result, v)
+    return result
+
+
+# ============================================================================
+# 4. УНИВЕРСАЛЬНЫЙ ПЕНТАРНО-БИНАРНЫЙ ОРКЕСТРАТОР
+# ============================================================================
+
+@dataclass
+class PurePipelineResult:
+    logic_type: str
+    input_l5: List[int]
+    folded_state: int
+    bxos_token: int
+
+
+class PureBinaryPipeline:
+    """Прямой контур: пентарный ввод -> логика -> бинарный токен."""
+    
+    def __init__(self, logic_type: str = "godel"):
+        """logic_type: 'godel' (Гёдель/Клини) или 'luka' (Лукасевич/Брусенцов)"""
+        if logic_type not in ("godel", "luka"):
+            raise ValueError("Параметр logic_type должен быть 'godel' или 'luka'")
+        self.logic_type = logic_type
+        self.packer = BXOSBinaryPacker()
+
+    def process(self, l5_vector: List[int]) -> PurePipelineResult:
+        # Приводим элементы пентарного вектора к базовым тритам (-1, 0, 1) для свёртки
+        trits = [max(-1, min(1, val // 2 if abs(val) == 2 else val)) for val in l5_vector]
+
+        # Выполняем свёртку в зависимости от выбранного математического контура
+        if self.logic_type == "godel":
+            folded = godel_fold_and(trits)
+        else:
+            folded = luka_fold_and(trits)
+
+        # Интегрируем результат свёртки в ведущий элемент выходного пентарного вектора
+        output_l5 = list(l5_vector)
+        output_l5[0] = folded * 2 if abs(folded) == 1 else folded
+
+        # Упаковываем итоговый вектор в бинарный сетевой токен (Int16)
+        bxos_token = self.packer.pack_l5_to_int16(output_l5)
+
+        return PurePipelineResult(
+            logic_type=self.logic_type,
+            input_l5=l5_vector,
+            folded_state=folded,
+            bxos_token=bxos_token
+        )
+
+
+# ============================================================================
+# ДЕМОНСТРАЦИЯ РАБОТЫ
+# ============================================================================
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("BXOS: ТЕСТИРОВАНИЕ ЧИСТОГО ПЕНТАРНО-БИНАРНОГО ПАЙПЛАЙНА")
+    print("=" * 70)
+
+    # Исходный пентарный вектор L5 (диапазон значений: от -2 до 2)
+    sample_l5 = [2, -1, 0, 1, -2]
+    print(f"\nВходной вектор L5: {sample_l5}")
+
+    # Вариант 1: Логика Гёделя / Клини
+    pipeline_godel = PureBinaryPipeline(logic_type="godel")
+    res_g = pipeline_godel.process(sample_l5)
+    print(f"\n[Контур: Гёдель / Клини]")
+    print(f"  - Результат свёртки: {res_g.folded_state}")
+    print(f"  - Бинарный код (bxos_token): {res_g.bxos_token}")
+    print(f"  - Распаковка обратно в L5: {BXOSBinaryPacker.unpack_int16_to_l5(res_g.bxos_token)}")
+
+    # Вариант 2: Логика Лукасевича / Брусенцова
+    pipeline_luka = PureBinaryPipeline(logic_type="luka")
+    res_l = pipeline_luka.process(sample_l5)
+    print(f"\n[Контур: Лукасевич / Брусенцов]")
+    print(f"  - Результат свёртки: {res_l.folded_state}")
+    print(f"  - Бинарный код (bxos_token): {res_l.bxos_token}")
+    print(f"  - Распаковка обратно в L5: {BXOSBinaryPacker.unpack_int16_to_l5(res_l.bxos_token)}")
+    
+    print("\n✅ Контур полностью очищен от матриц и файлов, выдан готовый бинарный код!")
