@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# ==============================================================================
+# Harmony3 / BXOS: Universal Cluster Configurator for Datacenter Nodes
+# All rights reserved
+# Author: Vladimir Zavodiuk
+# ==============================================================================
+
+"""
+================================================================================
+АВТОМАТИЧЕСКИЙ КОНФИГУРАТОР КЛАСТЕРА ДАТА-ЦЕНТРА BXOS
+================================================================================
+Генерирует связку конфигурационных файлов для развертывания масштабируемого
+кластера нод Harmony3 / BXOS под управлением Nginx и Docker Compose.
+================================================================================
+"""
+
+import sys
+import os
+import argparse
+
+# ============================================================
+# БЛОК 1: Системная инициализация и генерация Dockerfile
+# ============================================================
+
+def generate_dockerfile() -> None:
+    """Генерирует оптимизированный Dockerfile для воркеров троично-пентарной логики."""
+    content = """# Harmony3 / BXOS Datacenter Worker (W4.2 Monolith)
+# All rights reserved - Vladimir Zavodiuk
+FROM python:3.10-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir numpy fastapi uvicorn pydantic
+COPY harmony_datacenter_node.py .
+EXPOSE 8000
+CMD ["python", "harmony_datacenter_node.py"]
+"""
+    with open("Dockerfile", "w", encoding="utf-8") as f:
+        f.write(content)
+    print("[+] Создан файл: Dockerfile")
+
+
+# ============================================================
+# БЛОК 2: Динамический генератор docker-compose.yml
+# ============================================================
+
+def generate_docker_compose(num_nodes: int) -> None:
+    """Генерирует валидный манифест docker-compose.yml с контролем состояния нод."""
+    nodes_services = []
+    depends_on_list = []
+    
+    for i in range(1, num_nodes + 1):
+        node_name = f"node_{i}"
+        # Настройка жесткого ожидания готовности каждой ноды через healthcheck
+        depends_on_list.append(f"      {node_name}:\n        condition: service_healthy")
+        
+        nodes_services.append(f"""  {node_name}:
+    build: .
+    container_name: bxos_{node_name}
+    environment:
+      - NODE_ID={i}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 5s
+      timeout: 3s
+      retries: 3""")
+        
+    services_str = "\n".join(nodes_services)
+    depends_str = "\n".join(depends_on_list)
+
+    content = f"""# Harmony3 / BXOS Datacenter Cluster Orchestration
+# All rights reserved - Vladimir Zavodiuk
+version: '3.8'
+
+services:
+  load_balancer:
+    image: nginx:alpine
+    container_name: bxos_cluster_gateway
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+{depends_str}
+
+{services_str}
+"""
+    with open("docker-compose.yml", "w", encoding="utf-8") as f:
+        f.write(content)
+    print(f"[+] Создан файл: docker-compose.yml (активных нод в кластере: {num_nodes})")
+
+
+# ============================================================
+# БЛОК 3: Высоконагруженный балансировщик nginx.conf
+# ============================================================
+
+def generate_nginx_conf(num_nodes: int) -> None:
+    """Генерирует конфигурационный файл nginx.conf с HPC-оптимизацией и least_conn."""
+    upstreams = []
+    for i in range(1, num_nodes + 1):
+        upstreams.append(f"        server node_{i}:8000;")
+    
+    upstream_block = "\n".join(upstreams)
+
+    content = f"""# Harmony3 / BXOS Nginx Load Balancer (HPC Optimized)
+# All rights reserved - Vladimir Zavodiuk
+events {{ worker_connections 4096; }}
+http {{
+    upstream bxos_cluster {{
+        least_conn;
+{upstream_block}
+    }}
+    server {{
+        listen 80;
+        access_log off;
+        error_log /var/log/nginx/error.log crit;
+        
+        location / {{
+            proxy_pass http://bxos_cluster;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            
+            proxy_connect_timeout 10s;
+            proxy_send_timeout 60s;
+            proxy_read_timeout 60s;
+        }}
+    }}
+}}
+"""
+    with open("nginx.conf", "w", encoding="utf-8") as f:
+        f.write(content)
+    print("[+] Создан файл: nginx.conf (балансировка least_conn, HPC оптимизация)")
+
+
+# ============================================================
+# БЛОК 4: Главный оркестратор записи и Интерфейс управления
+# ============================================================
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Автоматический конфигуратор кластера дата-центра Harmony3 / BXOS"
+    )
+    parser.add_argument(
+        "--nodes", 
+        type=int, 
+        default=2, 
+        help="Количество рабочих нод в кластере (по умолчанию: 2)"
+    )
+    args = parser.parse_args()
+    num_nodes = args.nodes
+
+    print("=" * 78)
+    print("ХАРМОНИЯ3 / BXOS — КОНФИГУРАТОР КЛАСТЕРА ДАТА-ЦЕНТРА")
+    print("Автор / Author: Vladimir Zavodiuk")
+    print("Все права защищены / All rights reserved")
+    print("=" * 78)
+    print(f"[*] Инициализация развертывания кластера для {num_nodes} рабочих нод...")
+    print("-" * 78)
+
+    generate_dockerfile()
+    generate_docker_compose(num_nodes)
+    generate_nginx_conf(num_nodes)
+
+    print("-" * 78)
+    print("[✅] Успешно! Все манифесты кластера записаны на диск:")
+    print("     - Dockerfile")
+    print("     - docker-compose.yml")
+    print("     - nginx.conf")
+    print("=" * 78)
+    print("💡 Для запуска кластера выполните команду в терминале:")
+    print("   docker-compose up --build")
+    print("=" * 78)
+
+if __name__ == "__main__":
+    main()
