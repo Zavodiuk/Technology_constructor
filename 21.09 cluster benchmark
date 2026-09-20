@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# ==============================================================================
+# Harmony3 / BXOS: Cluster Benchmark Suite (Asynchronous Load & MPS Telemetry)
+# All rights reserved
+# Author: Vladimir Zavodiuk
+# ==============================================================================
+
+"""
+================================================================================
+БЕНЧМАРК ПРОИЗВОДИТЕЛЬНОСТИ КЛАСТЕРА ДАТА-ЦЕНТРА BXOS
+================================================================================
+Асинхронный инструмент нагрузочного тестирования для оценки пропускной
+способности кластера нод Harmony3 / BXOS под управлением Nginx (W4.2 Kernel).
+================================================================================
+"""
+
+import time
+import random
+import asyncio
+import httpx
+import numpy as np
+
+# Настройки тестирования
+TARGET_URL = "http://localhost/compute-linear-batch"  # Стучимся в Nginx
+BATCH_SIZE = 64        # Размер одного пакета матриц
+TOTAL_REQUESTS = 500   # Сколько всего запросов отправить
+CONCURRENT_WORKERS = 10  # Количество параллельных потоков отправки
+
+def generate_mock_payload(batch_size: int) -> dict:
+    """Генерирует случайные валидные матрицы для W4.2 и L5."""
+    scores = np.random.uniform(0.0, 1.0, (batch_size, 5)).tolist()
+    l5_values = np.random.randint(-2, 3, (batch_size, 5)).tolist()
+    
+    return {
+        "interpretations_scores": scores,
+        "l5_values_list": l5_values
+    }
+
+async def send_request(client: httpx.AsyncClient, payload: dict, stats: list):
+    """Отправляет один батч и фиксирует время ответа."""
+    start_time = time.perf_counter()
+    try:
+        response = await client.post(TARGET_URL, json=payload, timeout=10.0)
+        latency = time.perf_counter() - start_time
+        if response.status_code == 200:
+            stats.append({"status": "OK", "latency": latency, "size": BATCH_SIZE})
+        else:
+            stats.append({"status": f"ERROR_{response.status_code}", "latency": latency, "size": 0})
+    except Exception as e:
+        stats.append({"status": "TIMEOUT/FAILED", "latency": time.perf_counter() - start_time, "size": 0})
+
+async def main():
+    print("=" * 70)
+    print("ХАРМОНИЯ3 / BXOS — БЕНЧМАРК НАГРУЗКИ КЛАСТЕРА")
+    print("Автор / Author: Vladimir Zavodiuk")
+    print("Все права защищены / All rights reserved")
+    print("=" * 70)
+    print(f"Конкурентные воркеры: {CONCURRENT_WORKERS} | Всего батчей: {TOTAL_REQUESTS} (Размер батча: {BATCH_SIZE})")
+    print("-" * 70)
+    print("[*] Генерация тестовых пакетов матриц...")
+    
+    payloads = [generate_mock_payload(BATCH_SIZE) for _ in range(TOTAL_REQUESTS)]
+    stats = []
+    
+    # Инициализируем HTTP-клиент с поддержкой Keep-Alive
+    limits = httpx.Limits(max_keepalive_connections=CONCURRENT_WORKERS, max_connections=CONCURRENT_WORKERS * 2)
+    
+    async with httpx.AsyncClient(limits=limits) as client:
+        start_bench = time.perf_counter()
+        
+        # Разбиваем на конкурентные группы (семафоры)
+        semaphore = asyncio.Semaphore(CONCURRENT_WORKERS)
+        
+        async def worker(payload):
+            async with semaphore:
+                await send_request(client, payload, stats)
+                
+        await asyncio.gather(*(worker(p) for p in payloads))
+        
+        total_time = time.perf_counter() - start_bench
+
+    # Расчет метрик
+    ok_requests = [s for s in stats if s["status"] == "OK"]
+    errors = [s for s in stats if s["status"] != "OK"]
+    
+    latencies = [s["latency"] for s in ok_requests]
+    total_matrices = sum(s["size"] for s in ok_requests)
+    
+    print("-" * 70)
+    print(f"[✅] Тестирование завершено за: {total_time:.3f} сек")
+    print(f"    - Успешных батчей: {len(ok_requests)} / {TOTAL_REQUESTS}")
+    print(f"    - Ошибок/Таймаутов: {len(errors)}")
+    
+    if latencies:
+        print(f"    - Средняя задержка батча (Latency): {np.mean(latencies)*1000:.2f} мс")
+        print(f"    - Минимальная задержка: {np.min(latencies)*1000:.2f} мс")
+        print(f"    - Максимальная задержка: {np.max(latencies)*1000:.2f} мс")
+        print(f"    - Производительность: {total_matrices / total_time:.2f} матриц/сек (MPS)")
+    print("=" * 70)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+    
