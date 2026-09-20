@@ -1,0 +1,444 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# ==============================================================================
+# Harmony3 / BXOS: Monolithic Datacenter Node with W4.2 Core & Rashomon Audit
+# Technology Constructor for Protective Properties (Gloves, Sleeves, Gaiters)
+# All rights reserved
+# Vladimir Zavodiuk
+# ==============================================================================
+
+"""
+================================================================================
+АРХИТЕКТУРНЫЙ КОНТУР УЗЛА ДАТА-ЦЕНТРА (ВЕРСИЯ W4.2 + 5x5 LINEAR + RASHOMON)
+================================================================================
+Этот единый файл объединяет:
+  1. Математическое ядро W4.2 (Гёдель/Клини и сильный коммутативный Лукасевич K=2).
+  2. Многоракурсный векторизованный модуль валидации PentarnyRashomon.
+  3. Плоский линейный тензорный движок 5x5 (Матрица защитных свойств).
+  4. Высокоскоростной FastAPI веб-сервис с пакетной обработкой (батчи) без циклов.
+  5. Систему мониторинга энергопотребления системы (system_energy) и BXOS Gate.
+
+ЗАПУСК СЕРВИСА НА УЗЛЕ:
+  $ python harmony_datacenter_node.py
+================================================================================
+"""
+
+import sys
+import os
+import time
+import numpy as np
+from typing import Dict, Any, List, Optional, Tuple
+from collections import deque
+
+# Проверка зависимостей
+try:
+    from fastapi import FastAPI, HTTPException
+    from pydantic import BaseModel, Field
+    import uvicorn
+except ImportError:
+    print("[-] Ошибка: Требуются библиотеки FastAPI, Uvicorn и NumPy.")
+    print("    Установка: pip install fastapi uvicorn numpy")
+    sys.exit(1)
+
+
+# ============================================================
+# 1. BXOS GATE & SECURITY
+# ============================================================
+
+class BXOSGate:
+    """Детерминированный входной/выходной фильтр критических состояний с нулевой задержкой."""
+    
+    @staticmethod
+    def guard(signal: np.ndarray) -> np.ndarray:
+        return np.clip(signal, -2.0, 2.0)
+
+    def __init__(self, min_confidence: float = 0.4, critical_states: Tuple[int, ...] = (-2, -1), max_log: int = 1000):
+        self.min_confidence = min_confidence
+        self.critical_states = set(critical_states)
+        self.log: deque = deque(maxlen=max_log)
+
+    def verify_input_shape(self, data: np.ndarray, expected_dim: int):
+        if data.ndim != expected_dim:
+            raise ValueError(f"Критическая ошибка размерности! Ожидалось осей: {expected_dim}, получено: {data.ndim}")
+
+    def summary(self) -> Dict[str, Any]:
+        locked = sum(1 for r in self.log if r["status"] == "LOCKED")
+        ready = len(self.log) - locked
+        return {'total': len(self.log), 'ready': ready, 'locked': locked}
+
+
+# ============================================================
+# 2. TERNARY PROCESSOR (L3) & BATCH VECTOR ANALYSIS
+# ============================================================
+
+class TernaryProcessor:
+    """Оптимизированный троичный блок (L3) на NumPy для пакетного анализа скоров."""
+    
+    @staticmethod
+    def analyze_interpretations(scores: np.ndarray, margin_threshold: float = 0.15, min_score: float = 0.3) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        if scores.size == 0:
+            return np.array([-1]), np.array([-1]), np.array([0.0])
+            
+        if scores.shape[-1] > 1:
+            top_2_idx = np.argpartition(scores, -2, axis=-1)[..., -2:]
+            sorted_vals = np.take_along_axis(scores, top_2_idx, axis=-1)
+            sorted_order = np.argsort(sorted_vals, axis=-1)[..., ::-1]
+            top_2_idx = np.take_along_axis(top_2_idx, sorted_order, axis=-1)
+            best_idx = top_2_idx[..., 0]
+            second_idx = top_2_idx[..., 1]
+            best_score = np.take_along_axis(scores, best_idx[..., None], axis=-1).squeeze(-1)
+            second_score = np.take_along_axis(scores, second_idx[..., None], axis=-1).squeeze(-1)
+            margin = best_score - second_score
+        else:
+            best_idx = np.zeros(scores.shape[0], dtype=np.intp)
+            best_score = scores[:, 0]
+            margin = best_score
+            
+        state = np.where(best_score < min_score, -1, np.where(margin >= margin_threshold, 1, 0))
+        return state, best_idx, margin
+
+
+# ============================================================
+# 3. MULTIVALUED LOGIC ENGINE W4.2 (GÖDEL vs STRONG ŁUKASIEWICZ K=2)
+# ============================================================
+
+class MultivaluedLogicEngine:
+    """Универсальный контур свёртки: Гёдель/Клини (min) vs Коммутативный Сильный Лукасевич (K=2)."""
+    
+    def __init__(self, strategy: str = "luka"):
+        if strategy not in ("godel", "luka"):
+            raise ValueError("Стратегия должна быть 'godel' или 'luka'")
+        self.strategy = strategy
+
+    def fold(self, data: np.ndarray) -> np.ndarray:
+        clean_data = BXOSGate.guard(data)
+        if clean_data.ndim == 1:
+            return self._reduce_1d(clean_data)
+        return self._reduce_batch(clean_data)
+
+    def _reduce_1d(self, arr: np.ndarray) -> int:
+        if self.strategy == "godel":
+            return int(np.minimum.reduce(arr))
+        else:
+            n = len(arr)
+            if n == 0:
+                return -2
+            total_sum = int(np.sum(arr, dtype=np.int16))
+            return int(max(-2, total_sum - 2 * (n - 1)))
+
+    def _reduce_batch(self, batch: np.ndarray) -> np.ndarray:
+        if self.strategy == "godel":
+            return np.minimum.reduce(batch, axis=-1)
+        else:
+            n = batch.shape[-1]
+            total_sum = np.sum(batch.astype(np.int16), axis=-1)
+            res = np.maximum(-2, total_sum - 2 * (n - 1))
+            return res.astype(np.int8)
+
+
+# ============================================================
+# 4. PENTARNY RASHOMON MULTI-PERSPECTIVE AUDIT
+# ============================================================
+
+class PentarnyRashomon:
+    """Многоракурсный векторизованный блок валидации (Rashomon) без истории."""
+    
+    PERSPECTIVES = ("technical", "operational", "structural", "boundary", "risk")
+
+    @staticmethod
+    def evaluate(matrix: np.ndarray) -> Dict[str, np.ndarray]:
+        if matrix.size == 0:
+            batch_dim = matrix.shape[:-1] if matrix.ndim > 1 else ()
+            zero_arr = np.zeros(batch_dim, dtype=float)
+            return {p: zero_arr for p in PentarnyRashomon.PERSPECTIVES}
+            
+        float_m = matrix.astype(float)
+        return {
+            "technical": np.mean(float_m, axis=-1),
+            "operational": np.min(float_m, axis=-1),
+            "structural": np.max(float_m, axis=-1),
+            "boundary": np.std(float_m, axis=-1) if float_m.ndim > 1 else np.array(0.0),
+            "risk": -np.mean(np.abs(float_m), axis=-1)
+        }
+
+
+# ============================================================
+# 5. BRUSENTSOV LOGIC & CACHED TRAIT TABLE
+# ============================================================
+
+class BrusentsovLogic:
+    """Логика Брусенцова с кэшированием (синглтон трайт-таблицы) и бродкастингом."""
+    
+    _trait_table_cache: Optional[np.ndarray] = None
+
+    def __init__(self, width: int = 3):
+        self.width = width
+        self.size = 3 ** width
+        
+        if BrusentsovLogic._trait_table_cache is None:
+            steps = np.arange(self.size, dtype=np.int16)
+            power_weights = 3 ** np.arange(width - 1, -1, -1)
+            trits_matrix = (steps[:, None] // power_weights) % 3 - 1
+            min_trits = np.minimum(trits_matrix[:, None, :], trits_matrix[None, :, :])
+            encoded = np.sum((min_trits + 1) * power_weights, axis=-1)
+            BrusentsovLogic._trait_table_cache = encoded
+            
+        self.trait_table = BrusentsovLogic._trait_table_cache
+
+    @staticmethod
+    def fold_and_vector(trits: np.ndarray) -> np.ndarray:
+        return np.min(trits, axis=-1)
+
+
+# ============================================================
+# 6. PENTARY PROTECTIVE MATRIX ENGINE (Tensor 5x5)
+# ============================================================
+
+class PentaryMatrixEngine:
+    """Конструктор матриц защитных свойств для перчаток, рукавов и гетр (Автор: Владимир Заводюк)."""
+    
+    LAYERS = [
+        'water_resistance',       # 1. Водостойкость
+        'spark_resistance',       # 2. Искростойкость
+        'impact_resistance',      # 3. Ударопрочность
+        'cut_resistance',         # 4. Сопротивление порезам
+        'temperature_resistance'  # 5. Термостойкость
+    ]
+    
+    @staticmethod
+    def build_linear_matrix(l5_vector: np.ndarray) -> np.ndarray:
+        ternary_vector = np.sign(l5_vector).astype(np.int8)
+        if ternary_vector.ndim == 1:
+            v1 = ternary_vector[:, None]
+            v2 = ternary_vector[None, :]
+            return np.minimum(v1, v2).astype(np.int8)
+        else:
+            v1 = ternary_vector[:, :, None] # (BatchSize, 5, 1)
+            v2 = ternary_vector[:, None, :] # (BatchSize, 1, 5)
+            return np.minimum(v1, v2).astype(np.int8)
+
+
+# ============================================================
+# 7. BXOS PIPELINE ORCHESTRATOR (BATCHED W4.2 + RASHOMON)
+# ============================================================
+
+class BXOSPipeline:
+    """Сквозной оркестратор пакетных расчетов W4.2, Rashomon и матриц защитных свойств без циклов."""
+    
+    def __init__(self, strategy: str = "luka"):
+        self.ternary = TernaryProcessor()
+        self.brusentsov = BrusentsovLogic(width=3)
+        self.logic_engine = MultivaluedLogicEngine(strategy=strategy)
+        self.matrix_engine = PentaryMatrixEngine()
+        self.rashomon = PentarnyRashomon()
+        self.gate = BXOSGate()
+
+    def run(self, interpretations_scores: List[List[float]], l5_values_list: List[List[int]]) -> dict:
+        scores = np.array(interpretations_scores, dtype=np.float64)
+        l5_vector = np.array(l5_values_list, dtype=np.int8)
+        
+        self.gate.verify_input_shape(scores, expected_dim=2)
+        self.gate.verify_input_shape(l5_vector, expected_dim=2)
+        if l5_vector.shape[1] != 5:
+            raise ValueError("Пентарный вектор свойств L5 должен содержать ровно 5 элементов по последней оси.")
+
+        # 1. Защита входного гейта
+        clean_l5 = BXOSGate.guard(l5_vector)
+
+        # 2. Триаж и анализ скоров
+        states, best_idx, margins = self.ternary.analyze_interpretations(scores)
+        batch_size = scores.shape[0]
+        row_indices = np.arange(batch_size)
+        best_scores = scores[row_indices, best_idx]
+        
+        second_trit = np.where(best_scores > 0.5, 1, 0).astype(np.int8)
+        third_trit = np.ones_like(second_trit, dtype=np.int8)
+        
+        feature_trits = np.stack([states, second_trit, third_trit], axis=-1)
+        consolidated_trits = self.brusentsov.fold_and_vector(feature_trits)
+        
+        confidence_map = {-1: 0.3, 0: 0.55, 1: 0.85}
+        confidences = np.array([confidence_map.get(t, 0.5) for t in consolidated_trits], dtype=np.float64)
+        
+        # 3. Построение матриц 5x5 и логическая свёртка W4.2
+        matrices_5x5 = self.matrix_engine.build_linear_matrix(clean_l5)
+        folded_results = self.logic_engine.fold(clean_l5)
+
+        # 4. Расчет системной энергии (L5 system energy)
+        system_energy = np.sum(np.abs(clean_l5), axis=-1) / 10.0
+
+        # 5. Многоракурсный Rashomon-анализ батча
+        rashomon_audit = self.rashomon.evaluate(clean_l5)
+        rashomon_serializable = {
+            k: (v.tolist() if isinstance(v, np.ndarray) else float(v)) 
+            for k, v in rashomon_audit.items()
+        }
+
+        # 6. Проверка статусов и телеметрия
+        pentary_values = clean_l5[:, 0]
+        timestamp = time.perf_counter()
+        
+        statuses = []
+        for i in range(batch_size):
+            if states[i] == -1:
+                status = "LOCKED_INPUT"
+            elif pentary_values[i] in self.gate.critical_states or confidences[i] < self.gate.min_confidence:
+                status = "LOCKED_OUTPUT"
+                self.gate.log.append({"status": "LOCKED", "ts": timestamp})
+            else:
+                status = "OK"
+                self.gate.log.append({"status": "READY", "ts": timestamp})
+            statuses.append(status)
+
+        return {
+            "statuses": statuses,
+            "best_candidate_indices": best_idx.tolist(),
+            "confidences": confidences.tolist(),
+            "folded_results": folded_results.tolist(),
+            "system_energy": system_energy.tolist(),
+            "rashomon_audit": rashomon_serializable,
+            "matrix_shape": [5, 5],
+            "property_layers": self.matrix_engine.LAYERS,
+            "linear_matrices_5x5": matrices_5x5.tolist()
+        }
+
+
+# ============================================================
+# 8. FASTAPI DATACENTER NODE API
+# ============================================================
+
+app = FastAPI(
+    title="Harmony3 / BXOS: Monolithic Datacenter Node W4.2 (Linear 5x5 + Rashomon)",
+    description="Интегрированный узел ЦОД: математическое ядро W4.2 (Лукасевич K=2), Rashomon-аудит, системная энергия и матрицы 5x5",
+    version="3.0.0"
+)
+
+node_pipeline = BXOSPipeline(strategy="luka")
+
+class NodePayload(BaseModel):
+    interpretations_scores: List[List[float]] = Field(..., example=[[0.85, 0.62, 0.41, 0.15, 0.05], [0.91, 0.44, 0.22, 0.1, 0.02]])
+    l5_values_list: List[List[int]] = Field(..., example=[[1, 0, -1, 2, -2], [2, 1, 0, -1, -2]])
+
+
+@app.get("/")
+def node_status():
+    return {
+        "author": "Vladimir Zavodiuk",
+        "rights": "All rights reserved",
+        "project": "Protective Property Matrix / Technology Constructor (W4.2 Kernel)",
+        "node_status": "active",
+        "architecture": "linear 5x5 batch pipeline + W4.2 Strong Łukasiewicz + Rashomon",
+        "properties": PentaryMatrixEngine.LAYERS,
+        "telemetry": node_pipeline.gate.summary()
+    }
+
+
+@app.post("/compute-linear-batch")
+def compute_linear_batch(payload: NodePayload):
+    """Эндпоинт пакетного расчета W4.2, Rashomon и матриц защитных свойств 5x5."""
+    try:
+        res = node_pipeline.run(payload.interpretations_scores, payload.l5_values_list)
+        return {
+            "statuses": res["statuses"],
+            "best_candidate_indices": res["best_candidate_indices"],
+            "confidences": res["confidences"],
+            "folded_results": res["folded_results"],
+            "system_energy": res["system_energy"],
+            "rashomon_audit": res["rashomon_audit"],
+            "matrix_shape": res["matrix_shape"],
+            "property_layers": res["property_layers"],
+            "linear_matrices_5x5": res["linear_matrices_5x5"]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ============================================================
+# 9. EMBEDDED MANIFEST GENERATOR (Docker / Nginx / Compose)
+# ============================================================
+
+def generate_cluster_manifests():
+    """Автоматически разворачивает конфигурации кластера дата-центра на диске."""
+    print("[*] Генерация конфигурационных файлов кластера...")
+    
+    dockerfile_content = """# Harmony3 / BXOS Datacenter Worker (W4.2 Monolith)
+# All rights reserved - Vladimir Zavodiuk
+FROM python:3.10-slim
+WORKDIR /app
+RUN pip install --no-cache-dir numpy fastapi uvicorn pydantic
+COPY harmony_datacenter_node.py .
+EXPOSE 8000
+CMD ["python", "harmony_datacenter_node.py"]
+"""
+    
+    compose_content = """# Harmony3 / BXOS Datacenter Cluster Orchestration
+# All rights reserved - Vladimir Zavodiuk
+version: '3.8'
+services:
+  load_balancer:
+    image: nginx:alpine
+    container_name: bxos_cluster_gateway
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - node_1
+      - node_2
+  node_1:
+    build: .
+    environment:
+      - NODE_ID=1
+  node_2:
+    build: .
+    environment:
+      - NODE_ID=2
+"""
+
+    nginx_content = """# Harmony3 / BXOS Nginx Load Balancer
+# All rights reserved - Vladimir Zavodiuk
+events { worker_connections 1024; }
+http {
+    upstream bxos_cluster {
+        server node_1:8000;
+        server node_2:8000;
+    }
+    server {
+        listen 80;
+        location / {
+            proxy_pass http://bxos_cluster;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+    }
+}
+"""
+
+    with open("Dockerfile", "w", encoding="utf-8") as f:
+        f.write(dockerfile_content)
+    with open("docker-compose.yml", "w", encoding="utf-8") as f:
+        f.write(compose_content)
+    with open("nginx.conf", "w", encoding="utf-8") as f:
+        f.write(nginx_content)
+        
+    print("[+] Манифесты успешно созданы: Dockerfile, docker-compose.yml, nginx.conf")
+
+
+# ============================================================
+# MAIN ENTRY POINT
+# ============================================================
+
+if __name__ == "__main__":
+    if "--generate-manifests" in sys.argv:
+        generate_cluster_manifests()
+        sys.exit(0)
+
+    print("=" * 78)
+    print("ХАРМОНИЯ3 / BXOS — МОНОЛИТНЫЙ УЗЕЛ W4.2 (ЛИНЕЙНЫЙ КОНТУР 5x5 + RASHOMON)")
+    print("=" * 78)
+    print("💡 Подсказка: для генерации файлов кластера запустите:")
+    print("   python harmony_datacenter_node.py --generate-manifests")
+    print("=" * 78)
+    
+    uvicorn.run("harmony_datacenter_node:app", host="0.0.0.0", port=8000, workers=4)
