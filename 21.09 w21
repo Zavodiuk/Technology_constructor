@@ -1,0 +1,415 @@
+# -*- coding: utf-8 -*-
+"""
+ТРОИЧНАЯ КИБЕРНЕТИЧЕСКАЯ СИСТЕМА — W21.2-SCIENTIFIC (ОЧИЩЕННОЕ ЯДРО ЛАТИС-КАПСУЛ)
+Главный Архитектор: Владимир Заводюк (Root-Architect)
+Версия: W21.2-SCIENTIFIC (Ликвидация синтаксического сдвига и детерминированный волновой контур)
+
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+
+ВНИМАНИЕ: Данный файл моделирует многотетраэдральную решетку с рекурсивной 
+вложенностью капсул, защищенную от энтропийного резонанса и сбалансированную 
+на базе строгого троичного базиса [-1, 0, 1].
+"""
+
+import numpy as np
+import time
+import random
+import math
+from itertools import product
+from collections import Counter
+from typing import Dict, List, Tuple, Optional
+
+# --- БАЗИС И СЕМИОТИЧЕСКИЕ СЛОВАРИ ТРОИЧНОЙ ЛОГИКИ ---
+LOGIC_BASIS = np.array([1, 0, -1], dtype=np.int8)
+
+TERNARY_CODE: Dict[int, str] = {
+    -1: "ЛОЖЬ / БЛОКИРОВКА (Аппаратный обрыв канала / Рекуперационный сток)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Свободный ламинарный транзит / Регенерация)",
+     1: "ИСТИНА / АКТИВАЦИЯ (Сверхпроводимость / Индукционный подъем)"
+}
+
+def quantize_ternary(value: float) -> np.int8:
+    if value > 0.33:
+        return np.int8(1)
+    elif value >= -0.33:
+        return np.int8(0)
+    else:
+        return np.int8(-1)
+
+def ternary_clip(val: int) -> np.int8:
+    return np.int8(max(-1, min(1, val)))
+
+
+# ============================================================================
+# МОДУЛЬ 1: МАКРО-ПОЛЕ И МЕТРИКА С РЕКУПЕРАЦИЕЙ ЭНЕРГИИ ( [] )
+# ============================================================================
+class TernaryTensorField:
+    def __init__(self, dimensions: Tuple[int, ...]):
+        self.dimensions = dimensions
+        self.field = np.zeros(dimensions, dtype=np.int8)  # [] — адресная сетка
+
+    def inject_quantum_impulse(self, coordinates: Tuple[int, ...], value: int) -> None:
+        clipped = ternary_clip(value)
+        if all(0 <= coordinates[i] < self.dimensions[i] for i in range(len(self.dimensions))):
+            self.field[coordinates] = clipped
+
+    def calculate_field_entropy(self) -> float:
+        total_elements = self.field.size
+        if total_elements == 0:
+            return 0.0
+        counts = Counter(int(x) for x in self.field.flatten())
+        entropy = 0.0
+        for count in counts.values():
+            p = count / total_elements
+            if p > 0:
+                entropy -= p * math.log(p, 3)
+        return float(entropy)
+
+    def recover_to_laminar_balance(self) -> int:
+        """Рекуперация: конвертация заблокированных состояний (-1) в троичный баланс (0)."""
+        converted_count = 0
+        it = np.nditer(self.field, flags=['multi_index'], op_flags=['readwrite'])
+        while not it.finished:
+            if it[0] == -1:
+                it[0] = np.int8(0)  # Сброс в абсолютный покой
+                converted_count += 1
+            it.iternext()
+        return converted_count
+
+
+class TernaryTensorEvolution:
+    def __init__(self, tensor_field: TernaryTensorField):
+        self.field = tensor_field
+        self.step_counter = 0
+
+    def propagate_wave(self, origin: Tuple[int, ...], radius: int = 1) -> None:
+        dims = len(origin)
+        self.step_counter += 1
+        ranges = [range(max(0, origin[d] - radius), 
+                       min(self.field.dimensions[d], origin[d] + radius + 1)) 
+                  for d in range(dims)]
+        for coords in product(*ranges):
+            dist = sum(abs(coords[d] - origin[d]) for d in range(dims))
+            if 0 < dist <= radius:
+                orig_val = int(self.field.field[origin])
+                float_val = float(orig_val) / (dist + 1)
+                impulse_value = int(float_val)
+                if impulse_value != 0:
+                    current = int(self.field.field[coords])
+                    self.field.field[coords] = ternary_clip(current + impulse_value)
+
+    def calculate_field_gradient(self) -> List[np.ndarray]:
+        try:
+            return list(np.gradient(self.field.field.astype(np.float32)))
+        except Exception:
+            return [np.abs(np.diff(self.field.field, axis=i, append=0)).astype(np.float32) 
+                    for i in range(self.field.field.ndim)]
+
+    def calculate_field_divergence(self) -> float:
+        try:
+            gradient = self.calculate_field_gradient()
+            return float(np.sum([np.sum(np.abs(g)) for g in gradient]))
+        except Exception:
+            diffs = [np.sum(np.abs(np.diff(self.field.field, axis=i))) for i in range(self.field.field.ndim)]
+            return float(np.sum(diffs))
+
+
+# ============================================================================
+# МОДУЛЬ 2: МИКРО-ГРАФ С УПРАВЛЯЕМЫМИ КАНАЛАМИ ( : )
+# ============================================================================
+class TernaryNode:
+    def __init__(self, node_id: str):
+        self.node_id = node_id
+        self.internal_state: np.int8 = np.int8(0)
+        self.mass: float = 0.0
+        self.decision: np.int8 = np.int8(0)
+        self.isolation_depth: int = 0  # Уровень рекурсивной вложенности капсулы
+
+    def process_signals(self, signal_a: int, signal_b: int) -> np.int8:
+        if self.isolation_depth > 0:
+            self.decision = np.int8(0)
+            self.internal_state = np.int8(0)
+            self.mass = 0.0
+            return np.int8(0)
+
+        a = ternary_clip(signal_a)
+        b = ternary_clip(signal_b)
+        sum_signals = int(a) + int(b)
+        conflict = abs(int(a) - int(b))
+        
+        if conflict >= 2:
+            informational_mass = conflict * 2.0
+            self.internal_state = np.int8(0)
+        else:
+            informational_mass = conflict * 0.5
+            self.internal_state = ternary_clip(sum_signals)
+            
+        self.mass = informational_mass
+        self.decision = self.internal_state
+        return self.decision
+
+
+class TernaryEdge:
+    def __init__(self, source: TernaryNode, target: TernaryNode):
+        self.source = source
+        self.target = target
+        self.energy_flow: float = 1.0
+        self.temp: float = 1.0
+        self.rhythm: float = 0.0
+        self.field_suppression: float = 1.0
+
+    def update_dynamics(self) -> None:
+        if self.source.isolation_depth > 0 or self.target.isolation_depth > 0:
+            self.energy_flow = 0.0
+            self.temp = 0.05
+            return
+
+        decision_sum = int(self.source.decision) + int(self.target.decision)
+        total_mass = self.source.mass + self.target.mass
+        old_temp = self.temp
+        base_modifier = 1.0 + (decision_sum * 0.2) - (total_mass * 0.15)
+        self.temp = max(0.05, base_modifier)
+        self.rhythm = self.temp - old_temp
+        
+        if self.source.decision == -1 or self.target.decision == -1:
+            self.energy_flow = 0.0
+        else:
+            base_flow = (self.temp * 1.2) + (total_mass * 0.4)
+            self.energy_flow = max(0.0, base_flow * self.field_suppression)
+
+
+class TernaryUniverseGraph:
+    def __init__(self):
+        self.nodes: Dict[str, TernaryNode] = {}  # {} — ассоциативная память
+        self.edges: List[TernaryEdge] = []
+        self.time_step: int = 0
+
+    def add_node(self, name: str) -> None:
+        self.nodes[name] = TernaryNode(name)
+
+    def add_edge(self, src: str, tgt: str) -> None:
+        self.edges.append(TernaryEdge(self.nodes[src], self.nodes[tgt]))
+
+    def pulse(self) -> None:
+        self.time_step += 1
+        for name, node in self.nodes.items():
+            connected_signals = []
+            for edge in self.edges:
+                if edge.target == node:
+                    norm_val = (edge.energy_flow - 1.0) / 1.0
+                    connected_signals.append(quantize_ternary(norm_val))
+                elif edge.source == node:
+                    connected_signals.append(quantize_ternary(edge.energy_flow / 2.0 - 0.5))
+            
+            if not connected_signals:
+                connected_signals = [np.int8(random.choice([-1, 0, 1]))]
+            
+            node.process_signals(int(connected_signals[0]), int(connected_signals[-1]))
+            
+        for edge in self.edges:
+            edge.update_dynamics()
+
+
+# ============================================================================
+# МОДУЛЬ 3: СТАБИЛИЗИРОВАННАЯ МНОГОТЕТРАЭДРАЛЬНАЯ РЕШЕТКА ( () )
+# ============================================================================
+class TernaryRecursiveTetrahedralCapsule:
+    def __init__(self, name: str, field_dims: Tuple[int, ...], vertices: tuple, depth: int = 1):
+        self.name = name
+        self.field_dims = field_dims
+        self.coords_list = [list(v) for v in vertices]
+        self.depth = depth
+        self.sub_capsule: Optional['TernaryRecursiveTetrahedralCapsule'] = None
+
+    def drift(self, tensor_field: np.ndarray, gradient_fields: List[np.ndarray], forbidden_coords: set = None) -> None:
+        if forbidden_coords is None:
+            forbidden_coords = set()
+
+        dims = len(self.field_dims)
+        for idx, vertex in enumerate(self.coords_list):
+            best_coords = list(vertex)
+            
+            current_pos = tuple(vertex)
+            local_base = abs(int(tensor_field[current_pos]))
+            grad_base = sum(abs(gradient_fields[i][current_pos]) for i in range(dims))
+            max_tension = float(local_base) + float(grad_base)
+
+            for d in range(dims):
+                for delta in [-1, 1]:
+                    test_coords = list(vertex)
+                    test_coords[d] += delta
+                    if all(0 <= test_coords[i] < self.field_dims[i] for i in range(dims)):
+                        test_pos = tuple(test_coords)
+                        if test_pos in forbidden_coords:
+                            continue
+                        local_val = abs(int(tensor_field[test_pos]))
+                        grad_val = sum(abs(gradient_fields[i][test_pos]) for i in range(dims))
+                        tension = float(local_val) + float(grad_val)
+                        if tension > max_tension:
+                            max_tension = tension
+                            best_coords = test_coords
+            self.coords_list[idx] = best_coords
+
+        if self.sub_capsule:
+            parent_coords = {tuple(v) for v in self.coords_list}
+            self.sub_capsule.drift(tensor_field, gradient_fields, forbidden_coords | parent_coords)
+
+    def spawn_nested_capsule(self) -> None:
+        if not self.sub_capsule and self.depth < 3:
+            mid_v = [sum(x)//len(x) for x in zip(*self.coords_list)]
+            offset_v = [max(0, c - 1) for c in mid_v]
+            sub_verts = (
+                tuple(mid_v),
+                tuple(offset_v),
+                tuple([min(self.field_dims[0]-1, c+1) for c in mid_v]),
+                tuple([max(0, c-1) for c in offset_v])
+            )
+            self.sub_capsule = TernaryRecursiveTetrahedralCapsule(f"{self.name}-Sub", self.field_dims, sub_verts, self.depth + 1)
+
+    def enforce_lattice_containment(self, tensor_field: TernaryTensorField, evolution: TernaryTensorEvolution, graph: TernaryUniverseGraph, node_coords: Dict[str, Tuple[int, ...]], dynamic_radius: int = 1) -> None:
+        all_coords = np.array(self.coords_list)
+        min_b = np.min(all_coords, axis=0)
+        max_b = np.max(all_coords, axis=0)
+
+        v0, v1, v2, v3 = tuple(self.coords_list[0]), tuple(self.coords_list[1]), tuple(self.coords_list[2]), tuple(self.coords_list[3])
+        
+        tensor_field.inject_quantum_impulse(v0, 1)   # +1
+        tensor_field.inject_quantum_impulse(v1, 1)   # +1
+        tensor_field.inject_quantum_impulse(v2, -1)  # -1
+        
+        evolution.propagate_wave(v0, radius=dynamic_radius)
+        evolution.propagate_wave(v1, radius=dynamic_radius)
+        evolution.propagate_wave(v2, radius=dynamic_radius)
+
+        tensor_field.inject_quantum_impulse(v3, 0)
+        dims = len(tensor_field.dimensions)
+        damping_ranges = [range(max(0, v3[d] - dynamic_radius), min(tensor_field.dimensions[d], v3[d] + dynamic_radius + 1)) for d in range(dims)]
+        for coords in product(*damping_ranges):
+            tensor_field.field[coords] = np.int8(0)
+
+        for name, node in graph.nodes.items():
+            if name in node_coords:
+                n_coords = np.array(node_coords[name])
+                in_box = np.all(n_coords >= min_b) and np.all(n_coords <= max_b)
+                avg_dist = np.mean([sum(abs(n_coords[d] - v[d]) for d in range(len(self.field_dims))) for v in self.coords_list])
+                
+                if in_box and avg_dist <= (dynamic_radius * 2.2):
+                    node.isolation_depth = self.depth
+                else:
+                    if node.isolation_depth == self.depth:
+                        node.isolation_depth = 0
+
+        if self.sub_capsule:
+            self.sub_capsule.enforce_lattice_containment(tensor_field, evolution, graph, node_coords, dynamic_radius=dynamic_radius)
+
+
+# ============================================================================
+# МОДУЛЬ 4: УНИВЕРСАЛЬНЫЙ ОРКЕСТРАТОР W21.2
+# ============================================================================
+class TernaryUniverseW21:
+    def __init__(self, dimensions: Tuple[int, ...], node_coordinates: Dict[str, Tuple[int, ...]]):
+        self.dimensions = dimensions
+        self.tensor_field = TernaryTensorField(dimensions)
+        self.tensor_evolution = TernaryTensorEvolution(self.tensor_field)
+        self.graph = TernaryUniverseGraph()
+        self.node_coords = node_coordinates
+        self.last_dynamic_radius = 1
+
+        max_idx = dimensions[0] - 1
+        mid = dimensions[0] // 2
+        
+        capsule_verts_1 = ((0, 0, 0, 0), (max_idx, max_idx, 0, 0), (max_idx, 0, max_idx, 0), (mid, mid, mid, max_idx))
+        capsule_verts_2 = ((1, 1, 1, 1), (max_idx-1, max_idx-1, 1, 1), (max_idx-1, 1, max_idx-1, 1), (mid, mid, mid, max_idx-1))
+
+        self.lattice_capsules = [
+            TernaryRecursiveTetrahedralCapsule("Lattice-Alpha", dimensions, capsule_verts_1, depth=1),
+            TernaryRecursiveTetrahedralCapsule("Lattice-Beta", dimensions, capsule_verts_2, depth=1)
+        ]
+
+    def add_node(self, name: str, coords: Tuple[int, ...]) -> None:
+        self.graph.add_node(name)
+        self.node_coords[name] = coords
+
+    def add_edge(self, src: str, tgt: str) -> None:
+        self.graph.add_edge(src, tgt)
+
+    def step(self) -> None:
+        recovered_count = 0
+
+        dynamic_radius = 1
+        if (current_entropy := self.tensor_field.calculate_field_entropy()) > 0.35:
+            dynamic_radius = 2
+
+        self.last_dynamic_radius = dynamic_radius
+
+        if current_entropy > 0.65:
+            recovered_count = self.tensor_field.recover_to_laminar_balance()
+
+        # Пульсация микро-графа
+        self.graph.pulse()
+
+        # Проекция решений в макро-поле (только для неизолированных узлов)
+        for name, node in self.graph.nodes.items():
+            if name in self.node_coords and node.isolation_depth == 0:
+                coords = self.node_coords[name]
+                if int(node.decision) != 0:
+                    self.tensor_field.inject_quantum_impulse(coords, int(node.decision))
+
+        # Восстановленный строго детерминированный цикл волнового фронта
+        for name, coords in self.node_coords.items():
+            if self.graph.nodes[name].isolation_depth == 0:
+                self.tensor_evolution.propagate_wave(coords, radius=dynamic_radius)
+
+        gradients = self.tensor_evolution.calculate_field_gradient()
+        for cap in self.lattice_capsules:
+            cap.drift(self.tensor_field.field, gradients)
+            if current_entropy > 0.5:
+                cap.spawn_nested_capsule()
+            cap.enforce_lattice_containment(self.tensor_field, self.tensor_evolution, self.graph, self.node_coords, dynamic_radius=dynamic_radius)
+
+        field_div = self.tensor_evolution.calculate_field_divergence()
+        for edge in self.graph.edges:
+            edge.field_suppression = min(1.0, edge.field_suppression + 0.05)
+            edge.field_suppression = max(0.0, edge.field_suppression * (1.0 - (field_div * 0.005)))
+
+    def display_telemetry(self) -> None:
+        print(f"\n================ [ ТАКТ W21.2: ЛАТИС-СИНХРОН №{self.graph.time_step} ] ================")
+        print(f"  -> Энтропия среды (Base-3): {self.tensor_field.calculate_field_entropy():.6f}")
+        print(f"  -> Динамический радиус (:=): {self.last_dynamic_radius}")
+        print(f"  -> Активных решетчатых капсул: {len(self.lattice_capsules)}")
+        print("--- СОСТОЯНИЕ РАСПРЕДЕЛЕННЫХ УЗЛОВ И РЕКУРСИИ ---")
+        for name, node in self.graph.nodes.items():
+            status = f"💊 РЕКУРСИВНАЯ КАПСУЛА (Уровень {node.isolation_depth})" if node.isolation_depth > 0 else f"Активен ({node.decision:+d})"
+            print(f"  -> Узел [{name}]: {status} | Масса = {node.mass:.2f}")
+
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("🧠 ТРОИЧНАЯ СИСТЕМА — W21.2-SCIENTIFIC (ОЧИЩЕННОЕ ЯДРО)")
+    print("⚠️ АВТОРСКИЕ ПРАВА ЗАЩИЩЕНЫ. ГЛАВНЫЙ АРХИТЕКТОР: ВЛАДИМИР ЗАВОДЮК.")
+    print("=" * 70)
+    
+    space_dimensions = (5, 5, 5, 5)
+    initial_nodes = {
+        "Core-Master": (2, 2, 2, 2),
+        "Sub-Node-1": (1, 1, 1, 1),
+        "Sub-Node-2": (3, 3, 3, 3)
+    }
+    
+    universe = TernaryUniverseW21(space_dimensions, initial_nodes)
+    for name, coords in initial_nodes.items():
+        universe.add_node(name, coords)
+        
+    universe.add_edge("Core-Master", "Sub-Node-1")
+    universe.add_edge("Sub-Node-1", "Sub-Node-2")
+    universe.add_edge("Sub-Node-2", "Core-Master")
+    
+    for cycle in range(4):
+        universe.step()
+        universe.display_telemetry()
+        time.sleep(0.15)
+        
+    print("\n" + "=" * 70)
+    print("✅ ТРОИЧНОЕ ЯДРО W21.2-SCIENTIFIC УСПЕШНО ОЧИЩЕНО И ГОТОВО К W22.0")
+    print("=" * 70)
