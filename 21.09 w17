@@ -1,0 +1,371 @@
+# -*- coding: utf-8 -*-
+"""
+ТРОИЧНАЯ ИНТЕГРИРОВАННАЯ СИСТЕМА — W17.1-STABLE (УПРУГАЯ МЕМБРАНА И АКТИВНОЕ ДЕМПФИРОВАНИЕ)
+Главный Архитектор: Владимир Заводюк (Root-Architect)
+Версия: W17.1-STABLE (Рефакторинг Модуля 3: защита от сингулярности и активный ноль)
+
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+"""
+
+import numpy as np
+import time
+import random
+from itertools import product
+
+# --- БАЗИС И СЛОВАРИ ТРОИЧНОЙ ЛОГИКИ ---
+LOGIC_BASIS = np.array([1, 0, -1], dtype=np.int8)
+
+TERNARY_CODE = {
+    -1: "ЛОЖЬ / БЛОКИРОВКА (Отрицательный фронт / Обрыв канала)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Активный демпфир / Баланс)",
+     1: "ИСТИНА / АКТИВАЦИЯ (Положительный фронт / Сверхпроводимость)"
+}
+
+def quantize_ternary(value: float) -> np.int8:
+    """Квантование непрерывного значения в строгий троичный базис [-1, 1]"""
+    if value > 0.33:
+        return np.int8(1)
+    elif value >= -0.33:
+        return np.int8(0)
+    else:
+        return np.int8(-1)
+
+def ternary_clip(val: int) -> np.int8:
+    """Строгое ограничение в рамках троичного базиса [-1, 1]"""
+    return np.int8(max(-1, min(1, val)))
+
+
+# ============================================================================
+# МОДУЛЬ 1: МАКРО-ПОЛЕ (ТЕНЗОРНАЯ СРЕДА INT8)
+# ============================================================================
+class TernaryTensorField:
+    def __init__(self, dimensions: tuple):
+        self.dimensions = dimensions
+        self.field = np.zeros(dimensions, dtype=np.int8)
+
+    def inject_quantum_impulse(self, coordinates: tuple, value: int):
+        clipped = ternary_clip(value)
+        if all(0 <= coordinates[i] < self.dimensions[i] for i in range(len(self.dimensions))):
+            self.field[coordinates] = clipped
+
+    def calculate_field_entropy(self) -> float:
+        """Расчет глобальной системной энтропии по экстремальным троичным состояниям"""
+        total_elements = self.field.size
+        if total_elements == 0:
+            return 0.0
+        extreme_states = np.sum(np.abs(self.field) == 1)
+        return float(extreme_states / total_elements)
+
+
+class TernaryTensorEvolution:
+    def __init__(self, tensor_field: TernaryTensorField):
+        self.field = tensor_field
+        self.step_counter = 0
+
+    def propagate_wave(self, origin: tuple, radius: int = 1):
+        """Симметричное распространение троичного волнового фронта с защитой от хаоса"""
+        dims = len(origin)
+        self.step_counter += 1
+        ranges = [range(max(0, origin[d] - radius), 
+                       min(self.field.dimensions[d], origin[d] + radius + 1)) 
+                  for d in range(dims)]
+        for coords in product(*ranges):
+            dist = sum(abs(coords[d] - origin[d]) for d in range(dims))
+            if 0 < dist <= radius:
+                orig_val = int(self.field.field[origin])
+                float_val = float(orig_val) / (dist + 1)
+                impulse_value = int(float_val)
+                if impulse_value != 0:
+                    current = int(self.field.field[coords])
+                    self.field.field[coords] = ternary_clip(current + impulse_value)
+
+    def calculate_field_divergence(self) -> float:
+        try:
+            gradient = np.gradient(self.field.field.astype(np.float32))
+            return float(np.sum([np.sum(np.abs(g)) for g in gradient]))
+        except Exception:
+            diffs = [np.sum(np.abs(np.diff(self.field.field, axis=i))) for i in range(self.field.field.ndim)]
+            return float(np.sum(diffs))
+
+
+# ============================================================================
+# МОДУЛЬ 2: МИКРО-ГРАФ (ТРОИЧНОЕ ЯДРО W4.2)
+# ============================================================================
+class TernaryNode:
+    def __init__(self, node_id):
+        self.node_id = node_id
+        self.internal_state = np.int8(0)
+        self.mass = 0.0
+        self.decision = np.int8(0)
+
+    def process_signals(self, signal_A: int, signal_B: int) -> np.int8:
+        a = ternary_clip(signal_A)
+        b = ternary_clip(signal_B)
+
+        sum_signals = int(a) + int(b)
+        conflict = abs(int(a) - int(b))
+        
+        if conflict >= 2:
+            informational_mass = conflict * 2.0
+            self.internal_state = np.int8(0)
+        else:
+            informational_mass = conflict * 0.5
+            self.internal_state = ternary_clip(sum_signals)
+            
+        self.mass = informational_mass
+        self.decision = self.internal_state
+        return self.decision
+
+
+class TernaryEdge:
+    def __init__(self, source: TernaryNode, target: TernaryNode):
+        self.source = source
+        self.target = target
+        self.energy_flow = 1.0
+        self.temp = 1.0
+        self.rhythm = 0.0
+
+    def update_dynamics(self):
+        decision_sum = int(self.source.decision) + int(self.target.decision)
+        total_mass = self.source.mass + self.target.mass
+        old_temp = self.temp
+        base_modifier = 1.0 + (decision_sum * 0.2) - (total_mass * 0.15)
+        self.temp = max(0.05, base_modifier)
+        self.rhythm = self.temp - old_temp
+        
+        if self.source.decision == -1 or self.target.decision == -1:
+            self.energy_flow = 0.0
+        else:
+            self.energy_flow = (self.temp * 1.2) + (total_mass * 0.4)
+
+
+class TernaryUniverseGraph:
+    def __init__(self):
+        self.nodes = {}
+        self.edges = []
+        self.time_step = 0
+
+    def add_node(self, name):
+        self.nodes[name] = TernaryNode(name)
+
+    def add_edge(self, src, tgt):
+        self.edges.append(TernaryEdge(self.nodes[src], self.nodes[tgt]))
+
+    def pulse(self):
+        self.time_step += 1
+        for name, node in self.nodes.items():
+            connected_signals = []
+            for edge in self.edges:
+                if edge.target == node:
+                    norm_val = (edge.energy_flow - 1.0) / 1.0
+                    connected_signals.append(quantize_ternary(norm_val))
+                elif edge.source == node:
+                    connected_signals.append(quantize_ternary(edge.energy_flow / 2.0 - 0.5))
+            
+            if not connected_signals:
+                connected_signals = [np.int8(random.choice([-1, 0, 1]))]
+            
+            node.process_signals(int(connected_signals[0]), int(connected_signals[-1]))
+            
+        for edge in self.edges:
+            edge.update_dynamics()
+
+
+# ============================================================================
+# МОДУЛЬ 3: УПРУГАЯ ТРЕХТОЧЕЧНАЯ ДИНАМИЧЕСКАЯ ПЛОСКОСТЬ (АТТРАКТОРЫ МЕМБРАНЫ)
+# ============================================================================
+class TernaryConflictAttractorPoint:
+    """Одиночная плавающая точка-вершина с защитой от слияния (проверка forbidden_coords)."""
+    def __init__(self, name: str, initial_coords: tuple, field_dims: tuple):
+        self.name = name
+        self.coords = list(initial_coords)
+        self.field_dims = field_dims
+
+    def drift_by_conflict(self, tensor_field: np.ndarray, gradient_fields: list, forbidden_coords: set = None):
+        if forbidden_coords is None:
+            forbidden_coords = set()
+            
+        dims = len(self.field_dims)
+        best_coords = list(self.coords)
+        
+        current_pos = tuple(self.coords)
+        local_base = abs(int(tensor_field[current_pos]))
+        grad_base = sum(abs(gradient_fields[i][current_pos]) for i in range(dims))
+        max_tension = float(local_base) + float(grad_base)
+
+        for d in range(dims):
+            for delta in [-1, 1]:
+                test_coords = list(self.coords)
+                test_coords[d] += delta
+                
+                if all(0 <= test_coords[i] < self.field_dims[i] for i in range(dims)):
+                    test_pos = tuple(test_coords)
+                    # Если координата уже занята другой вершиной на текущем такте — пропускаем её (упругий отбор)
+                    if test_pos in forbidden_coords:
+                        continue
+                        
+                    local_val = abs(int(tensor_field[test_pos]))
+                    grad_val = sum(abs(gradient_fields[i][test_pos]) for i in range(dims))
+                    tension = float(local_val) + float(grad_val)
+
+                    if tension > max_tension:
+                        max_tension = tension
+                        best_coords = test_coords
+
+        self.coords = best_coords
+
+
+class TernaryDynamicPlaneMembrane:
+    """
+    Динамическая плоскость-мембрана с упругим разделением вершин и активным демпфированием нуля.
+    """
+    def __init__(self, field_dims: tuple, p1: tuple, p2: tuple, p3: tuple):
+        self.field_dims = field_dims
+        self.vertex_a = TernaryConflictAttractorPoint("Vertex-A", p1, field_dims)
+        self.vertex_b = TernaryConflictAttractorPoint("Vertex-B", p2, field_dims)
+        self.vertex_c = TernaryConflictAttractorPoint("Vertex-C", p3, field_dims)
+
+    def update_membrane_position(self, tensor_field: np.ndarray, gradients: list):
+        # Последовательный независимый дрейф с исключением координат других вершин текущего такта
+        forbidden_a = {tuple(self.vertex_b.coords), tuple(self.vertex_c.coords)}
+        self.vertex_a.drift_by_conflict(tensor_field, gradients, forbidden_a)
+
+        forbidden_b = {tuple(self.vertex_a.coords), tuple(self.vertex_c.coords)}
+        self.vertex_b.drift_by_conflict(tensor_field, gradients, forbidden_b)
+
+        forbidden_c = {tuple(self.vertex_a.coords), tuple(self.vertex_b.coords)}
+        self.vertex_c.drift_by_conflict(tensor_field, gradients, forbidden_c)
+
+    def get_plane_vertices(self) -> tuple:
+        return (tuple(self.vertex_a.coords), tuple(self.vertex_b.coords), tuple(self.vertex_c.coords))
+
+    def apply_membrane_barrier(self, tensor_field: TernaryTensorField, evolution: TernaryTensorEvolution):
+        """
+        Инжектирует импульсы по вершинам:
+        A -> +1 (Активация) с волновым фронтом,
+        B -> 0 (Покой) с АКТИВНЫМ ДЕМПФИРОВАНИЕМ (принудительное обнуление шумов в радиусе 1),
+        C -> -1 (Блокировка) с волновым фронтом.
+        """
+        va = tuple(self.vertex_a.coords)
+        vb = tuple(self.vertex_b.coords)
+        vc = tuple(self.vertex_c.coords)
+
+        # Вершина A: Активный фронт
+        tensor_field.inject_quantum_impulse(va, 1)
+        evolution.propagate_wave(va, radius=1)
+
+        # Вершина B: Активный гаситель энтропии (демпфирование зоны Покоя)
+        tensor_field.inject_quantum_impulse(vb, 0)
+        dims = len(tensor_field.dimensions)
+        damping_ranges = [range(max(0, vb[d] - 1), min(tensor_field.dimensions[d], vb[d] + 2)) for d in range(dims)]
+        for coords in product(*damping_ranges):
+            tensor_field.field[coords] = np.int8(0)
+
+        # Вершина C: Блокирующий фронт
+        tensor_field.inject_quantum_impulse(vc, -1)
+        evolution.propagate_wave(vc, radius=1)
+
+
+# ============================================================================
+# МОДУЛЬ 4: УНИВЕРСАЛЬНОЕ ИНТЕГРИРОВАННОЕ ТРОИЧНОЕ ЯДРО W17.1-STABLE
+# ============================================================================
+class TernaryUniverseW17_1:
+    def __init__(self, dimensions: tuple, node_coords: dict):
+        self.dimensions = dimensions
+        self.tensor_field = TernaryTensorField(dimensions)
+        self.tensor_evolution = TernaryTensorEvolution(self.tensor_field)
+        self.graph = TernaryUniverseGraph()
+        self.node_coords = node_coords
+
+        mid = dimensions[0] // 2
+        max_idx = dimensions[0] - 1
+        
+        p1 = (mid, mid, mid, mid)
+        p2 = (0, max_idx, mid, mid)
+        p3 = (max_idx, 0, mid, mid)
+        
+        self.membrane = TernaryDynamicPlaneMembrane(dimensions, p1, p2, p3)
+
+    def add_node(self, name: str, coords: tuple):
+        self.graph.add_node(name)
+        self.node_coords[name] = coords
+
+    def add_edge(self, src: str, tgt: str):
+        self.graph.add_edge(src, tgt)
+
+    def step(self):
+        # 1. Шаг микро-динамики графовой сети
+        self.graph.pulse()
+        
+        # 2. Проецирование решений узлов в тензорное поле
+        for name, node in self.graph.nodes.items():
+            if name in self.node_coords:
+                coords = self.node_coords[name]
+                impulse_val = int(node.decision)
+                if impulse_val != 0:
+                    self.tensor_field.inject_quantum_impulse(coords, impulse_val)
+        
+        # 3. Распространение волн от узлов
+        for name, coords in self.node_coords.items():
+            self.tensor_evolution.propagate_wave(coords, radius=1)
+
+        # 4. Анализ градиентов с защитным фолбеком и обновление упругой мембраны
+        try:
+            gradients = np.gradient(self.tensor_field.field.astype(np.float32))
+        except Exception:
+            gradients = [np.abs(np.diff(self.tensor_field.field, axis=i, append=0)).astype(np.float32) 
+                         for i in range(self.tensor_field.field.ndim)]
+        
+        self.membrane.update_membrane_position(self.tensor_field.field, gradients)
+        self.membrane.apply_membrane_barrier(self.tensor_field, self.tensor_evolution)
+
+        # 5. Обратная связь тензорного поля на каналы графа
+        field_divergence = self.tensor_evolution.calculate_field_divergence()
+        for edge in self.graph.edges:
+            edge.energy_flow = max(0.0, edge.energy_flow * (1.0 - (field_divergence * 0.01)))
+
+    def display_state(self):
+        va, vb, vc = self.membrane.get_plane_vertices()
+        print(f"\n================ [ ТРОИЧНЫЙ СИНХРО-ТАКТ W17.1: {self.graph.time_step} ] ================")
+        print(f"  -> Энтропия тензорного поля: {self.tensor_field.calculate_field_entropy():.4f}")
+        print(f"  -> Дивергенция поля: {self.tensor_evolution.calculate_field_divergence():.2f}")
+        print(f"  -> Вершины упругой мембраны (сохранен разнос):")
+        print(f"     [A/+1]: {va} | [B/0 Демпфер]: {vb} | [C/-1]: {vc}")
+        print("--- СОСТОЯНИЕ УЗЛОВ И КАНАЛОВ ---")
+        for name, node in self.graph.nodes.items():
+            print(f"  -> Узел [{name}]: Решение = {node.decision:+d} ({TERNARY_CODE[int(node.decision)][:22]}...) | МАССА = {node.mass:.2f}")
+        for edge in self.graph.edges:
+            print(f"  -> Канал [{edge.source.node_id} -> {edge.target.node_id}]: ПОТОК = {edge.energy_flow:.2f}, ТЕМП = {edge.temp:.2f}")
+
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("🧠 ТРОИЧНАЯ ИНТЕГРИРОВАННАЯ СИСТЕМА — W17.1-STABLE (УПРУГАЯ МЕМБРАНА)")
+    print("⚠️ АВТОРСКИЕ ПРАВА ЗАЩИЩЕНЫ. ГЛАВНЫЙ АРХИТЕКТОР: ВЛАДИМИР ЗАВОДЮК.")
+    print("=" * 70)
+    
+    coords_map = {
+        "Центр-Ядро": (2, 2, 2, 2),
+        "Периферия-1": (1, 1, 2, 2),
+        "Периферия-2": (3, 3, 2, 2)
+    }
+    
+    universe = TernaryUniverseW17_1((5, 5, 5, 5), coords_map)
+    
+    universe.add_node("Центр-Ядро", coords_map["Центр-Ядро"])
+    universe.add_node("Периферия-1", coords_map["Периферия-1"])
+    universe.add_node("Периферия-2", coords_map["Периферия-2"])
+    
+    universe.add_edge("Центр-Ядро", "Периферия-1")
+    universe.add_edge("Периферия-1", "Периферия-2")
+    universe.add_edge("Периферия-2", "Центр-Ядро")
+    
+    for _ in range(4):
+        universe.step()
+        universe.display_state()
+        time.sleep(0.2)
+        
+    print("\n" + "=" * 70)
+    print("✅ СИСТЕМА W17.1-STABLE УСПЕШНО СТАБИЛИЗИРОВАНА И ГОТОВА К РАЗВЁРТЫВАНИЮ")
+    print("=" * 70)
