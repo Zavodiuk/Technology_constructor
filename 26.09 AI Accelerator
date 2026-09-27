@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved
+# Copyright (c) 2026 Vladimir Zavodiuk (Владимир Заводюк)
+# Author: Vladimir Zavodiuk (Root-Architect)
+# Version: AI Accelerator LLM Pre-Filter V23
+
+"""
+================================================================================
+AI ACCELERATOR — LLM PRE-FILTER V23
+================================================================================
+
+Высокоскоростной pre-filter слой перед большими языковыми моделями.
+
+Назначение:
+  Отсекать заведомо слабые / бессмысленные / низкоуверенные запросы
+  ДО вызова дорогой LLM.
+
+Эффект:
+  • Экономия токенов
+  • Экономия электроэнергии
+  • Снижение latency для отклонённых запросов
+  • Работа на CPU (Numba), без обязательной GPU
+
+Технологии:
+  • Numba v2 (int8, parallel, loop unroll, fused kernels)
+  • L3 Fast-Path triage
+  • Логика Гёделя / коммутативный Лукасевич K=2
+  • BXOS защитный контур
+
+Автор: Владимир Заводюк
+ALL RIGHTS RESERVED
+================================================================================
+"""
+
+from __future__ import annotations
+
+import time
+import numpy as np
+from typing import List, Dict, Any, Optional, Literal, Sequence, Tuple
+from dataclasses import dataclass, asdict
+from numba import njit, prange
+
+
+# ==============================================================================
+# NUMBA KERNELS v2
+# ==============================================================================
+
+@njit(cache=True, fastmath=True)
+def bxos_guard_v2(signal: np.ndarray) -> np.ndarray:
+    out = np.empty(signal.shape, dtype=np.int8)
+    flat_in = signal.ravel()
+    flat_out = out.ravel()
+    for i in range(flat_in.size):
+        v = flat_in[i]
+        if v > 2:
+            v = 2
+        if v < -2:
+            v = -2
+        flat_out[i] = np.int8(v)
+    return out
+
+
+@njit(cache=True, parallel=True, fastmath=True)
+def luka_reduce_batch_v2(batch: np.ndarray) -> np.ndarray:
+    n_rows, n_cols = batch.shape
+    out = np.empty(n_rows, dtype=np.int8)
+    if n_cols == 5:
+        for i in prange(n_rows):
+            total = (batch[i, 0] + batch[i, 1] + batch[i, 2] +
+                     batch[i, 3] + batch[i, 4])
+            val = total - 8
+            out[i] = val if val > -2 else -2
+    else:
+        sub = 2 * (n_cols - 1)
+        for i in prange(n_rows):
+            total = 0
+            for j in range(n_cols):
+                total += batch[i, j]
+            val = total - sub
+            out[i] = val if val > -2 else -2
+    return out
+
+
+@njit(cache=True, parallel=True, fastmath=True)
+def godel_reduce_batch_v2(batch: np.ndarray) -> np.ndarray:
+    n_rows, n_cols = batch.shape
+    out = np.empty(n_rows, dtype=np.int8)
+    if n_cols == 5:
+        for i in prange(n_rows):
+            m = batch[i, 0]
+            if batch[i, 1] < m: m = batch[i, 1]
+            if batch[i, 2] < m: m = batch[i, 2]
+            if batch[i, 3] < m: m = batch[i, 3]
+            if batch[i, 4] < m: m = batch[i, 4]
+            out[i] = m
+    else:
+        for i in prange(n_rows):
+            m = batch[i, 0]
+            for j in range(1, n_cols):
+                if batch[i, j] < m:
+                    m = batch[i, j]
+            out[i] = m
+    return out
+
+
+@njit(cache=True, parallel=True, fastmath=True)
+def l3_triage_batch_v2(scores: np.ndarray, low: float = 0.30, high: float = 0.70) -> np.ndarray:
+    """
+    L3 triage по лучшему скору.
+    -1 = REJECT (не отправлять в LLM)
+     0 = CLARIFY (опционально уточнить)
+    +1 = PASS   (можно отправлять в LLM)
+    """
+    n, k = scores.shape
+    out = np.empty(n, dtype=np.int8)
+    if k == 4:
+        for i in prange(n):
+            best = scores[i, 0]
+            if scores[i, 1] > best: best = scores[i, 1]
+            if scores[i, 2] > best: best = scores[i, 2]
+            if scores[i, 3] > best: best = scores[i, 3]
+            if best >= high:
+                out[i] = 1
+            elif best <= low:
+                out[i] = -1
+            else:
+                out[i] = 0
+    else:
+        for i in prange(n):
+            best = scores[i, 0]
+            for j in range(1, k):
+                if scores[i, j] > best:
+                    best = scores[i, j]
+            if best >= high:
+                out[i] = 1
+            elif best <= low:
+                out[i] = -1
+            else:
+                out[i] = 0
+    return out
+
+
+# ==============================================================================
+# RESULT
+# ==============================================================================
+
+@dataclass
+class PreFilterResult:
+    decisions: List[str]          # REJECT / CLARIFY / PASS
+    triage_codes: List[int]       # -1 / 0 / +1
+    reject_count: int
+    clarify_count: int
+    pass_count: int
+    reject_ratio: float
+    estimated_token_savings: float   # доля запросов, не ушедших в LLM
+    latency_ms: float
+    throughput_qps: float
+
+
+# ==============================================================================
+# AI ACCELERATOR — LLM PRE-FILTER
+# ==============================================================================
+
+class AIAcceleratorLLMPreFilter:
+    """
+    Pre-filter перед большой языковой моделью.
+
+    Типичный сценарий:
+      scores = модель_ранжирования / классификатор_уверенности
+      result = accelerator.filter(scores)
+      for i, decision in enumerate(result.decisions):
+          if decision == "PASS":
+              вызвать_LLM(queries[i])
+          elif decision == "CLARIFY":
+              запросить_уточнение(...)
+          else:
+              вернуть_отказ / кэш / шаблон
+    """
+
+    def __init__(
+        self,
+        low_threshold: float = 0.30,
+        high_threshold: float = 0.70,
+        strategy: Literal["godel", "luka"] = "luka"
+    ):
+        self.low = low_threshold
+        self.high = high_threshold
+        self.strategy = strategy
+        self._warmup()
+
+    def _warmup(self) -> None:
+        s = np.random.rand(256, 4).astype(np.float64)
+        d = np.random.randint(-2, 3, size=(256, 5)).astype(np.int8)
+        _ = l3_triage_batch_v2(s)
+        _ = luka_reduce_batch_v2(d)
+        _ = godel_reduce_batch_v2(d)
+        _ = bxos_guard_v2(d.astype(np.float64))
+
+    def filter(
+        self,
+        confidence_scores: List[List[float]],
+        avg_tokens_per_request: int = 1500,
+        energy_per_1k_tokens_wh: float = 0.3
+    ) -> PreFilterResult:
+        """
+        Главный метод.
+
+        confidence_scores: список векторов уверенности
+                           (например, [score_class1, score_class2, ...])
+        avg_tokens_per_request: средний размер запроса+ответа LLM (для оценки экономии)
+        energy_per_1k_tokens_wh: грубая оценка энергии (Wh) на 1000 токенов
+        """
+        t0 = time.perf_counter()
+        scores = np.asarray(confidence_scores, dtype=np.float64)
+        n = scores.shape[0]
+
+        triage = l3_triage_batch_v2(scores, low=self.low, high=self.high)
+
+        reject_count = int(np.sum(triage == -1))
+        clarify_count = int(np.sum(triage == 0))
+        pass_count = int(np.sum(triage == 1))
+
+        decisions = []
+        for code in triage:
+            if code == -1:
+                decisions.append("REJECT")
+            elif code == 0:
+                decisions.append("CLARIFY")
+            else:
+                decisions.append("PASS")
+
+        latency = (time.perf_counter() - t0) * 1000
+        qps = n / (latency / 1000.0) if latency > 0 else 0.0
+        reject_ratio = reject_count / n if n else 0.0
+
+        # Оценка экономии: REJECT не идут в LLM
+        # (CLARIFY можно считать частичной экономией — здесь считаем только жёсткий REJECT)
+        estimated_token_savings = reject_ratio
+
+        return PreFilterResult(
+            decisions=decisions,
+            triage_codes=triage.tolist(),
+            reject_count=reject_count,
+            clarify_count=clarify_count,
+            pass_count=pass_count,
+            reject_ratio=reject_ratio,
+            estimated_token_savings=estimated_token_savings,
+            latency_ms=latency,
+            throughput_qps=qps
+        )
+
+    def filter_with_context(
+        self,
+        confidence_scores: List[List[float]],
+        context_vectors: Optional[List[List[int]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Расширенный режим: triage + опциональная свёртка контекста (L5).
+        """
+        base = self.filter(confidence_scores)
+        result = asdict(base)
+
+        if context_vectors is not None:
+            ctx = np.asarray(context_vectors, dtype=np.int8)
+            if self.strategy == "luka":
+                folded = luka_reduce_batch_v2(bxos_guard_v2(ctx.astype(np.float64)))
+            else:
+                folded = godel_reduce_batch_v2(bxos_guard_v2(ctx.astype(np.float64)))
+            result["context_folded"] = folded.tolist()
+
+        return result
+
+
+# ==============================================================================
+# BENCHMARK + DEMO
+# ==============================================================================
+
+def run_benchmark() -> None:
+    print("=" * 78)
+    print("AI ACCELERATOR — LLM PRE-FILTER V23")
+    print("Author: Vladimir Zavodiuk | All Rights Reserved")
+    print("=" * 78)
+
+    acc = AIAcceleratorLLMPreFilter(low_threshold=0.30, high_threshold=0.70)
+    np.random.seed(42)
+
+    print("\n[*] Synthetic load (mixed quality requests)")
+    print(f"{'Batch':>8} | {'Latency':>10} | {'QPS':>12} | {'Reject%':>9} | {'PASS':>8}")
+    print("-" * 60)
+
+    for bs in [64, 256, 1024, 4096, 16384]:
+        # 35% low-confidence, 65% normal
+        scores = np.random.rand(bs, 4)
+        scores[:int(bs * 0.35)] *= 0.28
+        scores_list = scores.tolist()
+
+        # warmup
+        for _ in range(3):
+            acc.filter(scores_list)
+
+        times = []
+        rejects = []
+        for _ in range(20):
+            r = acc.filter(scores_list)
+            times.append(r.latency_ms)
+            rejects.append(r.reject_ratio)
+
+        avg_ms = float(np.mean(times))
+        avg_rej = float(np.mean(rejects)) * 100
+        qps = bs / (avg_ms / 1000.0)
+        print(f"{bs:>8} | {avg_ms:>8.3f} ms | {qps:>10.0f} | {avg_rej:>7.1f}% | {100-avg_rej:>6.1f}%")
+
+    # Savings example
+    print("\n" + "=" * 78)
+    print("ПРИМЕР ОЦЕНКИ ЭКОНОМИИ (иллюстративный)")
+    print("=" * 78)
+    daily_requests = 10_000_000
+    reject_rate = 0.30
+    tokens_per_req = 1500
+    saved_requests = int(daily_requests * reject_rate)
+    saved_tokens = saved_requests * tokens_per_req
+    print(f"  Запросов в сутки          : {daily_requests:,}")
+    print(f"  Доля REJECT pre-filter    : {reject_rate*100:.0f}%")
+    print(f"  Запросов не ушло в LLM    : {saved_requests:,}")
+    print(f"  Токенов сэкономлено       : {saved_tokens:,}")
+    print(f"  (при ~{tokens_per_req} токенов на запрос)")
+    print("\n  Примечание: цифры зависят от качества upstream-скоров")
+    print("  и порогов low/high. Это оценка порядка, не гарантия.")
+    print("=" * 78)
+
+    print("\n[+] AI Accelerator LLM Pre-Filter V23 готов.")
+    print("    Использование: accelerator.filter(confidence_scores)")
+    print("=" * 78)
+
+
+if __name__ == "__main__":
+    run_benchmark()
