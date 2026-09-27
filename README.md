@@ -141,3 +141,6 @@ The open-source **Technology_constructor** ecosystem shifts IT infrastructure fr
 • 🪙 토큰 절약: 원본 텍스트 로그 대신 5바이트 온톨로지 벡터를 전송함으로써 정확히 1000배(token_savings_factor = 1000x)의 토큰을 절약합니다.
 • 📉 GPU 부하 경감: 99.8% 감소. 모든 구조, 논리, 네트워크 및 미디어 필터링 연산이 완전히 CPU로 이관됩니다.
 • ⚡ 전력 효율성: 절대적인 결정론과 메모리 할당 제로 가비지 컬렉션을 유지하면서 데이터 센터의 전력 소비를 수분의 일로 감소시킵니다.
+
+Contact +359877724745
+glovesandfactories@gmail.com
