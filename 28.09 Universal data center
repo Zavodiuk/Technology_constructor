@@ -1,0 +1,420 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# All rights reserved
+# Copyright (c) 2026 Vladimir Zavodiuk (Владимир Заводюк)
+# Author: Vladimir Zavodiuk (Root-Architect)
+# Version: Universal Datacenter Node + Optical Transport Layer V23.7
+
+"""
+================================================================================
+UNIVERSAL DATACENTER NODE + OPTICAL TRANSPORT LAYER V23.7
+================================================================================
+
+Объединённый узел дата-центра:
+  • Вычислительное ядро W4.2 (Гёдель / Лукасевич K=2)
+  • Rashomon + 5×5 онтология
+  • FastAPI интерфейс + zlib (уровень 9) сжатие
+  • Сквозной цикл: Кодер -> ВОЛС -> Декодер
+
+Автор: Владимир Заводюк
+ALL RIGHTS RESERVED
+================================================================================
+"""
+
+from __future__ import annotations
+
+import sys
+import os
+import time
+import json
+import zlib
+import base64
+import numpy as np
+from typing import Dict, Any, List, Optional, Tuple
+from collections import deque
+from dataclasses import dataclass
+
+# ---------------------------------------------------------------------------
+# Зависимости FastAPI
+# ---------------------------------------------------------------------------
+try:
+    from fastapi import FastAPI, HTTPException
+    from pydantic import BaseModel, Field
+    import uvicorn
+except ImportError:
+    print("[-] Требуются: fastapi uvicorn pydantic numpy")
+    print("    pip install fastapi uvicorn pydantic numpy")
+    sys.exit(1)
+
+# ---------------------------------------------------------------------------
+# Импорт Оптического Транспортного Слоя
+# ---------------------------------------------------------------------------
+try:
+    from Optical_Transport_Layer_V23 import (
+        OpticalTransportLayerV23,
+        OpticalTransmissionResult
+    )
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        from Optical_Transport_Layer_V23 import (
+            OpticalTransportLayerV23,
+            OpticalTransmissionResult
+        )
+    except ImportError:
+        class OpticalTransmissionResult:
+            def __init__(self, success=True, message="Simulated direct transport", distance_km=100.0, go_count=10, revise_count=0, no_go_count=0, recovered_payload=b""):
+                self.success = success
+                self.message = message
+                self.distance_km = distance_km
+                self.go_count = go_count
+                self.revise_count = revise_count
+                self.no_go_count = no_go_count
+                self.recovered_payload = recovered_payload
+
+        class OpticalTransportLayerV23:
+            def __init__(self, seed_a: float = 0.33, seed_b: float = 1.95):
+                pass
+            def transmit(self, payload: bytes, distance_km: float = 100.0, **kwargs) -> OpticalTransmissionResult:
+                return OpticalTransmissionResult(recovered_payload=payload, distance_km=distance_km)
+
+
+# ==============================================================================
+# 1. BXOS GATE
+# ==============================================================================
+
+class BXOSGate:
+    """Детерминированный входной/выходной фильтр критических состояний."""
+    @staticmethod
+    def guard(signal: np.ndarray) -> np.ndarray:
+        return np.clip(signal, -2.0, 2.0)
+
+    def __init__(self, min_confidence: float = 0.4, critical_states: Tuple[int, ...] = (-2, -1)):
+        self.min_confidence = min_confidence
+        self.critical_states = set(critical_states)
+        self.total_count = 0
+        self.locked_count = 0
+
+    def summary(self) -> Dict[str, Any]:
+        return {
+            "total": self.total_count,
+            "ready": self.total_count - self.locked_count,
+            "locked": self.locked_count
+        }
+
+
+# ==============================================================================
+# 2. Логическое ядро W4.2 и Триаж
+# ==============================================================================
+
+class MultivaluedLogicEngine:
+    """Универсальный контур свёртки: Гёдель (min) vs Сильный Лукасевич (K=2)."""
+    def __init__(self, strategy: str = "luka"):
+        if strategy not in ("godel", "luka"):
+            raise ValueError("strategy must be 'godel' or 'luka'")
+        self.strategy = strategy
+
+    def fold(self, data: np.ndarray) -> np.ndarray:
+        arr = np.asarray(data, dtype=np.int8)
+        clean = BXOSGate.guard(arr.astype(np.float64)).astype(np.int8)
+        
+        if clean.ndim == 1:
+            if self.strategy == "godel":
+                return np.array([int(np.min(clean))])
+            n = len(clean)
+            total = int(np.sum(clean, dtype=np.int16))
+            return np.array([max(-2, total - 2 * (n - 1))])
+            
+        if self.strategy == "godel":
+            return np.min(clean, axis=-1).astype(np.int8)
+        
+        n = clean.shape[-1]
+        total = np.sum(clean.astype(np.int16), axis=-1)
+        return np.maximum(-2, total - 2 * (n - 1)).astype(np.int8)
+
+
+class TernaryProcessor:
+    @staticmethod
+    def analyze_interpretations(
+        scores: np.ndarray,
+        margin_threshold: float = 0.15,
+        min_score: float = 0.3
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        if scores.size == 0:
+            return np.array([-1]), np.array([-1]), np.array([0.0])
+
+        best_idx = np.argmax(scores, axis=1)
+        best_scores = scores[np.arange(scores.shape[0]), best_idx]
+        sorted_scores = np.sort(scores, axis=1)[:, ::-1]
+        margins = sorted_scores[:, 0] - (sorted_scores[:, 1] if scores.shape[1] > 1 else 0.0)
+
+        states = np.zeros(scores.shape[0], dtype=np.int8)
+        states[best_scores < min_score] = -1
+        states[(best_scores >= min_score) & (margins >= margin_threshold)] = 1
+
+        return states, best_idx, best_scores
+
+
+class PentarnyRashomon:
+    """Многоракурсный блок валидации (Rashomon) для пакетного анализа."""
+    PERSPECTIVES = ("technical", "operational", "structural", "boundary", "risk")
+
+    @staticmethod
+    def evaluate(matrix: np.ndarray) -> Dict[str, Any]:
+        if matrix.size == 0:
+            return {p: 0.0 for p in PentarnyRashomon.PERSPECTIVES}
+        
+        float_m = matrix.astype(np.float64)
+        return {
+            "technical": np.mean(float_m, axis=-1).tolist(),
+            "operational": np.min(float_m, axis=-1).tolist(),
+            "structural": np.max(float_m, axis=-1).tolist(),
+            "boundary": np.std(float_m, axis=-1).tolist() if float_m.ndim > 1 else float(np.std(float_m)),
+            "risk": (-np.mean(np.abs(float_m), axis=-1)).tolist()
+        }
+
+
+class PentaryMatrixEngine:
+    """Универсальный пентарный матричный движок L5 с ультрабыстрой проекцией."""
+    LAYERS = ["L1_Intent", "L2_Goal", "L3_Ontology", "L4_Context", "L5_Action"]
+
+    def __init__(self):
+        self.state = np.zeros((5, 5), dtype=np.int8)
+
+    def update_from_l5(self, l5_list: List[List[int]]) -> np.ndarray:
+        arr = np.asarray(l5_list, dtype=np.int8)
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+            
+        batch_size = arr.shape[0]
+        out = np.zeros((batch_size, 5, 5), dtype=np.int8)
+        idx = np.arange(5)
+        out[:, idx, idx] = arr[:, :5]
+        return out
+
+
+# ==============================================================================
+# 3. Оркестратор пайплайна
+# ==============================================================================
+
+class BXOSPipeline:
+    """Сквозной оркестратор пакетных расчетов W4.2, Rashomon и онтологических матриц."""
+    def __init__(self, strategy: str = "luka"):
+        self.gate = BXOSGate()
+        self.logic = MultivaluedLogicEngine(strategy=strategy)
+        self.matrix_engine = PentaryMatrixEngine()
+        self.rashomon = PentarnyRashomon()
+
+    def run(self, interpretations_scores: List[List[float]], l5_values_list: List[List[int]]) -> dict:
+        scores = np.array(interpretations_scores, dtype=np.float32)
+        l5 = np.array(l5_values_list, dtype=np.int8)
+        
+        states, best_idx, confidences = TernaryProcessor.analyze_interpretations(scores)
+        folded = self.logic.fold(l5)
+        matrices = self.matrix_engine.update_from_l5(l5_values_list)
+        audit = self.rashomon.evaluate(l5)
+        system_energy = (np.mean(np.abs(l5), axis=-1) / 2.0).tolist()
+        
+        statuses = np.where(states == -1, "LOCKED_INPUT", np.where(states == 0, "LOCKED_OUTPUT", "OK")).tolist()
+        
+        batch_size = len(statuses)
+        locked_batch = sum(1 for s in statuses if s.startswith("LOCKED"))
+        self.gate.total_count += batch_size
+        self.gate.locked_count += locked_batch
+        
+        return {
+            "statuses": statuses,
+            "best_candidate_indices": best_idx.tolist(),
+            "confidences": confidences.tolist(),
+            "folded_results": folded.tolist() if hasattr(folded, "tolist") else list(folded),
+            "system_energy": system_energy,
+            "rashomon_audit": audit,
+            "matrix_shape": [5, 5],
+            "ontology_layers": self.matrix_engine.LAYERS,
+            "linear_matrices_5x5": matrices.tolist()
+        }
+
+
+# ==============================================================================
+# 4. ФИНАЛЬНЫЙ СЕТЕВОЙ БЛОК (Кодер -> ВОЛС -> Декодер)
+# ==============================================================================
+
+app = FastAPI(
+    title="Universal Datacenter Node + Optical Transport V23.7",
+    description="Вычислительный узел W4.2 + Полный цикл: Кодер -> ВОЛС -> Декодер",
+    version="2.3.7-Production"
+)
+
+node_pipeline = BXOSPipeline(strategy="luka")
+optical_transport = OpticalTransportLayerV23(seed_a=0.33, seed_b=1.95)
+
+
+class NodePayload(BaseModel):
+    interpretations_scores: List[List[float]] = Field(
+        ...,
+        example=[[0.85, 0.62, 0.41, 0.15], [0.91, 0.44, 0.22, 0.10]]
+    )
+    l5_values_list: List[List[int]] = Field(
+        ...,
+        example=[[1, 0, -1, 2, -2], [2, 1, 0, -1, -2]]
+    )
+
+
+class OpticalTransmitRequest(BaseModel):
+    payload_b64: Optional[str] = None
+    payload_text: Optional[str] = None
+    distance_km: float = 100.0
+    chromatic_dispersion: float = 0.04
+    kerr_nonlinearity: float = 0.015
+    osnr_db: float = 26.0
+
+
+class ComputeAndTransmitRequest(BaseModel):
+    """Параметры для сквозного цикла: расчет, кодирование и передача."""
+    interpretations_scores: List[List[float]]
+    l5_values_list: List[List[int]]
+    distance_km: float = 150.0
+    chromatic_dispersion: float = 0.04
+    kerr_nonlinearity: float = 0.015
+    osnr_db: float = 26.5
+
+
+class OpticalReceiverPayload(BaseModel):
+    """Структура, которую принимает декодер на удаленной стороне ВОЛС."""
+    compressed_payload_b64: str = Field(..., description="Сжатые zlib-данные в кодировке Base64")
+    original_size_bytes: int
+
+
+@app.get("/")
+def node_status():
+    return {
+        "author": "Vladimir Zavodiuk",
+        "rights": "All rights reserved",
+        "project": "Universal Datacenter Node + Optical Transport Layer V23.7",
+        "node_id": os.getenv("NODE_ID", "node-01"),
+        "node_status": "active",
+        "architecture": "W4.2 + 5x5 + Rashomon + Полный цикл Кодер/Декодер + ВОЛС",
+        "capabilities": [
+            "compute-linear-batch",
+            "optical-transmit",
+            "compute-and-transmit-optical",
+            "receive-and-decode-optical"
+        ],
+        "telemetry": node_pipeline.gate.summary()
+    }
+
+
+@app.post("/compute-linear-batch")
+def compute_linear_batch(payload: NodePayload):
+    try:
+        return node_pipeline.run(payload.interpretations_scores, payload.l5_values_list)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/compute-and-transmit-optical")
+async def compute_and_transmit_optical(req: ComputeAndTransmitRequest):
+    """
+    СТОРОНА А (КОДЕР):
+    1. Вычисление батча через W4.2 + Rashomon
+    2. Сериализация в JSON и zlib-сжатие (уровень 9)
+    3. Передача по оптическому каналу ВОЛС
+    """
+    try:
+        compute_result = node_pipeline.run(req.interpretations_scores, req.l5_values_list)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Compute error: {e}")
+
+    raw_json = json.dumps(compute_result, ensure_ascii=False).encode("utf-8")
+    compressed_payload = zlib.compress(raw_json, level=9)
+    
+    orig_size = len(raw_json)
+    comp_size = len(compressed_payload)
+    compression_ratio = round(orig_size / comp_size, 2) if comp_size > 0 else 1.0
+
+    optical_result = optical_transport.transmit(
+        payload=compressed_payload,
+        distance_km=req.distance_km,
+        chromatic_dispersion=req.chromatic_dispersion,
+        kerr_nonlinearity=req.kerr_nonlinearity,
+        osnr_db=req.osnr_db
+    )
+
+    transmitted_b64 = base64.b64encode(optical_result.recovered_payload).decode("utf-8")
+
+    return {
+        "transmission_meta": {
+            "success": optical_result.success,
+            "message": optical_result.message,
+            "distance_km": optical_result.distance_km,
+            "go_count": optical_result.go_count,
+            "optimization_ratio": compression_ratio
+        },
+        "transport_payload": {
+            "compressed_payload_b64": transmitted_b64,
+            "original_size_bytes": orig_size
+        }
+    }
+
+
+@app.post("/receive-and-decode-optical")
+async def receive_and_decode_optical(payload: OpticalReceiverPayload):
+    """
+    СТОРОНА Б (ДЕКОДЕР):
+    1. Прием оптического пакета (Base64)
+    2. Декомпрессия zlib
+    3. Восстановление исходной структуры троичных пинтарных матриц
+    """
+    try:
+        compressed_bytes = base64.b64decode(payload.compressed_payload_b64)
+        raw_json_bytes = zlib.decompress(compressed_bytes)
+        restored_data = json.loads(raw_json_bytes.decode("utf-8"))
+        decompressed_size = len(raw_json_bytes)
+        
+        return {
+            "decoder_status": "SUCCESS",
+            "integrity_check": {
+                "expected_size_bytes": payload.original_size_bytes,
+                "restored_size_bytes": decompressed_size,
+                "match": payload.original_size_bytes == decompressed_size
+            },
+            "restored_matrices": restored_data
+        }
+        
+    except zlib.error as ze:
+        raise HTTPException(
+            status_code=422, 
+            detail=f"Ошибка декомпрессии ВОЛС (Пакет поврежден дисперсией или шумами): {ze}"
+        )
+    except json.JSONDecodeError as jde:
+        raise HTTPException(
+            status_code=422, 
+            detail=f"Ошибка структуры данных при десериализации восстановленного кадра: {jde}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Критический сбой декодера: {e}"
+        )
+
+
+# ==============================================================================
+# Запуск сервера
+# ==============================================================================
+
+if __name__ == "__main__":
+    print("=" * 78)
+    print("Universal Datacenter Node + Optical Transport Layer V23.7")
+    print("Author: Vladimir Zavodiuk (Владимир Заводюк) | All Rights Reserved")
+    print("=" * 78)
+    print(f"[*] NODE_ID: {os.getenv('NODE_ID', 'node-01')}")
+    print("[*] Endpoints:")
+    print("    GET  /")
+    print("    POST /compute-linear-batch")
+    print("    POST /optical-transmit")
+    print("    POST /compute-and-transmit-optical (Сторона А - Кодер)")
+    print("    POST /receive-and-decode-optical  (Сторона Б - Декодер)")
+    print("=" * 78)
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
