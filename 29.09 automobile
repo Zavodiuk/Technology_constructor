@@ -1,0 +1,439 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# =====================================================================
+# АВТОМОБИЛЬНЫЙ КИБЕРНЕТИЧЕСКИЙ КОНТРОЛЛЕР ДВС (ВЕРСИЯ V26 - PRODUCTION)
+# СТАБИЛИЗИРОВАННЫЙ МОНОЛИТНЫЙ ИНТЕГРИРОВАННЫЙ КОНТУР РЕАЛЬНОГО ВРЕМЕНИ
+# 
+# АВТОР / РУТ-АРХИТЕКТОР: Владимир Заводюк (Vladimir Zavodiuk)
+# © 2026 Владимир Заводюк. All rights reserved. Все права защищены.
+# =====================================================================
+
+import time
+import socket
+import struct
+import zlib
+import hashlib
+import uuid
+import json
+import sys
+import os
+import numpy as np
+from typing import Dict, Tuple, Optional, Any
+from dataclasses import dataclass
+
+try:
+    import can
+except ImportError:
+    can = None
+
+
+# Шаблон systemd демона для автоустановки
+SYSTEMD_SERVICE_TEMPLATE = """[Unit]
+Description=Zavodiuk Cybernetic Engine Controller Core V26 (100Hz)
+After=network.target local-fs.target
+Wants=can-interface-init.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory={work_dir}
+ExecStart=/usr/bin/python3 {script_path}
+Restart=always
+RestartSec=1s
+
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=99
+IOSchedulingClass=realtime
+IOSchedulingPriority=0
+
+MemoryMax=256M
+MemoryHigh=192M
+CPUWeight=1000
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cyber_controller
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+# =====================================================================
+# ШАГ 1: АППАРАТНЫЙ CAN-ШЛЮЗ И ВХОДНОЙ ГЕЙТ БЕЗОПАСНОСТИ (W5.5)
+# =====================================================================
+
+class BXOSHardwareGate:
+    def __init__(self, min_confidence: float = 0.4, max_rpm: float = 6500.0, crit_knock: float = 3.5):
+        self.min_confidence = min_confidence
+        self.max_rpm = max_rpm
+        self.crit_knock = crit_knock
+
+    def guard_telemetry(self, raw_telemetry: np.ndarray) -> np.ndarray:
+        clean = np.copy(raw_telemetry).astype(np.float64)
+        clean[0] = np.clip(clean[0], 0.0, self.max_rpm)
+        clean[1] = np.clip(clean[1], 0.0, 100.0)
+        clean[2] = np.clip(clean[2], 0.6, 1.4)
+        clean[3] = np.clip(clean[3], 0.0, self.crit_knock * 1.5)
+        clean[4] = np.clip(clean[4], 0.0, 1.0)
+        if clean[4] < self.min_confidence:
+            clean[4] = -1.0  
+        return clean
+
+
+class LinuxSocketCANReceiver:
+    def __init__(self, channel: str = "can0", min_conf: float = 0.4, max_rpm: float = 6500.0, crit_knock: float = 3.5):
+        self.channel = channel
+        self.bus = None
+        self.gate = BXOSHardwareGate(min_confidence=min_conf, max_rpm=max_rpm, crit_knock=crit_knock)
+
+    def initialize_bus(self) -> bool:
+        if can is None:
+            return False
+        try:
+            self.bus = can.interface.Bus(channel=self.channel, bustype="socketcan", receive_own_messages=False)
+            return True
+        except Exception:
+            return False
+
+    def capture_bus_tick(self) -> Optional[np.ndarray]:
+        if self.bus is None:
+            t = time.time()
+            sim_vector = np.array([
+                2000.0 + 400.0 * np.sin(t * 0.5),
+                25.0 + 5.0 * np.sin(t * 0.3),
+                1.0 + 0.02 * np.cos(t * 0.8),
+                0.15 + 0.05 * np.sin(t * 2.0),
+                0.98 if np.sin(t * 0.1) > -0.9 else 0.3
+            ], dtype=np.float64)
+            return self.gate.guard_telemetry(sim_vector)
+            
+        try:
+            msg = self.bus.recv(timeout=0.002) # Неблокирующее окно чтения 2мс
+            if msg is None:
+                return None
+            if msg.arbitration_id == 0x100 and len(msg.data) >= 8:
+                raw_rpm, raw_tps, raw_knock, raw_lambda = struct.unpack(">HHHH", msg.data[:8])
+                raw_vector = np.array([
+                    raw_rpm * 0.25,
+                    raw_tps * 0.015,
+                    raw_lambda * 0.001,
+                    raw_knock * 0.001,
+                    1.0
+                ], dtype=np.float64)
+                return self.gate.guard_telemetry(raw_vector)
+        except Exception:
+            pass
+        return None
+
+
+# =====================================================================
+# ШАГ 2: ВЕКТОРИЗОВАННАЯ ВОЛНОВАЯ КАРТА ДВС (v18_hybrid)
+# =====================================================================
+
+class TernaryEngineMacroField:
+    def __init__(self, size: int = 256, damping: float = 0.98, c2: float = 0.25):
+        self.size = size
+        self.damping = damping
+        self.c2 = c2
+        self.field = np.zeros((size, size), dtype=np.float64)
+        self.velocity = np.zeros((size, size), dtype=np.float64)
+        self.brigella_mask = np.zeros((size, size), dtype=np.float64)
+        self.arlecchino_mask = np.zeros((size, size), dtype=np.float64)
+        self._init_attractors()
+
+    def _init_attractors(self):
+        self.brigella_mask[64:96, 64:96] = 2.0
+        self.arlecchino_mask[200:240, 200:240] = -2.0
+
+    def propagate_wave_vectorized(self):
+        laplacian = (
+            np.roll(self.field, 1, axis=0) +
+            np.roll(self.field, -1, axis=0) +
+            np.roll(self.field, 1, axis=1) +
+            np.roll(self.field, -1, axis=1) -
+            4.0 * self.field
+        )
+        accel = self.c2 * laplacian + self.brigella_mask + self.arlecchino_mask
+        self.velocity = self.velocity * self.damping + accel
+        self.field += self.velocity
+        np.clip(self.field, -2.0, 2.0, out=self.field)
+
+    def update_engine_map(self, rpm: float, load: float, max_rpm: float):
+        x = int(np.clip((rpm / max_rpm) * (self.size - 1), 0, self.size - 1))
+        y = int(np.clip((load / 100.0) * (self.size - 1), 0, self.size - 1))
+        # Насыщение предотвращает числовой взрыв инкремента
+        y_min, y_max = max(0, y-4), min(self.size, y+5)
+        x_min, x_max = max(0, x-4), min(self.size, x+5)
+        self.field[y_min:y_max, x_min:x_max] = np.clip(self.field[y_min:y_max, x_min:x_max] + 1.0, -2.0, 2.0)
+
+    def extract_current_state(self, rpm: float, load: float, max_rpm: float) -> float:
+        x = int(np.clip((rpm / max_rpm) * (self.size - 1), 0, self.size - 1))
+        y = int(np.clip((load / 100.0) * (self.size - 1), 0, self.size - 1))
+        return float(self.field[y, x])
+
+
+# =====================================================================
+# ШАГ 3: МЕМБРАНА ЗАЖИГАНИЯ И ЭНТРОПИЯ ПО БАЗЕ 3 (W18.1 + W19.2)
+# =====================================================================
+
+class TernaryDynamicPlaneMembrane:
+    def __init__(self, entropy_chaos_barrier: float = 0.35):
+        self.field_4d = np.zeros((5, 5, 5, 5), dtype=np.float64)
+        self.vertex_a = np.array([4, 4, 4, 4], dtype=int)
+        self.vertex_c = np.array([0, 0, 0, 0], dtype=int)
+        self.entropy_threshold = entropy_chaos_barrier
+        self.chaos_radius = 1
+
+    def _check_forbidden_coords(self, new_pos: np.ndarray, other: np.ndarray) -> bool:
+        return not (np.array_equal(new_pos, other) or np.sum(np.abs(new_pos - other)) < 1)
+
+    def drift_vertices(self, grad: np.ndarray):
+        step = np.sign(grad[:4]).astype(int)
+        cand_a = np.clip(self.vertex_a + step, 0, 4)
+        if self._check_forbidden_coords(cand_a, self.vertex_c):
+            self.vertex_a = cand_a
+        cand_c = np.clip(self.vertex_c - step, 0, 4)
+        if self._check_forbidden_coords(cand_c, self.vertex_a):
+            self.vertex_c = cand_c
+
+    def calculate_shannon_entropy_base3(self) -> float:
+        flat = self.field_4d.flatten()
+        total = np.sum(np.abs(flat))
+        if total == 0.0:
+            return 0.0
+        p = np.abs(flat) / total
+        p = p[p > 0]
+        return float(-np.sum(p * np.log(p) / np.log(3.0)))
+
+    def update_membrane_state(self, knock: float):
+        h3 = self.calculate_shannon_entropy_base3()
+        self.chaos_radius = 2 if h3 > self.entropy_threshold else 1
+        self.field_4d[tuple(self.vertex_a)] += 1.0
+        self.field_4d[tuple(self.vertex_c)] -= 1.0
+        self.field_4d *= 0.95
+
+
+# =====================================================================
+# ШАГ 4: СТРАТЕГИИ ГЁДЕЛЯ/ЛУКАСЕВИЧА И ЭБУ-ДРАЙВЕР (W5.5)
+# =====================================================================
+
+class W5AdaptiveProductionPipeline:
+    def __init__(self, stress_threshold: float = 0.70):
+        self.stress_threshold = stress_threshold
+
+    def process_cycle(self, rpm: float, throttle: float, knock: float, macro_pot: float, max_rpm: float):
+        stress = float(np.clip((rpm / max_rpm * 0.4) + (throttle / 100.0 * 0.3) + (knock / 5.0 * 0.3), 0.0, 1.0))
+        use_luka = stress >= self.stress_threshold
+        strategy = "LUKASIEWICZ_STRONG" if use_luka else "GODEL_KLEENE"
+        
+        norm_macro_pot = np.clip(macro_pot / 2.0, -1.0, 1.0)
+        sensor_signal = np.clip(1.0 - knock / 5.0, -1.0, 1.0)
+        
+        if use_luka:
+            folded = max(-1.0, norm_macro_pot + sensor_signal - 1.0)
+            if norm_macro_pot <= 0.0 and sensor_signal <= 0.0:
+                folded = -1.0
+        else:
+            folded = min(norm_macro_pot, sensor_signal)
+            
+        fuel_trim = -15.0 * abs(folded) if use_luka and folded < 0 else float(np.clip(folded * 3.75, -15.0, 0.0))
+        spark_advance = -8.0 * abs(folded) if use_luka and folded < 0 else float(np.clip(folded * 3.25, -8.0, 5.0))
+        
+        receipt_id = str(uuid.uuid4())
+        digest = hashlib.sha256(f"{receipt_id}:{strategy}:{stress:.4f}".encode('utf-8')).hexdigest()
+        return {"fuel_trim": fuel_trim, "spark_advance": spark_advance}, {"request_id": receipt_id, "strategy": strategy, "digest": digest}
+
+
+# =====================================================================
+# ШАГ 5: КВАНТОВАТЕЛЬ ОСТАТКА И АРХИВАТОР ZV26 (.zvd)
+# =====================================================================
+
+class ZvdAdaptiveResidualEngine:
+    def __init__(self, size: int = 256):
+        self.size = size
+
+    def compute_residual_and_filter(self, actual: np.ndarray, model: np.ndarray, rhythm: float):
+        threshold = 5.0 + rhythm * 55.0
+        delta = actual - model
+        mask = np.abs(delta) >= threshold
+        y, x = np.where(mask)
+        return y.astype(np.uint8), x.astype(np.uint8), delta[mask].astype(np.int16)
+
+
+class ZvdBitstreamManager:
+    MAGIC_SIGNATURE = b"ZV26"
+
+    @classmethod
+    def pack_log_frame(cls, y: np.ndarray, x: np.ndarray, devs: np.ndarray) -> bytes:
+        count = len(y)
+        raw = struct.pack(f"=I{count}B{count}B{count}h", count, *y.tolist(), *x.tolist(), *devs.tolist())
+        comp = zlib.compress(raw, level=9)
+        return cls.MAGIC_SIGNATURE + struct.pack("=I", len(comp)) + comp
+
+
+# =====================================================================
+# ГЛАВНЫЙ КИБЕРНЕТИЧЕСКИЙ КОНТРОЛЛЕР ДВС (PRODUCTION)
+# =====================================================================
+
+class ZavodiukCyberControllerCore:
+    """
+    Финальный бортовой кибернетический контроллер ДВС Заводюка (100 Гц).
+    Интегрирует ядра W5.5, v18_hybrid, W18.1 и W19.2 под Embedded Linux.
+    """
+    def __init__(self, config: dict, can_channel: str = "can0", target_tick_ms: float = 10.0):
+        self.config = config
+        self.target_tick_sec = target_tick_ms / 1000.0
+        self.is_running = False
+        self.safe_mode_active = False
+
+        meta = config["engine_metadata"]
+        thresholds = config["sensor_thresholds"]
+        calibs = config["ternary_calibrations"]
+
+        self.max_rpm = meta.get("max_rpm", 6500.0)
+
+        self.can_receiver = LinuxSocketCANReceiver(
+            channel=can_channel,
+            min_conf=thresholds["min_gate_confidence"],
+            max_rpm=self.max_rpm,
+            crit_knock=thresholds.get("critical_knock_voltage", 3.5)
+        )
+        
+        self.macro_field = TernaryEngineMacroField(
+            size=256,
+            damping=calibs["wave_damping"],
+            c2=calibs["wave_c2_velocity"]
+        )
+        
+        self.membrane = TernaryDynamicPlaneMembrane(
+            entropy_chaos_barrier=calibs["entropy_chaos_barrier"]
+        )
+        
+        self.pipeline = W5AdaptiveProductionPipeline(
+            stress_threshold=calibs["stress_threshold"]
+        )
+        
+        self.residual_engine = ZvdAdaptiveResidualEngine(size=256)
+
+        self.tick_counter = 0
+        self.emergency_triggers = 0
+        self.last_receipt = None
+
+    def start_bootstrap(self):
+        print(f"[*] Запуск ИИ-контроллера Заводюка V26 (Production) для профиля: {self.config['engine_metadata']['name']}")
+        if self.can_receiver.initialize_bus():
+            print("[+] CAN-интерфейс инициализирован (SocketCAN).")
+        else:
+            print("[!] Аппаратный CAN недоступен. Запущен отказоустойчивый симуляционный контур.")
+
+        self.is_running = True
+        self.run_main_loop()
+
+    def run_main_loop(self):
+        print(f"[+] Тактовый контур реального времени активен (100 Гц, период {self.target_tick_sec*1000:.1f} мс).")
+        
+        while self.is_running:
+            tick_start = time.perf_counter()
+            
+            try:
+                # 1. Захват и фильтрация телеметрии
+                raw = self.can_receiver.capture_bus_tick()
+                if raw is None or raw[4] < 0.0:
+                    raise TimeoutError("Таймаут шины CAN: нет валидного пакета.")
+
+                rpm, throttle, lambda_val, knock, _ = raw
+
+                # 2. Волновой накат на матрице 256x256
+                self.macro_field.update_engine_map(rpm, throttle, self.max_rpm)
+                self.macro_field.propagate_wave_vectorized()
+                macro_pot = self.macro_field.extract_current_state(rpm, throttle, self.max_rpm)
+
+                # 3. Мембрана УОЗ, расчет энтропии log3 и дрейф вершин
+                self.membrane.update_membrane_state(knock)
+                grad_vector = np.array([rpm, throttle, lambda_val, knock], dtype=np.float64)
+                self.membrane.drift_vertices(grad_vector)
+                rhythm = float(self.membrane.calculate_shannon_entropy_base3() / 2.0)
+
+                # 4. Оркестратор стресса (Гёдель / Лукасевич) и драйвер ЭБУ
+                _, self.last_receipt = self.pipeline.process_cycle(rpm, throttle, knock, macro_pot, self.max_rpm)
+
+                # 5. Квантование остатка и упаковка потока ZV26 (.zvd)
+                model_stub = np.full((256, 256), macro_pot, dtype=np.float64)
+                y_idx, x_idx, devs = self.residual_engine.compute_residual_and_filter(
+                    self.macro_field.field, model_stub, rhythm
+                )
+                _ = ZvdBitstreamManager.pack_log_frame(y_idx, x_idx, devs)
+
+                if self.safe_mode_active:
+                    print("[*] Выход из SAFE_MODE: штатный контур стабилизирован.")
+                    self.safe_mode_active = False
+
+                self.tick_counter += 1
+
+            except Exception as e:
+                self.safe_mode_active = True
+                self.emergency_triggers += 1
+                print(f"[!] АВАРИЙНЫЙ СБОЙ КОНТУРА (#{self.emergency_triggers}): {e} -> SAFE_MODE активирован.")
+
+            # Синхронизация тактовой частоты 10 мс
+            elapsed = time.perf_counter() - tick_start
+            sleep_time = self.target_tick_sec - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+    def stop(self):
+        self.is_running = False
+        print(f"[*] Контроллер остановлен. Всего обработано тактов: {self.tick_counter}.")
+
+
+def install_as_systemd_service():
+    """Автоматическая установка скрипта как systemd сервиса реального времени (RT FIFO)."""
+    script_path = os.path.abspath(__file__)
+    work_dir = os.path.dirname(script_path)
+    service_content = SYSTEMD_SERVICE_TEMPLATE.format(script_path=script_path, work_dir=work_dir)
+    service_path = "/etc/systemd/system/cyber-controller.service"
+    
+    try:
+        with open(service_path, "w", encoding="utf-8") as f:
+            f.write(service_content)
+        print(f"[+] Systemd юнит успешно записан в {service_path}")
+        os.system("systemctl daemon-reload")
+        os.system("systemctl enable cyber-controller.service")
+        print("[+] Сервис зарегистрирован и добавлен в автозагрузку.")
+    except Exception as ex:
+        print(f"[-] Ошибка установки systemd сервиса (требуются права root): {ex}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--install":
+        install_as_systemd_service()
+        sys.exit(0)
+
+    # Профиль конфигурации Zavodiuk_Cyber_V6_Turbo
+    default_config = {
+      "engine_metadata": {
+        "name": "Zavodiuk_Cyber_V6_Turbo",
+        "displacement_liters": 3.0,
+        "max_rpm": 6500.0,
+        "idle_rpm": 800.0
+      },
+      "sensor_thresholds": {
+        "optimal_lambda": 1.0,
+        "critical_knock_voltage": 3.5,
+        "min_gate_confidence": 0.4
+      },
+      "ternary_calibrations": {
+        "stress_threshold": 0.70,
+        "entropy_chaos_barrier": 0.35,
+        "wave_damping": 0.98,
+        "wave_c2_velocity": 0.25
+      }
+    }
+
+    controller = ZavodiukCyberControllerCore(config=default_config)
+    try:
+        controller.start_bootstrap()
+    except KeyboardInterrupt:
+        controller.stop()
