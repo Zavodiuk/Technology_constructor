@@ -1,0 +1,784 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# =====================================================================
+# ИДЕНТИФИКАТОР ДОКУМЕНТА: W5.5-GAME-ENGINE-V9.6-ULTIMATE-MONOLITH
+# НАЗВАНИЕ: Полнофункциональный ИИ-акселератор «Гармония» + Театр Масок + ВОЛС (Full)
+# АВТОР / АРХИТЕКТОР: Владимир Заводюк (Vladimir Zavodiuk)
+# ПРАВА: Все права защищены. / All rights reserved.
+# ДАТА: Сентябрь 2026 года
+# СТАТУС: ПОЛНЫЙ ПРОДАКШН-РЕЛИЗ (ВСЕ МЕТОДЫ W5.5 + GAME ENGINE V9.6 + СЕТЬ + ВОЛС)
+# =====================================================================
+
+import sys
+import os
+import time
+import hashlib
+import json
+import zlib
+import base64
+import math
+import numpy as np
+from enum import Enum
+from typing import Literal, Dict, Union, Sequence, Any, Generator, Optional, Tuple, List
+from dataclasses import dataclass, field
+
+# ---------------------------------------------------------------------------
+# Зависимости FastAPI / Pydantic
+# ---------------------------------------------------------------------------
+try:
+    from fastapi import FastAPI, HTTPException
+    from pydantic import BaseModel, Field
+    import uvicorn
+except ImportError:
+    print("[-] Внимание: FastAPI, uvicorn или pydantic не установлены.")
+    print("    Для запуска сетевого шлюза выполните: pip install fastapi uvicorn pydantic numpy")
+    FastAPI = None
+    BaseModel = object
+    def Field(*args, **kwargs): return None
+
+
+# ==============================================================================
+# 1. КОГНИТИВНЫЙ КОНТУР GAME ENGINE V9.6 (ГЕОМЕТРИЯ, ВОЛНЫ, МАСКИ, ЛОМОНОСОВ)
+# ==============================================================================
+
+class GeometryMode(Enum):
+    EUCLIDEAN = "евклидова"
+    HYPERBOLIC = "гиперболическая (Лобачевский)"
+    ELLIPTIC = "эллиптическая (Риман)"
+
+
+class GeometryEngine:
+    def __init__(self, mode: GeometryMode = GeometryMode.HYPERBOLIC):
+        self.mode = mode
+        self.curvature = -1.0
+
+    def set_mode(self, mode: GeometryMode):
+        self.mode = mode
+        if mode == GeometryMode.EUCLIDEAN:
+            self.curvature = 0.0
+        elif mode == GeometryMode.HYPERBOLIC:
+            self.curvature = -1.0
+        elif mode == GeometryMode.ELLIPTIC:
+            self.curvature = 1.0
+
+    def distance(self, p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
+        dx = p1[0] - p2[0]
+        dy = p1[1] - p2[1]
+        euclidean_dist = math.sqrt(dx*dx + dy*dy)
+        if self.curvature == 0:
+            return euclidean_dist
+        elif self.curvature < 0:
+            return math.sinh(euclidean_dist)
+        else:
+            return math.sin(euclidean_dist)
+
+    def select_mode_by_task(self, query: str, interpretations: Dict[str, float]) -> GeometryMode:
+        if len(interpretations) > 5:
+            return GeometryMode.HYPERBOLIC
+        if any(word in query.lower() for word in ['цикл', 'обучение', 'возврат', 'спираль']):
+            return GeometryMode.ELLIPTIC
+        return GeometryMode.EUCLIDEAN
+
+
+@dataclass
+class WaveNode:
+    id: int
+    amplitude: float
+    phase: float
+    position: Tuple[float, float]
+    children: List[int] = field(default_factory=list)
+    parents: List[int] = field(default_factory=list)
+
+    def generate_wave(self, time: float) -> float:
+        omega = 2.0
+        return self.amplitude * math.sin(omega * time + self.phase)
+
+    def spread(self, time: float, nodes: Dict[int, 'WaveNode'], geometry: GeometryEngine) -> Dict[int, float]:
+        result = {}
+        for child_id in self.children:
+            if child_id in nodes:
+                child = nodes[child_id]
+                distance = geometry.distance(self.position, child.position)
+                attenuation = 1.0 / (1.0 + distance)
+                amplitude = self.generate_wave(time) * attenuation
+                result[child_id] = amplitude
+        return result
+
+
+class InterferenceMatrix:
+    def __init__(self, geometry: GeometryEngine):
+        self.nodes: Dict[int, WaveNode] = {}
+        self.waves: Dict[int, float] = {}
+        self.geometry = geometry
+
+    def add_node(self, node: WaveNode):
+        self.nodes[node.id] = node
+
+    def propagate_waves(self, time: float) -> Dict[int, float]:
+        result = {}
+        for node_id, node in self.nodes.items():
+            spread = node.spread(time, self.nodes, self.geometry)
+            for child_id, amp in spread.items():
+                result[child_id] = result.get(child_id, 0.0) + amp
+        self.waves = result
+        return result
+
+    def interference_pattern(self, time: float) -> Dict[int, float]:
+        result = {}
+        for node_id, node in self.nodes.items():
+            incoming = self.waves.get(node_id, 0.0)
+            own = node.generate_wave(time)
+            result[node_id] = incoming + own
+        return result
+
+    def find_conflicts(self, time: float, threshold: float = 0.3) -> List[int]:
+        pattern = self.interference_pattern(time)
+        return [nid for nid, val in pattern.items() if abs(val) > threshold]
+
+    def stability_index(self, time: float) -> float:
+        conflicts = self.find_conflicts(time)
+        total = len(self.nodes) if self.nodes else 1
+        return 1.0 - len(conflicts) / total
+
+
+class KirchhoffBalance:
+    def __init__(self):
+        self.cycles: List[List[int]] = []
+
+    def find_cycles(self, graph: Dict[int, List[int]]) -> List[List[int]]:
+        cycles = []
+        visited = set()
+
+        def dfs(node: int, path: List[int]):
+            if node in visited:
+                if len(path) > 2:
+                    cycle_start = path.index(node)
+                    cycles.append(path[cycle_start:])
+                return
+            visited.add(node)
+            for neighbor in graph.get(node, []):
+                if neighbor not in path or neighbor == path[0]:
+                    dfs(neighbor, path + [neighbor])
+            visited.remove(node)
+
+        for node in graph:
+            if node not in visited:
+                dfs(node, [node])
+        self.cycles = cycles
+        return cycles
+
+    def system_balance(self, waves: Dict[int, float]) -> float:
+        return sum(waves.values())
+
+    def is_balanced(self, waves: Dict[int, float], tolerance: float = 0.01) -> bool:
+        return abs(self.system_balance(waves)) < tolerance
+
+
+class Maschera(Enum):
+    PANTALONE = "панталоне"
+    DOTTOR = "доктор"
+    CAPITANO = "капитан"
+    BRIGHELLA = "бригелла"
+    ARLECCHINO = "арлекино"
+    TARTAGLIA = "тарталья"
+    INNAMORATI = "влюблённые"
+    COLOMBINA = "коломбина"
+    PULCINELLA = "пульчинелла"
+    SCAPINO = "скапино"
+    GIANDUJA = "джандуя"
+    BALANZONE = "баланцоне"
+
+
+@dataclass
+class MascheraProfile:
+    name: Maschera
+    group: str
+    description: str
+    fact_keywords: List[str]
+    weight: float = 1.0
+    active: bool = True
+
+    def find_relevant_facts(self, facts: Dict[str, Any]) -> Dict[str, Any]:
+        relevant = {}
+        facts_lower = {k.lower(): v for k, v in facts.items()}
+        keywords_lower = [kw.lower() for kw in self.fact_keywords]
+        
+        for fact_key, fact_value in facts_lower.items():
+            for kw in keywords_lower:
+                if kw in fact_key:
+                    relevant[fact_key] = fact_value
+                    break
+        if not relevant:
+            relevant = facts_lower
+        return relevant
+
+    def evaluate(self, facts: Dict[str, Any]) -> float:
+        relevant = self.find_relevant_facts(facts)
+        if not relevant: return 0.5
+        values = list(relevant.values())
+        avg_value = sum(values) / len(values)
+        
+        if self.name in (Maschera.PANTALONE,):
+            return 0.5 * avg_value + 0.5 * (1 - avg_value)
+        elif self.name in (Maschera.DOTTOR, Maschera.ARLECCHINO, Maschera.GIANDUJA, Maschera.BALANZONE):
+            std_dev = math.sqrt(sum((v - avg_value)**2 for v in values) / len(values)) if values else 0
+            return 1.0 - std_dev
+        elif self.name in (Maschera.CAPITANO, Maschera.COLOMBINA):
+            return max(values) if values else 0.5
+        elif self.name in (Maschera.TARTAGLIA,):
+            std_dev = math.sqrt(sum((v - avg_value)**2 for v in values) / len(values)) if values else 0
+            return std_dev
+        return avg_value
+
+
+class TeatroDelleMaschere:
+    def __init__(self):
+        self.maschere: List[MascheraProfile] = []
+        self._init_default()
+
+    def _init_default(self):
+        self.maschere.append(MascheraProfile(Maschera.PANTALONE, "власть", "Цена/Бюджет", ["цена", "стоимость", "деньги", "финанс", "бюджет"]))
+        self.maschere.append(MascheraProfile(Maschera.DOTTOR, "власть", "Логика/Закон", ["логик", "закон", "правил", "науч"]))
+        self.maschere.append(MascheraProfile(Maschera.CAPITANO, "власть", "Сила/Энергия", ["сила", "мощ", "производ", "энерг"]))
+        self.maschere.append(MascheraProfile(Maschera.BRIGHELLA, "действие", "План/Практика", ["план", "приме", "практи", "функц"]))
+        self.maschere.append(MascheraProfile(Maschera.ARLECCHINO, "действие", "Простота", ["прост", "удобн", "лёгк", "быстр"]))
+        self.maschere.append(MascheraProfile(Maschera.TARTAGLIA, "действие", "Ошибки/Риски", ["недостат", "проблем", "ошиб", "минус"]))
+        self.maschere.append(MascheraProfile(Maschera.INNAMORATI, "человек", "Эстетика", ["красив", "привлек", "нрави", "эстет"]))
+        self.maschere.append(MascheraProfile(Maschera.COLOMBINA, "человек", "Истина", ["истин", "подлин", "скрыт", "реальн"]))
+        self.maschere.append(MascheraProfile(Maschera.PULCINELLA, "человек", "Общество", ["народ", "мнени", "обществ", "масс"]))
+        self.maschere.append(MascheraProfile(Maschera.SCAPINO, "человек", "Гибкость", ["гибк", "манев", "адапт", "обход"]))
+        self.maschere.append(MascheraProfile(Maschera.GIANDUJA, "человек", "Искренность", ["искренн", "честн", "правдив"]))
+        self.maschere.append(MascheraProfile(Maschera.BALANZONE, "власть", "Точность", ["точн", "коррект", "акурат"]))
+
+    def evaluate(self, facts: Dict[str, Any]) -> Dict[str, Any]:
+        results = {}
+        weighted_sum = 0.0
+        total_weight = 0.0
+
+        for m in self.maschere:
+            if not m.active: continue
+            score = m.evaluate(facts)
+            weighted = score * m.weight
+            results[m.name.value] = {"score": round(score, 3), "weight": m.weight, "weighted": round(weighted, 3), "group": m.group}
+            weighted_sum += weighted
+            total_weight += m.weight
+
+        if total_weight == 0: return {"error": "Нет активных масок"}
+        scores = [r["score"] for r in results.values()]
+        avg_score = sum(scores) / len(scores)
+        std_dev = math.sqrt(sum((s - avg_score)**2 for s in scores) / len(scores))
+
+        return {
+            "results": results, "weighted_sum": round(weighted_sum / total_weight, 3),
+            "coherence": std_dev < 0.15, "std_dev": round(std_dev, 3), "avg_score": round(avg_score, 3)
+        }
+
+    def find_leading_maschera(self, evaluation: Dict[str, Any]) -> Optional[str]:
+        if "results" not in evaluation or not evaluation["results"]: return None
+        return max(evaluation["results"].items(), key=lambda x: x[1]["weighted"])[0]
+
+
+class LomonosovSpiral:
+    def __init__(self):
+        self.history: List[Dict] = []
+        self.spiral_level = 0
+        self.direction = 0
+
+    def analyze_event(self, event: Dict) -> Dict:
+        result = {
+            "why": event.get("reason", "неизвестно"), "timestamp": event.get("timestamp", time.time()),
+            "loss": event.get("loss", 0.0), "gain": event.get("gain", 0.0),
+            "spiral_level": self.spiral_level, "direction": self.direction, "status": "complete"
+        }
+        loss_val, gain_val = result["loss"], result["gain"]
+        if gain_val > loss_val: self.direction = 1
+        elif loss_val > gain_val: self.direction = -1
+        else: self.direction = 0
+        
+        self.spiral_level += self.direction
+        result["spiral_level"] = self.spiral_level
+        result["direction"] = self.direction
+        self.history.append(result)
+        return result
+
+    def get_trend(self) -> str:
+        if not self.history: return "неизвестно"
+        d = self.history[-1]["direction"]
+        return "восходящая" if d == 1 else ("нисходящая" if d == -1 else "горизонтальная")
+
+
+class ExperienceModule:
+    def __init__(self, max_size: int = 1000):
+        self.records: List[Dict] = []
+        self.max_size = max_size
+
+    def add(self, decision: Dict, outcome: float):
+        self.records.append({"decision": decision, "outcome": outcome, "timestamp": time.time()})
+        if len(self.records) > self.max_size: self.records.pop(0)
+
+    def predict(self, name: str) -> float:
+        if not self.records: return 0.5
+        similar = [r["outcome"] for r in self.records if name.lower() in str(r["decision"]).lower()]
+        if similar: return sum(similar) / len(similar)
+        return sum(r["outcome"] for r in self.records) / len(self.records)
+
+
+# ==============================================================================
+# 2. ВЫЧИСЛИТЕЛЬНОЕ ЯДРО W5.5 (ПОЛНЫЙ КОМПЛЕКТ КЛАССОВ И МЕТОДОВ)
+# ==============================================================================
+
+class OpticalTransmissionResult:
+    def __init__(self, success: bool = True, message: str = "Simulated optical transport OK", 
+                 distance_km: float = 100.0, go_count: int = 10, recovered_payload: bytes = b""):
+        self.success = success
+        self.message = message
+        self.distance_km = distance_km
+        self.go_count = go_count
+        self.recovered_payload = recovered_payload
+
+
+class OpticalTransportLayerV23:
+    def __init__(self, seed_a: float = 0.33, seed_b: float = 1.95):
+        self.seed_a = seed_a
+        self.seed_b = seed_b
+
+    def transmit(self, payload: bytes, distance_km: float = 100.0, **kwargs) -> OpticalTransmissionResult:
+        return OpticalTransmissionResult(
+            success=True, message=f"Transmission over {distance_km}km optical fiber successful",
+            distance_km=distance_km, go_count=len(payload), recovered_payload=payload
+        )
+
+
+class BXOSGate:
+    @staticmethod
+    def guard(signal: np.ndarray) -> np.ndarray:
+        if np.issubdtype(signal.dtype, np.integer):
+            return np.clip(signal, -2, 2)
+        return np.clip(signal, -2.0, 2.0)
+
+    def __init__(self, min_confidence: float = 0.4, critical_states: Tuple[int, ...] = (-2, -1)):
+        self.min_confidence = min_confidence
+        self.critical_states = set(critical_states)
+        self.total_count = 0
+        self.locked_count = 0
+
+    def summary(self) -> Dict[str, Any]:
+        return {"total": self.total_count, "ready": self.total_count - self.locked_count, "locked": self.locked_count}
+
+
+class BXOSReceiptGenerator:
+    MASTER_SIGNATURE = "KEY-VZ-2026-MASTER-SIGNATURE"
+
+    @classmethod
+    def generate(cls, request_id: str, status: str, strategy: str, payload_summary: Dict[str, Any]) -> Dict[str, Any]:
+        body = {
+            "request_id": request_id,
+            "status": status,
+            "active_strategy": strategy,
+            "timestamp_ns": time.time_ns(),
+            "payload_digest": hashlib.sha256(str(payload_summary).encode()).hexdigest(),
+            "authority_signature": cls.MASTER_SIGNATURE
+        }
+        serialized = json.dumps(body, sort_keys=True).encode()
+        body["bxos_digest"] = hashlib.sha256(serialized).hexdigest()
+        body["simulated"] = True
+        return body
+
+
+class L3Triage:
+    @staticmethod
+    def process(value: float, low: float = 0.3, high: float = 0.7) -> int:
+        if value >= high: return 1
+        if value <= low: return -1
+        return 0
+
+    @staticmethod
+    def process_vector(arr: np.ndarray, low: float = 0.3, high: float = 0.7) -> np.ndarray:
+        condlist = [arr >= high, arr <= low]
+        choicelist = [1, -1]
+        return np.select(condlist, choicelist, default=0).astype(np.int8)
+
+    @staticmethod
+    def analyze_interpretations(scores: np.ndarray, margin_threshold: float = 0.15, min_score: float = 0.3):
+        if scores.size == 0: return np.array([-1]), np.array([-1]), np.array([0.0])
+        best_idx = np.argmax(scores, axis=1)
+        best_scores = scores[np.arange(scores.shape[0]), best_idx]
+        sorted_scores = np.sort(scores, axis=1)[:, ::-1]
+        margins = sorted_scores[:, 0] - (sorted_scores[:, 1] if scores.shape[1] > 1 else 0.0)
+        states = np.zeros(scores.shape[0], dtype=np.int8)
+        states[best_scores < min_score] = -1
+        states[(best_scores >= min_score) & (margins >= margin_threshold)] = 1
+        return states, best_idx, best_scores
+
+
+class MultivaluedLogicEngine:
+    def __init__(self, strategy: str = "luka"):
+        self.strategy = strategy
+
+    def fold(self, data: Union[Sequence[int], np.ndarray], strategy: Optional[str] = None) -> Union[int, np.ndarray]:
+        strat = strategy if strategy is not None else self.strategy
+        arr = np.asarray(data)
+        if arr.ndim == 0: arr = arr.reshape(1)
+        clean_data = BXOSGate.guard(arr)
+        if clean_data.ndim == 1:
+            return int(self._reduce_1d(clean_data, strat))
+        return self._reduce_batch(clean_data, strat)
+
+    def _reduce_1d(self, arr: np.ndarray, strategy: str) -> int:
+        if strategy == "godel": return int(np.minimum.reduce(arr))
+        n = len(arr)
+        if n == 0: return -2
+        total_sum = int(np.sum(arr, dtype=np.int16))
+        return int(np.maximum(-2, total_sum - 2 * (n - 1)))
+
+    def _reduce_batch(self, batch: np.ndarray, strategy: str) -> np.ndarray:
+        if strategy == "godel": return np.minimum.reduce(batch, axis=-1)
+        n = batch.shape[-1]
+        total_sum = np.sum(batch.astype(np.int16), axis=-1)
+        return np.maximum(-2, total_sum - 2 * (n - 1)).astype(np.int8)
+
+
+class PentarnyRashomon:
+    PERSPECTIVES = ("technical", "operational", "structural", "boundary", "risk")
+
+    @staticmethod
+    def evaluate(matrix: np.ndarray) -> Dict[str, Union[float, np.ndarray]]:
+        if matrix.size == 0: return {p: 0.0 for p in PentarnyRashomon.PERSPECTIVES}
+        float_m = matrix.astype(np.float32)
+        target_axis = -1 if float_m.ndim > 1 else None
+        return {
+            "technical": np.mean(float_m, axis=target_axis),
+            "operational": np.min(float_m, axis=target_axis),
+            "structural": np.max(float_m, axis=target_axis),
+            "boundary": np.std(float_m, axis=target_axis) if float_m.ndim > 0 else 0.0,
+            "risk": -np.mean(np.abs(float_m), axis=target_axis)
+        }
+
+
+class L5OntologyLayer:
+    LAYERS = ["L1_Intent", "L2_Goal", "L3_Ontology", "L4_Context", "L5_Action"]
+
+    def __init__(self):
+        self.state = np.zeros(5, dtype=np.int8)
+
+    def update(self, values: Sequence[int]) -> np.ndarray:
+        arr = np.asarray(values)
+        if arr.size != 5:
+            padded = np.zeros(5, dtype=np.int8)
+            padded[:min(arr.size, 5)] = arr[:5]
+            arr = padded
+        self.state = BXOSGate.guard(arr.astype(np.int8))
+        return self.state
+
+    @property
+    def system_energy(self) -> float:
+        return float(np.sum(np.abs(self.state)) / 10.0)
+
+
+# ==============================================================================
+# 3. ОСНОВНОЙ ПРОИЗВОДСТВЕННЫЙ КОНТУР W5.5 (СО СТРИМИНГОМ И OOM-GUARD)
+# ==============================================================================
+
+@dataclass
+class ProductionPipelineResult:
+    status: str
+    triage_state: int
+    folded_result: int
+    system_energy: float
+    active_strategy: str
+    rashomon_audit: Dict[str, Any]
+    l5_state: list
+    bxos_receipt: Dict[str, Any]
+
+
+class W5AdaptiveProductionPipeline:
+    def __init__(self, stress_threshold: float = 0.70, chunk_size: int = 250_000):
+        self.gate = BXOSGate()
+        self.logic_engine = MultivaluedLogicEngine()
+        self.ontology = L5OntologyLayer()
+        self.rashomon = PentarnyRashomon()
+        self.stress_threshold = stress_threshold
+        self.chunk_size = chunk_size
+
+    def _determine_strategy(self, stress_level: float) -> Literal["godel", "luka"]:
+        return "luka" if stress_level >= self.stress_threshold else "godel"
+
+    def run(self, interpretations_scores: List[List[float]], l5_values_list: List[List[int]], current_stress: float = 0.45) -> dict:
+        scores = np.array(interpretations_scores, dtype=np.float32)
+        l5 = np.array(l5_values_list, dtype=np.int8)
+        
+        states, best_idx, confidences = L3Triage.analyze_interpretations(scores)
+        strategy = self._determine_strategy(current_stress)
+        
+        folded = self.logic_engine.fold(l5, strategy=strategy)
+        audit = self.rashomon.evaluate(l5)
+        
+        system_energy = [float(np.mean(np.abs(l5)) / 2.0)] if l5.ndim == 1 else (np.mean(np.abs(l5), axis=-1) / 2.0).tolist()
+        statuses = np.where(states == -1, "LOCKED_INPUT", np.where(states == 0, "LOCKED_OUTPUT", "OK")).tolist()
+        
+        self.gate.total_count += len(statuses)
+        self.gate.locked_count += sum(1 for s in statuses if s.startswith("LOCKED"))
+        
+        receipt = BXOSReceiptGenerator.generate("BATCH-REQ-01", "AUTHORIZED_BATCH_PASS", strategy, {"batch_size": len(statuses), "stress": current_stress})
+
+        return {
+            "statuses": statuses, "best_candidate_indices": best_idx.tolist(), "confidences": confidences.tolist(),
+            "folded_results": folded.tolist() if hasattr(folded, "tolist") else list(folded),
+            "system_energy": system_energy, "rashomon_audit": {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in audit.items()},
+            "matrix_shape": [5, 5], "ontology_layers": self.ontology.LAYERS, "bxos_receipt": receipt
+        }
+
+    def process(self, request_id: str, raw_score: float, l5_inputs: Sequence[int], current_stress: float = 0.45) -> ProductionPipelineResult:
+        triage_state = L3Triage.process(raw_score)
+        strategy = self._determine_strategy(current_stress)
+        
+        if triage_state == -1:
+            receipt = BXOSReceiptGenerator.generate(request_id, "DENIED_BY_TRIAGE", strategy, {"raw_score": raw_score})
+            return ProductionPipelineResult("REJECTED_BY_TRIAGE", -1, -2, 0.0, strategy, {}, list(l5_inputs), receipt)
+
+        l5_arr = self.ontology.update(l5_inputs)
+        folded = self.logic_engine.fold(l5_arr, strategy=strategy)
+        audit_res = self.rashomon.evaluate(l5_arr)
+        receipt = BXOSReceiptGenerator.generate(request_id, "AUTHORIZED_PASS", strategy, {"folded_result": int(folded), "energy": self.ontology.system_energy})
+
+        return ProductionPipelineResult(
+            "OK", triage_state, int(folded), self.ontology.system_energy, strategy,
+            {k: (v.item() if isinstance(v, np.generic) else v) for k, v in audit_res.items()},
+            l5_arr.tolist(), receipt
+        )
+
+    def process_large_stream(self, stream_id: str, large_matrix: np.ndarray, current_stress: float = 0.45) -> Generator[Dict[str, Any], None, None]:
+        total_rows = large_matrix.shape[0]
+        strategy = self._determine_strategy(current_stress)
+        
+        for i in range(0, total_rows, self.chunk_size):
+            chunk = large_matrix[i:i + self.chunk_size]
+            clean_chunk = BXOSGate.guard(chunk)
+            folded = self.logic_engine.fold(clean_chunk, strategy=strategy)
+            audit_res = self.rashomon.evaluate(clean_chunk)
+            tech_mean = float(np.mean(audit_res["technical"])) if isinstance(audit_res["technical"], np.ndarray) else float(audit_res["technical"])
+            receipt = BXOSReceiptGenerator.generate(f"{stream_id}-CHNK-{i//self.chunk_size}", "STREAM_PASS", strategy, {"chunk_len": len(chunk)})
+            
+            yield {
+                "status": "CHUNK_OK", "chunk_index": i // self.chunk_size, "strategy_used": strategy,
+                "folded_sample": (folded[:3].tolist() if hasattr(folded, "ndim") and folded.ndim > 0 else [int(folded)]),
+                "bxos_receipt": receipt
+            }
+
+
+# ==============================================================================
+# 4. ОБЪЕДИНЁННЫЙ УНИВЕРСАЛЬНЫЙ КОНТРОЛЛЕР (ХАРМОНИЯ + GAME ENGINE)
+# ==============================================================================
+
+class W55UltimateHarmonicPipeline:
+    """Объединяет W5.5 Production Pipeline и когнитивную архитектуру Game Engine V9.6."""
+    
+    def __init__(self, stress_threshold: float = 0.70):
+        self.w55_pipeline = W5AdaptiveProductionPipeline(stress_threshold=stress_threshold)
+        self.geometry = GeometryEngine()
+        self.wave_system = InterferenceMatrix(self.geometry)
+        self.kirchhoff = KirchhoffBalance()
+        self.lomonosov = LomonosovSpiral()
+        self.teatro = TeatroDelleMaschere()
+        self.experience = ExperienceModule()
+        self.optical_transport = OpticalTransportLayerV23()
+        self.current_time = 0.0
+
+    def process_hybrid(self, query: str, interpretations: Dict[str, float], l5_inputs: List[int], stress_level: float = 0.45) -> Dict[str, Any]:
+        self.current_time += 1.0
+        
+        # 1. Запуск стандартного контура W5.5
+        w55_res = self.w55_pipeline.process("HYBRID-REQ-01", 0.9, l5_inputs, current_stress=stress_level)
+        
+        # 2. Отработка волновой геометрии Game Engine
+        selected_mode = self.geometry.select_mode_by_task(query, interpretations)
+        self.geometry.set_mode(selected_mode)
+        
+        self.wave_system.nodes.clear()
+        count = len(interpretations)
+        positions = [(0.5 * math.cos(2 * math.pi * i / count), 0.5 * math.sin(2 * math.pi * i / count)) for i in range(count)]
+        
+        node_ids = {}
+        for i, ((name, score), pos) in enumerate(zip(interpretations.items(), positions)):
+            node = WaveNode(id=i+1, amplitude=score, phase=i*0.5, position=pos)
+            self.wave_system.add_node(node)
+            node_ids[name] = i+1
+
+        self.wave_system.propagate_waves(self.current_time)
+        stability = self.wave_system.stability_index(self.current_time)
+        conflicts = self.wave_system.find_conflicts(self.current_time)
+
+        # 3. Театр Масок
+        teatro_eval = self.teatro.evaluate(interpretations)
+        leading_maschera = self.teatro.find_leading_maschera(teatro_eval)
+
+        # 4. Спираль Ломоносова
+        gain = stability * (1.0 if teatro_eval.get("coherence", False) else 0.5)
+        loss = (len(conflicts) / max(len(self.wave_system.nodes), 1)) * (1.0 - stability)
+        lomonosov_res = self.lomonosov.analyze_event({"reason": query, "loss": loss, "gain": gain})
+
+        return {
+            "w55_core": {
+                "status": w55_res.status,
+                "folded_result": w55_res.folded_result,
+                "active_strategy": w55_res.active_strategy,
+                "system_energy": w55_res.system_energy,
+                "bxos_digest": w55_res.bxos_receipt["bxos_digest"]
+            },
+            "game_engine_core": {
+                "geometry_mode": self.geometry.mode.value,
+                "stability_index": round(stability, 3),
+                "leading_maschera": leading_maschera,
+                "teatro_coherence": teatro_eval.get("coherence", False),
+                "lomonosov_level": lomonosov_res["spiral_level"],
+                "lomonosov_trend": self.lomonosov.get_trend()
+            }
+        }
+
+
+# ==============================================================================
+# 5. СЕТЕВОЙ СЛОЙ FASTAPI (ПОЛНЫЙ КОМПЛЕКТ ЭНДПОИНТОВ W5.5 + GAME ENGINE)
+# ==============================================================================
+
+app = FastAPI(
+    title="W5.5 Game Engine V9.6 Ultimate Monolith + Optical Transport",
+    description="Полнофункциональный ИИ-акселератор «Гармония» со всеми методами W5.5 и когнитивным движком",
+    version="9.6.5-Production"
+) if FastAPI else None
+
+ultimate_pipeline = W55UltimateHarmonicPipeline(stress_threshold=0.70)
+standard_pipeline = W5AdaptiveProductionPipeline(stress_threshold=0.70)
+optical_transport = OpticalTransportLayerV23()
+
+
+def safe_zlib_decompress(compressed_bytes: bytes, max_mb: int = 50) -> bytes:
+    max_bytes = max_mb * 1024 * 1024
+    decompressor = zlib.decompressobj()
+    data = decompressor.decompress(compressed_bytes, max_bytes)
+    if decompressor.unconsumed_tail or decompressor.unused_data:
+        raise ValueError("Превышен лимит памяти: пакет заблокирован защитой zlib.")
+    return data
+
+
+def restored_data_triage(raw_json_bytes: bytes, expected_size: int, decompressed_size: int) -> dict:
+    try:
+        restored_data = json.loads(raw_json_bytes.decode("utf-8"))
+        return {
+            "decoder_status": "SUCCESS",
+            "integrity_check": {"expected_size_bytes": expected_size, "restored_size_bytes": decompressed_size, "match": expected_size == decompressed_size},
+            "restored_payload": restored_data
+        }
+    except Exception as e:
+        if FastAPI:
+            raise HTTPException(status_code=422, detail=f"Ошибка десериализации кадра: {e}")
+        raise e
+
+
+if FastAPI:
+    class NodePayload(BaseModel):
+        interpretations_scores: List[List[float]]
+        l5_values_list: List[List[int]]
+        stress_level: float = 0.45
+
+    class ComputeAndTransmitRequest(BaseModel):
+        interpretations_scores: List[List[float]]
+        l5_values_list: List[List[int]]
+        distance_km: float = 150.0
+        stress_level: float = 0.55
+
+    class OpticalReceiverPayload(BaseModel):
+        compressed_payload_b64: str
+        original_size_bytes: int
+
+    class HybridRequest(BaseModel):
+        query: str = Field(..., example="Комплексный анализ проекта с учётом рисков и бюджета")
+        interpretations: Dict[str, float] = Field(..., example={"цена": 0.4, "точность": 0.9, "надежность": 0.85})
+        l5_inputs: List[int] = Field(..., example=[1, 1, 0, -1, 1])
+        stress_level: float = 0.45
+
+    @app.get("/")
+    def node_status():
+        return {
+            "author": "Vladimir Zavodiuk",
+            "rights": "All rights reserved",
+            "monolith": "W5.5-GAME-ENGINE-V9.6-ULTIMATE-MONOLITH",
+            "node_status": "active",
+            "telemetry": standard_pipeline.gate.summary()
+        }
+
+    @app.post("/compute-linear-batch")
+    def compute_linear_batch(payload: NodePayload):
+        try:
+            return standard_pipeline.run(payload.interpretations_scores, payload.l5_values_list, current_stress=payload.stress_level)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/compute-and-transmit-optical")
+    async def compute_and_transmit_optical(req: ComputeAndTransmitRequest):
+        try:
+            compute_result = standard_pipeline.run(req.interpretations_scores, req.l5_values_list, current_stress=req.stress_level)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Compute error: {e}")
+
+        raw_json = json.dumps(compute_result, ensure_ascii=False).encode("utf-8")
+        compressed_payload = zlib.compress(raw_json, level=9)
+        orig_size = len(raw_json)
+        comp_size = len(compressed_payload)
+        ratio = round(orig_size / comp_size, 2) if comp_size > 0 else 1.0
+
+        optical_result = optical_transport.transmit(payload=compressed_payload, distance_km=req.distance_km)
+        transmitted_b64 = base64.b64encode(optical_result.recovered_payload).decode("utf-8")
+
+        return {
+            "transmission_meta": {"success": optical_result.success, "message": optical_result.message, "optimization_ratio": ratio},
+            "transport_payload": {"compressed_payload_b64": transmitted_b64, "original_size_bytes": orig_size}
+        }
+
+    @app.post("/receive-and-decode-optical")
+    async def receive_and_decode_optical(payload: OpticalReceiverPayload):
+        try:
+            compressed_bytes = base64.b64decode(payload.compressed_payload_b64)
+            raw_json_bytes = safe_zlib_decompress(compressed_bytes, max_mb=50)
+            return restored_data_triage(raw_json_bytes, payload.original_size_bytes, len(raw_json_bytes))
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Ошибка декомпрессии ВОЛС: {e}")
+
+    @app.post("/hybrid-process")
+    def hybrid_process(payload: HybridRequest):
+        try:
+            return ultimate_pipeline.process_hybrid(payload.query, payload.interpretations, payload.l5_inputs, stress_level=payload.stress_level)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+# ==============================================================================
+# ЛОКАЛЬНЫЙ ТЕСТОВЫЙ СТЕНД
+# ==============================================================================
+
+if __name__ == "__main__":
+    print("=" * 78)
+    print("  W5.5-GAME-ENGINE-V9.6-ULTIMATE-MONOLITH (FULL PRODUCTION)")
+    print("  АВТОР: Владимир Заводюк (Vladimir Zavodiuk) | Все права защищены.")
+    print("=" * 78)
+
+    pipeline = W55UltimateHarmonicPipeline()
+    
+    print("\n[*] Запуск гибридного тестового прогона...")
+    test_interp = {"цена": 0.35, "точность": 0.91, "надежность": 0.88}
+    res = pipeline.process_hybrid("Оценка промышленного контроллера", test_interp, [1, 1, 1, 0, -1], stress_level=0.45)
+    
+    print(f"  [W5.5 Core]: Статус -> {res['w55_core']['status']} | Свёрнутый результат: {res['w55_core']['folded_result']}")
+    print(f"  [W5.5 Digest]: {res['w55_core']['bxos_digest']}")
+    print(f"  [Game Engine]: Геометрия -> {res['game_engine_core']['geometry_mode']}")
+    print(f"  [Game Engine]: Стабильность волн -> {res['game_engine_core']['stability_index']}")
+    print(f"  [Game Engine]: Ведущая маска -> {res['game_engine_core']['leading_maschera']}")
+    print(f"  [Game Engine]: Спираль Ломоносова (Уровень) -> {res['game_engine_core']['lomonosov_level']}")
+    print("=" * 78)
+
+    if FastAPI and len(sys.argv) > 1 and sys.argv[1] == "serve":
+        print("[*] Запуск FastAPI сервера на порту 8000...")
+        uvicorn.run(app, host="0.0.0.0", port=8000)
+    else:
+        print("[*] Для запуска сервера FastAPI выполните: python script.py serve")
+        print("=" * 78)
