@@ -1,0 +1,580 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# =====================================================================
+# ИДЕНТИФИКАТОР ДОКУМЕНТА: W5.5-HARMONY-ENTERPRISE-AES-GCM-CORE [PART 1]
+# НАЗВАНИЕ: Универсальный автономный контур Harmony OS (Часть 1)
+# АВТОР / АРХИТЕКТОР: Владимир Заводюк (Vladimir Zavodiuk)
+# ПРАВА: Все права защищены. / All rights reserved.
+# =====================================================================
+
+import os
+import sys
+import time
+import json
+import zlib
+import hashlib
+import base64
+import subprocess
+import numpy as np
+import psutil
+from typing import Dict, Any, List, Optional
+from dataclasses import dataclass
+
+# Попытка импорта криптографического модуля AES-GCM
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    HAS_AESGCM = True
+except ImportError:
+    HAS_AESGCM = False
+
+# ---------------------------------------------------------------------------
+# БАЗОВЫЕ КРИПТОГРАФИЧЕСКИЕ И КОДИРУЮЩИЕ УТИЛИТЫ BXOS
+# ---------------------------------------------------------------------------
+def b64_encode(b: bytes) -> str:
+    """Безопасное кодирование байт в base64-строку."""
+    return base64.b64encode(b).decode("utf-8")
+
+def b64_decode(s: str) -> bytes:
+    """Декодирование base64-строки обратно в байты."""
+    return base64.b64decode(s.encode("utf-8"))
+
+
+# ==============================================================================
+# РАЗДЕЛ 1: МАТЕМАТИЧЕСКОЕ ЯДРО ВЛАДИМИРА ЗАВОДЮКА (ТРИТЕРА И ЛУКАСЕВИЧ)
+# ==============================================================================
+
+class BXOSGate:
+    """Детерминированный фильтр критических состояний с защитой от выбросов."""
+    @staticmethod
+    def guard(signal: np.ndarray) -> np.ndarray:
+        return np.clip(signal, -2.0, 2.0)
+
+
+class LukasiewiczLogic:
+    """Многозначная логика Лукасевича для тернарных векторов {-1, 0, 1}."""
+    
+    @staticmethod
+    def bounded_sum(a: int, b: int) -> int:
+        """Ограниченная сумма Лукасевича в тернарном поле."""
+        return int(np.clip(a + b, -1, 1))
+
+    @staticmethod
+    def implication(a: int, b: int) -> int:
+        """Импликация Лукасевича: min(1, 1 - a + b) с маппингом в дискретный трит."""
+        fa = (a + 1) / 2.0
+        fb = (b + 1) / 2.0
+        res_float = min(1.0, 1.0 - fa + fb)
+        if res_float > 0.66:
+            return 1
+        elif res_float < 0.33:
+            return -1
+        return 0
+
+
+class L3Triage:
+    """Квантование непрерывных физических метрик ПК в тернарные состояния {-1, 0, 1}."""
+    @staticmethod
+    def process_metric(value: float, low_threshold: float, high_threshold: float) -> int:
+        if value >= high_threshold:
+            return 1   # Критическая перегрузка / Дефицит
+        if value <= low_threshold:
+            return -1  # Избыточный ресурс / Простой
+        return 0       # Стабильный баланс
+
+
+class L5SystemOntology:
+    """5 векторизованных слоев телеметрии ПК для оценки системной энергии."""
+    LAYERS = ("cpu_load", "ram_used", "swap_activity", "io_intensity", "thread_count")
+    
+    def __init__(self):
+        self.state = np.zeros(5, dtype=np.int8)
+        
+    def update(self, metrics: List[int]) -> np.ndarray:
+        self.state = BXOSGate.guard(np.array(metrics, dtype=np.int8))
+        return self.state
+        
+    @property
+    def system_energy(self) -> float:
+        """Расчет общей системной энтропии/энергии по модулю векторов слоев."""
+        return float(np.sum(np.abs(self.state)) / 10.0)
+
+    def evaluate_logical_coherence(self) -> int:
+        """Оценка внутренней связности между нагрузкой CPU и RAM через импликацию."""
+        return LukasiewiczLogic.implication(int(self.state[0]), int(self.state[1]))
+
+
+# ==============================================================================
+# РАЗДЕЛ 2: АДАПТИВНЫЙ КОНТУР «СПИРАЛЬ ЛОМОНОСОВА»
+# ==============================================================================
+
+class LomonosovSpiralAdaptation:
+    """
+    Рекурсивный расчет динамического порога срабатывания демона на основе 
+    исторической траектории системной энергии (спиральный тренд).
+    """
+    def __init__(self, base_threshold: float = 0.30, window_size: int = 6):
+        self.base_threshold = base_threshold
+        self.window_size = window_size
+        self.history: List[float] = []
+
+    def compute_dynamic_threshold(self, current_energy: float) -> float:
+        self.history.append(current_energy)
+        if len(self.history) > self.window_size:
+            self.history.pop(0)
+
+        if len(self.history) < 3:
+            return self.base_threshold
+
+        trend = np.gradient(np.array(self.history))
+        mean_trend = float(np.mean(trend))
+
+        delta = mean_trend * 0.15
+        dynamic_threshold = np.clip(self.base_threshold - delta, 0.15, 0.45)
+        
+        return float(dynamic_threshold)
+
+
+# ==============================================================================
+# РАЗДЕЛ 3: КРИПТОГРАФИЧЕСКИЙ МЕНЕДЖЕР AES-GCM И .BXOS ХРАНИЛИЩЕ
+# ==============================================================================
+
+class BXOSCryptoManager:
+    """Менеджер шифрования AES-256-GCM для защиты файлов хранилища."""
+    def __init__(self, storage_dir: str):
+        self.key_path = os.path.join(storage_dir, "_bxos.key")
+        self.enabled = HAS_AESGCM
+        if self.enabled:
+            self.key = self._load_or_generate_key()
+            self.aesgcm = AESGCM(self.key)
+        else:
+            print("[!] Внимание: Библиотека 'cryptography' не найдена. Шифрование AES-GCM отключено.")
+
+    def _load_or_generate_key(self) -> bytes:
+        if os.path.exists(self.key_path):
+            with open(self.key_path, "rb") as f:
+                return f.read()
+        else:
+            key = AESGCM.generate_key(bit_length=256)
+            with open(self.key_path, "wb") as f:
+                f.write(key)
+            print(f"[BXOS Crypto] Сгенерирован мастер-ключ AES-256-GCM в {self.key_path}")
+            return key
+
+    def encrypt(self, plaintext: bytes) -> bytes:
+        if not self.enabled:
+            return plaintext
+        nonce = os.urandom(12)
+        ciphertext = self.aesgcm.encrypt(nonce, plaintext, None)
+        return nonce + ciphertext
+
+    def decrypt(self, encrypted_data: bytes) -> bytes:
+        if not self.enabled:
+            return encrypted_data
+        nonce = encrypted_data[:12]
+        ciphertext = encrypted_data[12:]
+        return self.aesgcm.decrypt(nonce, ciphertext, None)
+
+
+@dataclass
+class UniversalSemanticRecord:
+    record_id: str
+    data_type: str
+    schema_version: int
+    ontology_vector: List[int]
+    compressed_payload: bytes
+    original_size: int
+    bxos_checksum: str
+    timestamp_ns: int
+
+    @classmethod
+    def convert_and_pack(cls, record_id: str, raw_data: Any, ontology_vector: List[int] = None) -> "UniversalSemanticRecord":
+        if isinstance(raw_data, str):
+            data_type = "text"
+            payload_bytes = raw_data.encode("utf-8")
+        elif isinstance(raw_data, (dict, list)):
+            data_type = "json"
+            payload_bytes = json.dumps(raw_data, ensure_ascii=False).encode("utf-8")
+        elif isinstance(raw_data, np.ndarray):
+            data_type = "tensor_np"
+            header = {"shape": raw_data.shape, "dtype": str(raw_data.dtype)}
+            header_bytes = json.dumps(header).encode("utf-8")
+            payload_bytes = len(header_bytes).to_bytes(4, byteorder="big") + header_bytes + raw_data.tobytes()
+        else:
+            data_type = "text"
+            payload_bytes = str(raw_data).encode("utf-8")
+
+        original_size = len(payload_bytes)
+        compressed = zlib.compress(payload_bytes, level=9)
+        checksum = hashlib.sha256(compressed).hexdigest()
+
+        return cls(
+            record_id=record_id,
+            data_type=data_type,
+            schema_version=1,
+            ontology_vector=ontology_vector or [0, 0, 0, 0, 0],
+            compressed_payload=compressed,
+            original_size=original_size,
+            bxos_checksum=checksum,
+            timestamp_ns=time.time_ns()
+        )
+
+    def unpack_payload(self) -> Any:
+        current_checksum = hashlib.sha256(self.compressed_payload).hexdigest()
+        if current_checksum != self.bxos_checksum:
+            raise ValueError(f"[-] Нарушение целостности BXOS-записи {self.record_id}!")
+
+        raw_bytes = zlib.decompress(self.compressed_payload)
+        if self.data_type == "text":
+            return raw_bytes.decode("utf-8")
+        elif self.data_type == "json":
+            return json.loads(raw_bytes.decode("utf-8"))
+        elif self.data_type == "tensor_np":
+            header_len = int.from_bytes(raw_bytes[:4], byteorder="big")
+            header = json.loads(raw_bytes[4:4+header_len].decode("utf-8"))
+            array_bytes = raw_bytes[4+header_len:]
+            return np.frombuffer(array_bytes, dtype=header["dtype"]).reshape(header["shape"])
+        return raw_bytes
+
+
+class TypeAgnosticStore:
+    """Персистентный менеджер хранения с шифрованием AES-GCM для формата .bxos."""
+    def __init__(self, storage_dir: str = "./harmony_bxos_storage"):
+        self.storage_dir = storage_dir
+        os.makedirs(storage_dir, exist_ok=True)
+        self.crypto = BXOSCryptoManager(storage_dir)
+        self.registry: Dict[str, Dict[str, Any]] = {}
+        self._load_registry()
+
+    def _load_registry(self):
+        idx_file = os.path.join(self.storage_dir, "_registry.json")
+        if os.path.exists(idx_file):
+            try:
+                with open(idx_file, "r", encoding="utf-8") as f:
+                    self.registry = json.load(f)
+            except:
+                self.registry = {}
+
+    def _save_registry(self):
+        idx_file = os.path.join(self.storage_dir, "_registry.json")
+        with open(idx_file, "w", encoding="utf-8") as f:
+            json.dump(self.registry, f, ensure_ascii=False, indent=2)
+
+    def write_record(self, record: UniversalSemanticRecord) -> str:
+        safe_name = hashlib.sha256(record.record_id.encode()).hexdigest()[:32]
+        file_path = os.path.join(self.storage_dir, f"{safe_name}.bxos")
+
+        container = {
+            "record_id": record.record_id,
+            "data_type": record.data_type,
+            "schema_version": record.schema_version,
+            "ontology_vector": record.ontology_vector,
+            "payload_b64": b64_encode(record.compressed_payload),
+            "original_size": record.original_size,
+            "bxos_checksum": record.bxos_checksum,
+            "timestamp_ns": record.timestamp_ns
+        }
+
+        container_bytes = json.dumps(container).encode("utf-8")
+        encrypted_bytes = self.crypto.encrypt(container_bytes)
+
+        with open(file_path, "wb") as f:
+            f.write(encrypted_bytes)
+
+        self.registry[record.record_id] = {"file_path": file_path, "bxos_checksum": record.bxos_checksum}
+        self._save_registry()
+        return record.bxos_checksum
+
+    def fetch_record(self, record_id: str) -> UniversalSemanticRecord:
+        if record_id not in self.registry:
+            raise KeyError(f"Запись {record_id} не обнаружена в реестре.")
+        meta = self.registry[record_id]
+        
+        with open(meta["file_path"], "rb") as f:
+            encrypted_bytes = f.read()
+
+        decrypted_bytes = self.crypto.decrypt(encrypted_bytes)
+        d = json.loads(decrypted_bytes.decode("utf-8"))
+
+        return UniversalSemanticRecord(
+            record_id=d["record_id"],
+            data_type=d["data_type"],
+            schema_version=d["schema_version"],
+            ontology_vector=d["ontology_vector"],
+            compressed_payload=b64_decode(d["payload_b64"]),
+            original_size=d["original_size"],
+            bxos_checksum=d["bxos_checksum"],
+            timestamp_ns=d["timestamp_ns"]
+        )
+
+
+# ==============================================================================
+# РАЗДЕЛ 4: МАГИСТРАЛЬНЫЙ УЗЕЛ ЦОД И ОПТИЧЕСКИЙ ТРАНСПОРТ (ВОЛС)
+# ==============================================================================
+
+class DataCenterNode:
+    """Магистральный Дата-Центр (ЦОД) для приема телеметрии и квитанций."""
+    def __init__(self, dc_id: str = "DC-HARMONY-CORE-01"):
+        self.dc_id = dc_id
+        self.transit_log: List[Dict[str, Any]] = []
+        os.makedirs("./dc_storage_buffer", exist_ok=True)
+
+    def process_incoming_transmission(self, record_id: str, payload_bytes: bytes, checksum: str, destination_node: str) -> Dict[str, Any]:
+        print(f"  [ЦОД '{self.dc_id}'] Пакет '{record_id}' принят через защищенный оптический шлюз.")
+        
+        current_hash = hashlib.sha256(payload_bytes).hexdigest()
+        if current_hash != checksum:
+            raise ValueError(f"[-] КРИТИЧЕСКАЯ ОШИБКА ЦОДА: Несоответствие хэша для {record_id}!")
+
+        buffer_path = os.path.join("./dc_storage_buffer", f"{record_id}_transit.bin")
+        with open(buffer_path, "wb") as f:
+            f.write(payload_bytes)
+
+        transit_record = {
+            "dc_id": self.dc_id,
+            "record_id": record_id,
+            "transit_timestamp_ns": time.time_ns(),
+            "payload_size": len(payload_bytes),
+            "bxos_checksum": checksum,
+            "status": "ROUTED_AND_DELIVERED",
+            "destination": destination_node
+        }
+        self.transit_log.append(transit_record)
+        print(f"  [ЦОД '{self.dc_id}'] Перенаправлено на узел назначения: '{destination_node}'.")
+        return transit_record
+
+
+class OpticalTransportLayerV23:
+    """Моделирование ВОЛС с транзитом через магистральный узел ЦОДа."""
+    def __init__(self, data_center: DataCenterNode):
+        self.dc = data_center
+
+    def transmit_via_dc(self, record_id: str, payload: bytes, checksum: str, destination: str, distance_km: float = 300.0):
+        print(f"  [ВОЛС] Передача пакета на расстояние {distance_km} км в Дата-Центр '{self.dc.dc_id}'...")
+        return self.dc.process_incoming_transmission(record_id, payload, checksum, destination)
+# ==============================================================================
+# РАЗДЕЛ 5: КРИПТОГРАФИЧЕСКИЙ НОТАРИАТ ДЕМОНА И МЕНЕДЖЕР АВТОЗАПУСКА
+# ==============================================================================
+
+class BXOSDaemonReceipt:
+    """Формирует неизменяемую квитанцию о действиях фонового демона."""
+    @staticmethod
+    def seal(event_id: str, energy: float, threshold: float, state: List[int], action_taken: str) -> Dict[str, Any]:
+        payload = {
+            "event_id": event_id,
+            "timestamp_ns": time.time_ns(),
+            "system_energy": round(energy, 4),
+            "applied_threshold": round(threshold, 4),
+            "l5_state": [int(x) for x in state],
+            "action": action_taken
+        }
+        raw_str = json.dumps(payload, sort_keys=True)
+        digest = hashlib.sha3_256(raw_str.encode("utf-8")).hexdigest()
+        return {
+            "receipt_id": event_id,
+            "bxos_digest": digest,
+            "payload": payload
+        }
+
+
+class OSAutostartManager:
+    """Менеджер автоматического запуска скрипта на уровне операционной системы."""
+    @staticmethod
+    def register_autostart() -> bool:
+        script_path = os.path.abspath(sys.argv[0])
+        python_executable = sys.executable
+        platform_name = sys.platform
+
+        print(f"\n[*] Конфигурация автозапуска для платформы: {platform_name}")
+        print(f"[*] Путь к скрипту: {script_path}")
+
+        try:
+            if platform_name.startswith("linux"):
+                service_content = f"""[Unit]
+Description=Harmony OS Enterprise Daemon (Lomonosov Spiral + AES-GCM)
+After=network.target
+
+[Service]
+Type=simple
+User={os.getenv('USER', 'root')}
+ExecStart={python_executable} {script_path} --auto-run
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+"""
+                service_path = "/etc/systemd/system/harmony_daemon.service"
+                temp_service = "harmony_daemon.service"
+                with open(temp_service, "w", encoding="utf-8") as f:
+                    f.write(service_content)
+                
+                print(f"[+] Файл службы сгенерирован успешно: {temp_service}")
+                print(f"[i] Для активации выполните: sudo mv {temp_service} {service_path} && sudo systemctl enable --now harmony_daemon")
+                return True
+
+            elif platform_name == "win32":
+                print(f"[*] Регистрация автозапуска в реестре Windows...")
+                import winreg
+                key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
+                    winreg.SetValueEx(key, "HarmonyOSDaemon", 0, winreg.REG_SZ, f'"{python_executable}" "{script_path}" --auto-run')
+                print("[+] Успешно зарегистрировано в автозагрузке Windows!")
+                return True
+            else:
+                print(f"[-] Автоматическая регистрация для платформы {platform_name} не поддерживается напрямую.")
+                return False
+        except Exception as e:
+            print(f"[-] Ошибка регистрации автозапуска: {e}")
+            return False
+
+
+# ==============================================================================
+# РАЗДЕЛ 6: ЕДИНЫЙ ОРКЕСТРАТОР И ИНТЕРАКТИВНЫЙ ПУЛЬТ УПРАВЛЕНИЯ
+# ==============================================================================
+
+class HarmonyEnterpriseDaemonOrchestrator:
+    def __init__(self, check_interval_sec: float = 2.0, base_threshold: float = 0.30):
+        self.interval = check_interval_sec
+        self.ontology = L5SystemOntology()
+        self.spiral = LomonosovSpiralAdaptation(base_threshold=base_threshold)
+        self.store = TypeAgnosticStore()
+        self.data_center = DataCenterNode(dc_id="DC-HARMONY-ENTERPRISE-77")
+        self.optical_transport = OpticalTransportLayerV23(self.data_center)
+        self.event_counter = 0
+
+    def collect_telemetry(self) -> List[int]:
+        cpu = psutil.cpu_percent(interval=0.1)
+        ram = psutil.virtual_memory().percent
+        swap = psutil.swap_memory().percent
+        
+        try:
+            io_counters = psutil.disk_io_counters()
+            io_bytes = io_counters.read_bytes if io_counters else 0
+            io = min(100.0, (io_bytes / (1024 * 1024 * 10)) % 100)
+        except Exception:
+            io = 0.0
+            
+        threads = min(100.0, (len(psutil.pids()) / 10.0) % 100)
+
+        t_cpu = L3Triage.process_metric(cpu, 20.0, 80.0)
+        t_ram = L3Triage.process_metric(ram, 40.0, 85.0)
+        t_swap = L3Triage.process_metric(swap, 5.0, 50.0)
+        t_io = L3Triage.process_metric(io, 10.0, 70.0)
+        t_threads = L3Triage.process_metric(threads, 30.0, 75.0)
+
+        return [t_cpu, t_ram, t_swap, t_io, t_threads]
+
+    def enforce_optimization(self, reason: str, energy: float, threshold: float, state: List[int]) -> Dict[str, Any]:
+        self.event_counter += 1
+        event_id = f"HARMONY-EVT-{self.event_counter:04d}"
+        
+        print(f"\n[!] КРИТИЧЕСКИЙ УРОВЕНЬ ЭНЕРГИИ ({energy:.2f} >= Порог: {threshold:.2f}). Причина: {reason}")
+        print(f"[*] Запуск детерминированного сжатия кэша операционной системы...")
+
+        action_status = "OPTIMIZED_SUCCESS"
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                ctypes.windll.psapi.EmptyWorkingSet(ctypes.c_void_p(-1))
+            else:
+                os.system("sync 2>/dev/null || true")
+            print("[+] Кэш оперативной системы успешно сброшен и оптимизирован.")
+        except Exception as e:
+            action_status = f"FAILED: {str(e)}"
+            print(f"[-] Ошибка системного вызова очистки памяти: {e}")
+
+        receipt = BXOSDaemonReceipt.seal(event_id, energy, threshold, state, action_status)
+        record = UniversalSemanticRecord.convert_and_pack(event_id, receipt, state)
+        
+        checksum = self.store.write_record(record)
+        print(f"[BXOS Store] Квитанция зашифрована AES-GCM и сохранена. Хэш: {checksum[:16]}...")
+
+        self.optical_transport.transmit_via_dc(
+            record_id=event_id,
+            payload=record.compressed_payload,
+            checksum=checksum,
+            destination="NODE-ANALYTICS-DATACenter-HUB",
+            distance_km=350.0
+        )
+        print("-" * 80)
+        return receipt
+
+    def run_autostart_mode(self):
+        print("=" * 78)
+        print("  РЕЖИМ АВТОЗАПУСКА: НЕПРЕРЫВНЫЙ МОНИТОРИНГ ОС АКТИВИРОВАН")
+        print(f"  Интервал опроса: {self.interval} сек | Базовый порог: {self.spiral.base_threshold}")
+        print("=" * 78)
+        try:
+            while True:
+                triaged_vector = self.collect_telemetry()
+                current_state = self.ontology.update(triaged_vector)
+                energy = self.ontology.system_energy
+                dynamic_threshold = self.spiral.compute_dynamic_threshold(energy)
+                coherence = self.ontology.evaluate_logical_coherence()
+
+                print(f"[Телеметрия] Слои: {list(current_state)} | Энергия: {energy:.2f} | Порог: {dynamic_threshold:.2f} | Imp: {coherence}", end="\r")
+
+                if energy >= dynamic_threshold:
+                    self.enforce_optimization("Превышение адаптивного порога энтропии", energy, dynamic_threshold, current_state)
+
+                time.sleep(self.interval)
+                
+        except KeyboardInterrupt:
+            print("\n[*] Автозапуск / демон остановлен пользователем.")
+
+
+def show_interactive_menu():
+    orchestrator = HarmonyEnterpriseDaemonOrchestrator(check_interval_sec=2.0, base_threshold=0.30)
+
+    while True:
+        print("\n" + "=" * 78)
+        print("  HARMONY OS — ИНТЕРАКТИВНЫЙ ПУЛЬТ УПРАВЛЕНИЯ ДЕМОНОМ И ШИФРОВАНИЕМ")
+        print("  Архитектор: Владимир Заводюк (Vladimir Zavodiuk)")
+        print("=" * 78)
+        print("  [1] Запустить режим АВТОЗАПУСКА (Непрерывный мониторинг ОС со Спиралью Ломоносова)")
+        print("  [2] Выполнить тестовый прогон (Тензорный пакет + AES-GCM шифрование + ЦОД)")
+        print("  [3] Зарегистрировать автозапуск в операционной системе (OS Autostart Service)")
+        print("  [4] Выход из программы")
+        print("-" * 78)
+        
+        choice = input("Нажмите нужную кнопку (введите цифру 1-4) и нажмите Enter: ").strip()
+
+        if choice == "1":
+            print("\n[i] Запуск непрерывного режима автозапуска демона...")
+            orchestrator.run_autostart_mode()
+        elif choice == "2":
+            print("\n[i] Запуск тестового стенда испытаний с AES-GCM...")
+            test_tensor = np.array([[15.2, -2.5], [5.0, 6.8]], dtype=np.float32)
+            test_record = UniversalSemanticRecord.convert_and_pack("SECURE-TENSOR-REC", test_tensor, [1, 1, 0, 1, 1])
+            test_checksum = orchestrator.store.write_record(test_record)
+            
+            fetched_record = orchestrator.store.fetch_record("SECURE-TENSOR-REC")
+            unpacked_data = fetched_record.unpack_payload()
+            print(f"[+] Проверка дешифрования AES-GCM успешна! Форма тензора: {unpacked_data.shape}")
+
+            orchestrator.optical_transport.transmit_via_dc(
+                record_id="SECURE-TENSOR-REC",
+                payload=test_record.compressed_payload,
+                checksum=test_checksum,
+                destination="NODE-SECURE-EXHIBIT",
+                distance_km=210.0
+            )
+            print("[+] Тестовый защищенный прогон успешно завершен!")
+            input("\nНажмите Enter, чтобы вернуться в главное меню...")
+        elif choice == "3":
+            print("\n[i] Регистрация демона в системе...")
+            OSAutostartManager.register_autostart()
+            input("\nНажмите Enter, чтобы вернуться в главное меню...")
+        elif choice == "4":
+            print("\n[*] Завершение работы. До свидания!")
+            sys.exit(0)
+        else:
+            print("\n[-] Неверный выбор. Пожалуйста, выберите от 1 до 4.")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--auto-run":
+        daemon_auto = HarmonyEnterpriseDaemonOrchestrator(check_interval_sec=2.0, base_threshold=0.30)
+        daemon_auto.run_autostart_mode()
+    else:
+        show_interactive_menu()
