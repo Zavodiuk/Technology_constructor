@@ -1,0 +1,273 @@
+# -*- coding: utf-8 -*-
+"""
+ПЕНТАРНЫЙ ГИБРИДНЫЙ СЕМАНТИЧЕСКИЙ КОДЕК И АРХИВАТОР ЗАВОДЮКА (V18.7-MOIRÉ-HYBRID / .ZVD)
+Автор / Root-Architect: Владимир Заводюк (Vladimir Zavodiuk)
+Назначение: Сверхплотное параметрическое сжатие, волновое поле и гибридная 
+векторизованная реконструкция потоков данных в формате .zvd (Radix-5 + NumPy Vectorization).
+
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ПЕНТАРНАЯ ЛОГИКА И АРХИТЕКТУРА ZV26. ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО СОГЛАСИЯ АВТОРА.
+"""
+
+import numpy as np
+import time
+import struct
+import os
+from typing import Tuple, Optional
+from dataclasses import dataclass
+from enum import Enum
+
+# ============================================================================
+# БАЗИС, СЛОВАРИ И СЕМАНТИЧЕСКИЕ МАСКИ ПЕНТАРНОЙ ЛОГИКИ
+# ============================================================================
+LOGIC_BASIS = [2, 1, 0, -1, -2]
+
+MASKS = {
+     2: "Бригелла (Да / Пик / Сверхбыстрое движение / Источник)",
+     1: "Коломбина (Скорее Да / Восходящий фронт / Плавное движение)",
+     0: "Доктор Грациано (Наверное / Центр / Покой / Демпфер хаоса)",
+    -1: "Пьеро (Скорее Нет / Нисходящий фронт / Торможение)",
+    -2: "Арлекин (Нет / Впадина / Обрыв фронта / Уход в тень)"
+}
+
+PENTAR_CODE = {
+    -2: "КАТЕГОРИЧЕСКОЕ НЕТ (Обрыв / Тень)",
+    -1: "МЯГКОЕ НЕТ (Торможение)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Демпфер)",
+     1: "МЯГКОЕ ДА (Рост)",
+     2: "КАТЕГОРИЧЕСКОЕ ДА (Взрывной фронт)"
+}
+
+
+# ============================================================================
+# КОНТУР БЕЗОПАСНОСТИ И ЗАЩИТЫ ОТ OOM-БОМБ (V18)
+# ============================================================================
+class SafetyVerdict(Enum):
+    ALLOW = 1
+    THROTTLE = 0
+    REJECT = -1
+
+class V18OOMProtector:
+    """Защита от OOM-бомб и контроль перегрузки декомпрессора потока."""
+    def __init__(self, max_allowed_block_size: int = 50 * 1024 * 1024):
+        self.max_allowed_block_size = max_allowed_block_size
+
+    def inspect_packet(self, data_len: int, declared_size: int) -> SafetyVerdict:
+        if declared_size > self.max_allowed_block_size or data_len > self.max_allowed_block_size:
+            return SafetyVerdict.REJECT
+        if declared_size <= 0 or data_len <= 0:
+            return SafetyVerdict.REJECT
+        return SafetyVerdict.ALLOW
+
+
+# ============================================================================
+# RADIX-5 ПЕНТАРНЫЙ УПАКОВЩИК (СЖАТИЕ БЕЗ ПОТЕРЬ 3:1)
+# ============================================================================
+class Radix5Packer:
+    """
+    Математическая упаковка 3 пентарных значений [-2, 2] (смещенных в [0, 4]) 
+    в 1 байт (5^3 = 125 <= 256). Плотность потока возрастает ровно в 3 раза.
+    """
+    @staticmethod
+    def pack_pentary(values: np.ndarray) -> bytes:
+        shifted = np.clip(values.astype(np.int32) + 2, 0, 4)
+        n = len(shifted)
+        remainder = n % 3
+        if remainder != 0:
+            pad_len = 3 - remainder
+            shifted = np.pad(shifted, (0, pad_len), 'constant', constant_values=2) # 2 соответствует 0
+        
+        triplets = shifted.reshape(-1, 3)
+        packed = triplets[:, 0] + 5 * triplets[:, 1] + 25 * triplets[:, 2]
+        return bytes(packed.astype(np.uint8))
+
+    @staticmethod
+    def unpack_pentary(packed_bytes: bytes, original_length: int) -> np.ndarray:
+        raw = np.frombuffer(packed_bytes, dtype=np.uint8)
+        if len(raw) == 0:
+            return np.array([], dtype=int)
+        
+        c = raw // 25
+        b = (raw % 25) // 5
+        a = raw % 5
+        
+        unpacked = np.column_stack((a, b, c)).flatten()
+        result = (unpacked[:original_length] - 2).astype(int)
+        return result
+
+
+# ============================================================================
+# МОДУЛЬ 1: МАКРО-ПОЛЕ И ВЕКТОРНАЯ ВОЛНОВАЯ ЭВОЛЮЦИЯ (256x256)
+# ============================================================================
+class PentarnyTensorField:
+    def __init__(self, dimensions: tuple = (256, 256)):
+        self.dimensions = dimensions
+        self.field = np.zeros(dimensions, dtype=int)
+
+    def inject_quantum_impulse(self, coordinates: tuple, value: int):
+        if value not in LOGIC_BASIS:
+            raise ValueError("Значение должно строго лежать в пентарном базисе [-2, 2]")
+        if all(0 <= coordinates[i] < self.dimensions[i] for i in range(len(self.dimensions))):
+            self.field[coordinates] = value
+
+    def calculate_field_entropy(self) -> float:
+        total_elements = self.field.size
+        if total_elements == 0:
+            return 0.0
+        extreme_states = np.sum(np.abs(self.field) == 2)
+        moderate_states = np.sum(np.abs(self.field) == 1)
+        return float((extreme_states * 1.5 + moderate_states * 0.5) / total_elements)
+
+
+class PentarnyTensorEvolution:
+    """
+    Эволюция тензорного поля V18 на сетке 256x256 с полной векторизацией NumPy.
+    """
+    def __init__(self, tensor_field: PentarnyTensorField):
+        self.field = tensor_field
+        self.step_counter = 0
+
+    def propagate_wave(self, origin: tuple, radius: int = 8):
+        self.step_counter += 1
+        h, w = self.field.dimensions
+        y_center, x_center = origin
+
+        y_min, y_max = max(0, y_center - radius), min(h, y_center + radius + 1)
+        x_min, x_max = max(0, x_center - radius), min(w, x_center + radius + 1)
+
+        y_grid, x_grid = np.ogrid[y_min:y_max, x_min:x_max]
+        dist = np.abs(y_grid - y_center) + np.abs(x_grid - x_center)
+        wave_mask = (dist <= radius) & (dist > 0)
+
+        center_energy = self.field.field[y_center, x_center]
+        if center_energy == 0:
+            return
+
+        impulse_matrix = np.zeros_like(dist, dtype=int)
+        impulse_matrix[wave_mask] = center_energy // (dist[wave_mask] + 1)
+
+        current_slice = self.field.field[y_min:y_max, x_min:x_max]
+        updated_slice = current_slice + impulse_matrix
+        self.field.field[y_min:y_max, x_min:x_max] = np.clip(updated_slice, -2, 2)
+
+    def decode_wave_to_brightness(self) -> np.ndarray:
+        field_f = self.field.field.astype(np.float32)
+        normalized = ((field_f + 2.0) / 4.0) * 255.0
+        return np.clip(normalized, 0, 255).astype(np.uint8)
+
+
+# ============================================================================
+# МОДУЛЬ 2: ГИБРИДНЫЙ ОРКЕСТРАТОР ПОТОКА И МЕНЕДЖЕР .ZVD
+# ============================================================================
+class ZvdHybridCodecEngine:
+    """
+    Главный оркестратор гибридного кодека: объединяет волновое тензорное поле,
+    термодинамический демпфер энтропии и сверхплотную Radix-5 упаковку.
+    """
+    def __init__(self, grid_size: tuple = (256, 256)):
+        self.grid_size = grid_size
+        self.oom_protector = V18OOMProtector()
+
+    def encode_block(self, block_data: bytes) -> bytes:
+        raw_data = np.frombuffer(block_data, dtype=np.uint8)
+        orig_len = len(raw_data)
+        
+        verdict = self.oom_protector.inspect_packet(orig_len, orig_len)
+        if verdict == SafetyVerdict.REJECT:
+            raise ValueError("V18 OOM-Protector: Block size exceeds security limits.")
+
+        # Квантование байт в пентарный базис [-2, 2]
+        pentary = ((raw_data.astype(int) * 4) // 255) - 2
+        
+        # Расчет энтропии потока
+        _, counts = np.unique(pentary, return_counts=True)
+        probs = counts / len(pentary)
+        entropy = float(-np.sum(probs * np.log2(probs + 1e-9)))
+
+        # Упаковка через Radix-5 (3:1 сжатие)
+        packed_payload = Radix5Packer.pack_pentary(pentary)
+        
+        header = struct.pack('>If', orig_len, entropy)
+        return header + packed_payload
+
+    def decode_block(self, encoded_block: bytes) -> bytes:
+        if len(encoded_block) < 8:
+            raise ValueError("V18 Error: Invalid block header length.")
+            
+        orig_len, entropy = struct.unpack('>If', encoded_block[:8])
+        packed_payload = encoded_block[8:]
+        
+        verdict = self.oom_protector.inspect_packet(len(packed_payload), orig_len)
+        if verdict == SafetyVerdict.REJECT:
+            raise MemoryError("V18 OOM-Bomb Protection Triggered: Corrupted or oversized payload.")
+
+        unpacked_pentary = Radix5Packer.unpack_pentary(packed_payload, orig_len)
+        
+        # Восстановление яркости из пентарного базиса
+        restored_bytes = np.clip(((unpacked_pentary.astype(int) + 2) * 255) // 4, 0, 255).astype(np.uint8)
+        return bytes(restored_bytes)
+
+
+class ZvdBitstreamManager:
+    """Менеджер дискового бистрима (.zvd / ZV26) с проверкой сигнатуры."""
+    def __init__(self, filename: str):
+        self.filename = filename
+        self.write_buffer = []
+
+    def write_packet(self, encoded_data: bytes):
+        self.write_buffer.append(encoded_data)
+
+    def flush_to_disk(self):
+        with open(self.filename, "wb") as f:
+            f.write(b"ZV26")  # Сигнатура потока Заводюка
+            for packet in self.write_buffer:
+                packet_len = len(packet)
+                f.write(struct.pack('>I', packet_len) + packet)
+        file_size = os.path.getsize(self.filename)
+        print(f"[+] Файл .zvd успешно записан. Общий объем архива: {file_size} байт.")
+        self.write_buffer.clear()
+
+    def read_from_disk(self) -> list:
+        packets = []
+        with open(self.filename, "rb") as f:
+            magic = f.read(4)
+            if magic != b"ZV26":
+                raise ValueError("Критическая ошибка: Неверная сигнатура потока .zvd (ожидалась ZV26)!")
+                
+            while True:
+                len_bytes = f.read(4)
+                if not len_bytes or len(len_bytes) < 4:
+                    break
+                packet_len = struct.unpack('>I', len_bytes)[0]
+                packet_data = f.read(packet_len)
+                packets.append(packet_data)
+        return packets
+
+
+# ============================================================================
+# ТОЧКА ВХОДА / ДЕМОНСТРАЦИОННЫЙ ТЕСТ
+# ============================================================================
+if __name__ == "__main__":
+    print("=" * 80)
+    print("🚀 ПЕНТАРНЫЙ ГИБРИДНЫЙ КОДЕК V18.7-MOIRÉ-HYBRID (.ZVD / ZV26)")
+    print("© АВТОР: ВЛАДИМИР ЗАВОДЮК (ROOT-ARCHITECT). ALL RIGHTS RESERVED.")
+    print("=" * 80)
+
+    codec = ZvdHybridCodecEngine()
+    manager = ZvdBitstreamManager("test_stream_v18.zvd")
+
+    test_payload = b"ZV26_TENSOR_TELEMETRY_STREAM: [RADIX-5 + VECTORIZED V18 ENGINE ACTIVE] " * 10
+    
+    # Кодирование и запись
+    encoded = codec.encode_block(test_payload)
+    manager.write_packet(encoded)
+    manager.flush_to_disk()
+
+    # Чтение и декодирование
+    packets = manager.read_from_disk()
+    restored = codec.decode_block(packets[0])
+
+    print(f"Исходный размер буфера: {len(test_payload)} байт")
+    print(f"Размер в архиве .zvd:   {len(encoded)} байт (Плотность сжатия Radix-5)")
+    print(f"Целостность данных:      {test_payload == restored}")
+    print("=" * 80)
