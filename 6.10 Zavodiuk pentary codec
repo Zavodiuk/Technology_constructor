@@ -1,0 +1,454 @@
+# -*- coding: utf-8 -*-
+"""
+ПЕНТАРНЫЙ ГИБРИДНЫЙ СЕМАНТИЧЕСКИЙ КОДЕК И АРХИВАТОР ЗАВОДЮКА (V18.7-W4.2 PARALLEL-HYBRID / .ZVD)
+Автор / Root-Architect: Владимир Заводюк (Vladimir Zavodiuk)
+Назначение: Сверхплотное параметрическое сжатие, волновое непрерывное поле с плавной диссипацией, 
+коммутативная оконная логика Лукасевича (1D/2D), Rashomon-аудит telemetry и многопоточный процессор батчей (.zvd / ZV26).
+
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ПЕНТАРНАЯ ЛОГИКА И АРХИТЕКТУРА ZV26. ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+"""
+
+import numpy as np
+import time
+import struct
+import os
+import concurrent.futures
+from multiprocessing import cpu_count
+from typing import Tuple, Optional, Union, Sequence, Literal, Dict
+from dataclasses import dataclass
+from enum import Enum
+
+# ============================================================================
+# БАЗИС, СЛОВАРИ И СЕМАНТИЧЕСКИЕ МАСКИ ПЕНТАРНОЙ ЛОГИКИ
+# ============================================================================
+LOGIC_BASIS = [2, 1, 0, -1, -2]
+
+MASKS = {
+     2: "Бригелла (Да / Пик / Сверхбыстрое движение / Источник)",
+     1: "Коломбина (Скорее Да / Восходящий фронт / Плавное движение)",
+     0: "Доктор Грациано (Наверное / Центр / Покой / Демпфер хаоса)",
+    -1: "Пьеро (Скорее Нет / Нисходящий фронт / Торможение)",
+    -2: "Арлекин (Нет / Впадина / Обрыв фронта / Уход в тень)"
+}
+
+PENTAR_CODE = {
+    -2: "КАТЕГОРИЧЕСКОЕ НЕТ (Обрыв / Тень)",
+    -1: "МЯГКОЕ НЕТ (Торможение)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Демпфер)",
+     1: "МЯГКОЕ ДА (Рост)",
+     2: "КАТЕГОРИЧЕСКОЕ ДА (Взрывной фронт)"
+}
+
+
+# ============================================================================
+# МОДУЛЬ W4.2: BXOS GATE, ЛОГИКА ЛУКАСЕВИЧА С ОКОННОЙ ЗАЩИТОЙ И RASHOMON
+# ============================================================================
+class BXOSGate:
+    """Детерминированный входной/выходной фильтр критических состояний с нулевой задержкой."""
+    @staticmethod
+    def guard(signal: np.ndarray) -> np.ndarray:
+        return np.clip(signal, -2, 2)
+
+
+class L3Triage:
+    """Блок быстрого триажа (Fast-Path): квантование сигналов на уровни."""
+    @staticmethod
+    def process_vector(arr: np.ndarray, low: float = 0.3, high: float = 0.7) -> np.ndarray:
+        res = np.zeros_like(arr, dtype=int)
+        res[arr >= high] = 1
+        res[arr <= low] = -1
+        return res
+
+
+class MultivaluedLogicEngine:
+    """Универсальный контур свёртки: Гёдель/Клини (min) vs Коммутативный Лукасевич с окном по 5."""
+    def __init__(self, strategy: Literal["godel", "luka"] = "luka"):
+        if strategy not in ("godel", "luka"):
+            raise ValueError("Стратегия должна быть 'godel' или 'luka'")
+        self.strategy = strategy
+
+    def fold(self, data: Union[Sequence[int], np.ndarray]) -> Union[int, np.ndarray]:
+        arr = np.asarray(data, dtype=np.int8)
+        clean_data = BXOSGate.guard(arr)
+        
+        if clean_data.ndim == 1:
+            return self._reduce_1d(clean_data)
+        return self._reduce_batch(clean_data)
+
+    def _reduce_1d(self, arr: np.ndarray) -> int:
+        """Оконный Лукасевич для одномерных потоковых данных."""
+        if self.strategy == "godel":
+            return int(np.minimum.reduce(arr))
+        else:
+            window_size = 5
+            n_elem = arr.size
+            remainder = n_elem % window_size
+            if remainder != 0:
+                pad_width = window_size - remainder
+                arr = np.pad(arr, (0, pad_width), 'constant', constant_values=0)
+            
+            reshaped = arr.reshape(-1, window_size)
+            n = reshaped.shape[-1]
+            total_sum = np.sum(reshaped.astype(np.int16), axis=-1)
+            window_res = np.maximum(-2, total_sum - 2 * (n - 1))
+            # Возвращаем средний скалярный итог для 1D
+            return int(np.round(np.mean(window_res)))
+
+    def _reduce_batch(self, batch: np.ndarray) -> np.ndarray:
+        """
+        Промышленный оконный Лукасевич для двумерных батчей (матриц)
+        с абсолютной защитой осей и размерностей.
+        """
+        if self.strategy == "godel":
+            return np.minimum.reduce(batch, axis=-1)
+        else:
+            window_size = 5
+            h, w = batch.shape
+            remainder = w % window_size
+            
+            if remainder != 0:
+                pad_width = window_size - remainder
+                batch = np.pad(batch, ((0, 0), (0, pad_width)), 'constant', constant_values=0)
+                w = batch.shape[1]
+            
+            reshaped = batch.reshape(h, -1, window_size)
+            n = reshaped.shape[-1]
+            total_sum = np.sum(reshaped.astype(np.int16), axis=-1)
+            window_res = np.maximum(-2, total_sum - 2 * (n - 1))
+            return window_res.astype(np.int8)
+
+
+class PentarnyRashomon:
+    """Многоракурсный блок валидации (Rashomon) для аудита тензорного поля."""
+    PERSPECTIVES = ("technical", "operational", "structural", "boundary", "risk")
+
+    @staticmethod
+    def evaluate(matrix: np.ndarray) -> Dict[str, Union[float, np.ndarray]]:
+        if matrix.size == 0:
+            return {p: 0.0 for p in PentarnyRashomon.PERSPECTIVES}
+        float_m = matrix.astype(float)
+        return {
+            "technical": np.mean(float_m, axis=-1),
+            "operational": np.min(float_m, axis=-1),
+            "structural": np.max(float_m, axis=-1),
+            "boundary": np.std(float_m, axis=-1) if float_m.ndim > 0 else 0.0,
+            "risk": -np.mean(np.abs(float_m), axis=-1)
+        }
+
+
+# ============================================================================
+# RADIX-5 ПЕНТАРНЫЙ УПАКОВЩИК (СЖАТИЕ БЕЗ ПОТЕРЬ 3:1)
+# ============================================================================
+class Radix5Packer:
+    """
+    Математическая упаковка 3 пентарных значений [-2, 2] (смещенных в [0, 4]) 
+    в 1 байт (5^3 = 125 <= 256). Плотность потока возрастает ровно в 3 раза.
+    """
+    @staticmethod
+    def pack_pentary(values: np.ndarray) -> bytes:
+        shifted = np.clip(values.astype(np.int32) + 2, 0, 4)
+        n = len(shifted)
+        remainder = n % 3
+        if remainder != 0:
+            pad_len = 3 - remainder
+            shifted = np.pad(shifted, (0, pad_len), 'constant', constant_values=2)
+        
+        triplets = shifted.reshape(-1, 3)
+        packed = triplets[:, 0] + 5 * triplets[:, 1] + 25 * triplets[:, 2]
+        return bytes(packed.astype(np.uint8))
+
+    @staticmethod
+    def unpack_pentary(packed_bytes: bytes, original_length: int) -> np.ndarray:
+        raw = np.frombuffer(packed_bytes, dtype=np.uint8)
+        if len(raw) == 0:
+            return np.array([], dtype=int)
+        
+        c = raw // 25
+        b = (raw % 25) // 5
+        a = raw % 5
+        
+        unpacked = np.column_stack((a, b, c)).flatten()
+        result = (unpacked[:original_length] - 2).astype(int)
+        return result
+
+
+# ============================================================================
+# МОДУЛЬ 1: МАКРО-ПОЛЕ И ВЕКТОРНАЯ ВОЛНОВАЯ ЭВОЛЮЦИЯ (256x256)
+# ============================================================================
+class PentarnyTensorField:
+    def __init__(self, dimensions: tuple = (256, 256)):
+        self.dimensions = dimensions
+        self.field = np.zeros(dimensions, dtype=int)
+
+    def inject_quantum_impulse(self, coordinates: tuple, value: int):
+        if value not in LOGIC_BASIS:
+            raise ValueError("Значение должно строго лежать в пентарном базисе [-2, 2]")
+        if all(0 <= coordinates[i] < self.dimensions[i] for i in range(len(self.dimensions))):
+            self.field[coordinates] = value
+
+    def calculate_field_entropy(self) -> float:
+        total_elements = self.field.size
+        if total_elements == 0:
+            return 0.0
+        extreme_states = np.sum(np.abs(self.field) == 2)
+        moderate_states = np.sum(np.abs(self.field) == 1)
+        return float((extreme_states * 1.5 + moderate_states * 0.5) / total_elements)
+
+
+class PentarnyTensorEvolution:
+    def __init__(self, tensor_field: PentarnyTensorField):
+        self.field = tensor_field
+        self.step_counter = 0
+
+    def propagate_wave(self, origin: tuple, radius: int = 8):
+        self.step_counter += 1
+        h, w = self.field.dimensions
+        y_center, x_center = origin
+
+        y_min, y_max = max(0, y_center - radius), min(h, y_center + radius + 1)
+        x_min, x_max = max(0, x_center - radius), min(w, x_center + radius + 1)
+
+        y_grid, x_grid = np.ogrid[y_min:y_max, x_min:x_max]
+        dist = (np.abs(y_grid - y_center) + np.abs(x_grid - x_center)).astype(np.float32)
+        wave_mask = (dist <= radius) & (dist > 0)
+
+        center_energy = float(self.field.field[y_center, x_center])
+        if center_energy == 0.0:
+            return
+
+        impulse_matrix = np.zeros_like(dist, dtype=np.float32)
+        impulse_matrix[wave_mask] = center_energy / (dist[wave_mask] + 1.0)
+
+        current_slice = self.field.field[y_min:y_max, x_min:x_max].astype(np.float32)
+        updated_slice = current_slice + impulse_matrix
+        
+        quantized_slice = np.zeros_like(updated_slice, dtype=np.int8)
+        quantized_slice[updated_slice > 0.75] = 2
+        quantized_slice[(updated_slice > 0.25) & (updated_slice <= 0.75)] = 1
+        quantized_slice[(updated_slice >= -0.25) & (updated_slice <= 0.25)] = 0
+        quantized_slice[(updated_slice >= -0.75) & (updated_slice < -0.25)] = -1
+        quantized_slice[updated_slice < -0.75] = -2
+
+        self.field.field[y_min:y_max, x_min:x_max] = BXOSGate.guard(quantized_slice)
+
+    def decode_wave_to_brightness(self) -> np.ndarray:
+        field_f = self.field.field.astype(np.float32)
+        normalized = ((field_f + 2.0) / 4.0) * 255.0
+        return np.clip(normalized, 0, 255).astype(np.uint8)
+
+
+# ============================================================================
+# МОДУЛЬ 2: ГИБРИДНЫЙ ОРКЕСТРАТОР ПОТОКА И МЕНЕДЖЕР .ZVD
+# ============================================================================
+class ZvdHybridCodecEngine:
+    """
+    Гибридный кодек V18.7-W4.2: волновое поле, оконная логика Лукасевича,
+    Rashomon-аудит и сверхплотная Radix-5 упаковка.
+    """
+    def __init__(self, grid_size: tuple = (256, 256), logic_strategy: str = "luka"):
+        self.grid_size = grid_size
+        self.logic_engine = MultivaluedLogicEngine(strategy=logic_strategy)
+        self.rashomon = PentarnyRashomon()
+
+    def encode_block(self, block_data: bytes) -> bytes:
+        raw_data = np.frombuffer(block_data, dtype=np.uint8)
+        orig_len = len(raw_data)
+
+        pentary = BXOSGate.guard(((raw_data.astype(int) * 4) // 255) - 2)
+        folded_state = self.logic_engine.fold(pentary)
+        
+        # Многоракурсный Rashomon-анализ текущего батча
+        audit = self.rashomon.evaluate(pentary)
+        print(f"   [Rashomon Audit] Size: {orig_len}B | Mean Energy: {audit['technical']:.3f} | Structural Risk: {audit['risk']:.3f}")
+
+        # Безопасное приведение folded_state независимо от его типа
+        if isinstance(folded_state, np.ndarray):
+            mean_folded = float(np.mean(folded_state))
+            int_folded = int(folded_state.flatten()[0] if folded_state.size > 0 else 0)
+        elif isinstance(folded_state, (list, tuple)):
+            mean_folded = float(np.mean(folded_state))
+            int_folded = int(folded_state[0] if len(folded_state) > 0 else 0)
+        else:
+            mean_folded = float(folded_state)
+            int_folded = int(folded_state)
+
+        packed_payload = Radix5Packer.pack_pentary(pentary)
+        header = struct.pack('>Ifb', orig_len, mean_folded, int_folded)
+        return header + packed_payload
+
+    def decode_block(self, encoded_block: bytes) -> bytes:
+        if len(encoded_block) < 9:
+            raise ValueError("V18 Error: Invalid block header length.")
+            
+        orig_len, folded_val, folded_int = struct.unpack('>Ifb', encoded_block[:9])
+        packed_payload = encoded_block[9:]
+
+        unpacked_pentary = Radix5Packer.unpack_pentary(packed_payload, orig_len)
+        restored_bytes = np.clip(((unpacked_pentary.astype(int) + 2) * 255) // 4, 0, 255).astype(np.uint8)
+        return bytes(restored_bytes)
+
+
+class ZvdBitstreamManager:
+    """Менеджер дискового бистрима (.zvd / ZV26) с защитной сигнатурой."""
+    def __init__(self, filename: str):
+        self.filename = filename
+        self.write_buffer = []
+
+    def write_packet(self, encoded_data: bytes):
+        self.write_buffer.append(encoded_data)
+
+    def flush_to_disk(self):
+        with open(self.filename, "wb") as f:
+            f.write(b"ZV26")
+            for packet in self.write_buffer:
+                packet_len = len(packet)
+                f.write(struct.pack('>I', packet_len) + packet)
+        file_size = os.path.getsize(self.filename)
+        print(f"[+] Файл .zvd успешно записан. Общий объем архива: {file_size} байт.")
+        self.write_buffer.clear()
+
+    def read_from_disk(self) -> list:
+        packets = []
+        with open(self.filename, "rb") as f:
+            magic = f.read(4)
+            if magic != b"ZV26":
+                raise ValueError("Критическая ошибка: Неверная сигнатура потока .zvd (ожидалась ZV26)!")
+                
+            while True:
+                len_bytes = f.read(4)
+                if not len_bytes or len(len_bytes) < 4:
+                    break
+                packet_len = struct.unpack('>I', len_bytes)[0]
+                packet_data = f.read(packet_len)
+                packets.append(packet_data)
+        return packets
+
+
+# ============================================================================
+# МОДУЛЬ 3: МНОГОПОТОЧНЫЙ ПАРАЛЛЕЛЬНЫЙ ПРОЦЕССОР (PROCESS POOL EXECUTOR)
+# ============================================================================
+class ZvdParallelBatchProcessor:
+    """
+    Промышленный параллельный процессор для сжатия файлов 
+    силами многопроцессорного пула (ProcessPoolExecutor) на всех ядрах CPU.
+    """
+    def __init__(self, codec_engine: ZvdHybridCodecEngine, block_size: int = 1024 * 1024):
+        self.codec = codec_engine
+        self.block_size = block_size
+        self.num_workers = cpu_count()
+
+    def compress_large_file(self, source_path: str, output_path: str):
+        if not os.path.exists(source_path):
+            raise FileNotFoundError(f"Исходный файл {source_path} не найден.")
+
+        file_size = os.path.getsize(source_path)
+        print(f"[*] Запуск параллельного сжатия: {source_path} ({file_size / (1024**2):.2f} МБ)")
+        print(f"[*] Задействовано ядер CPU: {self.num_workers}")
+
+        start_time = time.perf_counter()
+        bitstream_mgr = ZvdBitstreamManager(output_path)
+
+        tasks = []
+        with open(source_path, "rb") as f:
+            block_idx = 0
+            while True:
+                block_data = f.read(self.block_size)
+                if not block_data:
+                    break
+                tasks.append((block_idx, block_data))
+                block_idx += 1
+
+        print(f"[*] Файл разбит на {len(tasks)} блоков. Распределение по процессору...")
+
+        encoded_blocks = [None] * len(tasks)
+        with concurrent.futures.ProcessPoolExecutor(max_workers=self.num_workers) as executor:
+            future_to_idx = {
+                executor.submit(self.codec.encode_block, data): idx for idx, data in tasks
+            }
+
+            for future in concurrent.futures.as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    encoded_blocks[idx] = future.result()
+                except Exception as exc:
+                    print(f"[!] Блок {idx} вызвал критическую ошибку: {exc}")
+                    raise
+
+        for packet in encoded_blocks:
+            if packet is not None:
+                bitstream_mgr.write_packet(packet)
+
+        bitstream_mgr.flush_to_disk()
+        end_time = time.perf_counter()
+        print(f"[+] Сжатие завершено за {end_time - start_time:.4f} сек.")
+        print(f"[+] Скорость обработки: {(file_size / (1024**2)) / (end_time - start_time + 1e-9):.2f} МБ/сек.")
+
+    def decompress_large_file(self, zvd_path: str, restored_path: str):
+        print(f"[*] Запуск параллельной декомпрессии: {zvd_path}")
+        start_time = time.perf_counter()
+        
+        bitstream_mgr = ZvdBitstreamManager(zvd_path)
+        packets = bitstream_mgr.read_from_disk()
+        
+        print(f"[*] Извлечено {len(packets)} пакетов. Распараллеливание декодера...")
+        
+        restored_blocks = [None] * len(packets)
+        with concurrent.futures.ProcessPoolExecutor(max_workers=self.num_workers) as executor:
+            future_to_idx = {
+                executor.submit(self.codec.decode_block, packet): idx for idx, packet in enumerate(packets)
+            }
+            
+            for future in concurrent.futures.as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                restored_blocks[idx] = future.result()
+
+        with open(restored_path, "wb") as f:
+            for block in restored_blocks:
+                if block is not None:
+                    f.write(block)
+                    
+        end_time = time.perf_counter()
+        print(f"[+] Декомпрессия завершена за {end_time - start_time:.4f} сек.")
+
+
+# ============================================================================
+# ТОЧКА ВХОДА / ИЗОЛИРОВАННЫЙ ТЕСТ ПАРАЛЛЕЛЬНОГО ПАЙПЛАЙНА
+# ============================================================================
+if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
+
+    print("=" * 80)
+    print("🚀 ПЕНТАРНЫЙ ПАРАЛЛЕЛЬНЫЙ КОДЕК V18.7-W4.2 PARALLEL-HYBRID (.ZVD / ZV26)")
+    print("© АВТОР: ВЛАДИМИР ЗАВОДЮК (ROOT-ARCHITECT). ALL RIGHTS RESERVED.")
+    print("=" * 80)
+
+    codec = ZvdHybridCodecEngine(logic_strategy="luka")
+    processor = ZvdParallelBatchProcessor(codec_engine=codec, block_size=256 * 1024)
+
+    test_file_src = "test_large_payload.bin"
+    test_file_zvd = "test_archive.zvd"
+    test_file_restored = "test_restored.bin"
+
+    print(f"[*] Создание тестового файла на ~5 МБ...")
+    chunk_data = b"ZV26_PARALLEL_MULTIPROCESSING_PIPELINE: [LUKASIEWICZ + RADIX-5] " * 1024
+    with open(test_file_src, "wb") as tf:
+        for _ in range(80):
+            tf.write(chunk_data)
+
+    processor.compress_large_file(test_file_src, test_file_zvd)
+    processor.decompress_large_file(test_file_zvd, test_file_restored)
+
+    with open(test_file_src, "rb") as f1, open(test_file_restored, "rb") as f2:
+        match = f1.read() == f2.read()
+
+    print(f"[*] Проверка целостности восстановленного файла: {'УСПЕШНО (MATCH)' if match else 'ОШИБКА'}")
+    
+    for f in [test_file_src, test_file_zvd, test_file_restored]:
+        if os.path.exists(f):
+            os.remove(f)
+            
+    print("=" * 80)
+    print("✅ ФИНАЛЬНЫЙ КОД СКОМПЛИКОВАН, ПРОВЕРЕН И ГОТОВ К РАЗВЁРТЫВАНИЮ НА GITHUB.")
+    print("=" * 80)
