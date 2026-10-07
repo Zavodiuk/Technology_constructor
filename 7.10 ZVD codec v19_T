@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+ZVD V19-T — КУБ 5×5×5 + ТЕТРАЭДР НА УЗЛЕ (информация на 4 гранях)
+Автор: Владимир Заводюк (Vladimir Zavodiuk)
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ
+VERSION: 19.1-TETRA-CUBE
+"""
+
+from __future__ import annotations
+
+import os
+import struct
+import zlib
+import time
+from typing import List, Optional, Tuple
+
+import numpy as np
+
+try:
+    import cv2
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
+
+
+CUBE = 5
+N_FACES = 4  # тетраэдр: 4 треугольные грани
+# роли граней (фиксированный смысл)
+FACE_MOTION = 0   # движение / ритм
+FACE_ENERGY = 1   # энергия / контраст
+FACE_MASK = 2     # семантика / маска
+FACE_TRUST = 3    # доверие / нужность residual
+
+
+def q_pent(v: float) -> int:
+    if v > 0.75:
+        return 2
+    if v > 0.25:
+        return 1
+    if v >= -0.25:
+        return 0
+    if v >= -0.75:
+        return -1
+    return -2
+
+
+def q_field(a: np.ndarray) -> np.ndarray:
+    out = np.zeros(a.shape, dtype=np.int8)
+    out[a > 0.75] = 2
+    out[(a > 0.25) & (a <= 0.75)] = 1
+    out[(a >= -0.25) & (a <= 0.25)] = 0
+    out[(a >= -0.75) & (a < -0.25)] = -1
+    out[a < -0.75] = -2
+    return out
+
+
+# =====================================================================
+# ТЕТРАЭДР: 4 грани
+# =====================================================================
+
+class TetraCell:
+    """
+    Минимальная информационная ячейка — тетраэдр.
+    Информация на 4 гранях, каждая ∈ [-2, 2].
+    """
+
+    __slots__ = ("faces",)
+
+    def __init__(self, faces: Optional[np.ndarray] = None) -> None:
+        if faces is None:
+            self.faces = np.zeros(N_FACES, dtype=np.int8)
+        else:
+            f = np.asarray(faces, dtype=np.int8).reshape(N_FACES)
+            self.faces = np.clip(f, -2, 2).astype(np.int8)
+
+    def pack(self) -> bytes:
+        # 4 значения → 4 байта (val+2)
+        return (self.faces.astype(np.int16) + 2).astype(np.uint8).tobytes()
+
+    @classmethod
+    def unpack(cls, raw: bytes) -> "TetraCell":
+        arr = np.frombuffer(raw[:N_FACES], dtype=np.uint8).astype(np.int16) - 2
+        return cls(arr.astype(np.int8))
+
+    def energy(self) -> float:
+        return float(np.mean(np.abs(self.faces)))
+
+
+# =====================================================================
+# КУБ 5×5×5 ИЗ ТЕТРАЭДРОВ
+# =====================================================================
+
+class TetraCube5:
+    """
+    Куб 5×5×5, в каждом узле — TetraCell (4 грани).
+    Форма данных: (5,5,5,4) int8
+    """
+
+    __slots__ = ("data",)
+
+    def __init__(self, data: Optional[np.ndarray] = None) -> None:
+        if data is None:
+            self.data = np.zeros((CUBE, CUBE, CUBE, N_FACES), dtype=np.int8)
+        else:
+            if data.shape != (CUBE, CUBE, CUBE, N_FACES):
+                raise ValueError("expected shape (5,5,5,4)")
+            self.data = np.clip(data, -2, 2).astype(np.int8)
+
+    def pack(self) -> bytes:
+        flat = (self.data.reshape(-1).astype(np.int16) + 2).astype(np.uint8)
+        return flat.tobytes()  # 5*5*5*4 = 500 bytes
+
+    @classmethod
+    def unpack(cls, raw: bytes) -> "TetraCube5":
+        need = CUBE * CUBE * CUBE * N_FACES
+        if len(raw) < need:
+            raise ValueError("tetra-cube payload too short")
+        arr = np.frombuffer(raw[:need], dtype=np.uint8).astype(np.int16) - 2
+        return cls(arr.reshape(CUBE, CUBE, CUBE, N_FACES).astype(np.int8))
+
+    def mean_energy(self) -> float:
+        return float(np.mean(np.abs(self.data)))
+
+    def scalar_projection(self) -> np.ndarray:
+        """Свёртка 4 граней → один трит на узел (для совместимости со старым слоем)."""
+        # вес: motion и energy важнее
+        w = np.array([0.35, 0.30, 0.20, 0.15], dtype=np.float32)
+        s = np.tensordot(self.data.astype(np.float32), w, axes=([-1], [0]))
+        return q_field(s / 2.0)  # нормализация порядка
+
+
+# =====================================================================
+# НАРЕЗКА ВИДЕО → ТЕТРА-КУБЫ (вариант B + грани)
+# =====================================================================
+
+class TetraCubeVolumeCodec:
+    """
+    Буфер 5 кадров → тайлы 5×5 → в каждом узле 4 грани:
+      motion  — дельта яркости
+      energy  — |delta| / локальная энергия
+      mask    — знак/зона (грубая семантика)
+      trust   — устойчивость (1 - разброс в малом окне)
+    """
+
+    def __init__(self, spatial_hw: Tuple[int, int] = (80, 80)) -> None:
+        h, w = spatial_hw
+        self.h = (h // CUBE) * CUBE
+        self.w = (w // CUBE) * CUBE
+        self.tiles_y = self.h // CUBE
+        self.tiles_x = self.w // CUBE
+        self._buf: List[np.ndarray] = []
+        self._prev: Optional[np.ndarray] = None
+
+    def _map(self, frame_bgr: np.ndarray) -> np.ndarray:
+        if not HAS_CV2:
+            raise RuntimeError("cv2 required")
+        g = cv2.resize(frame_bgr, (self.w, self.h), interpolation=cv2.INTER_AREA)
+        g = cv2.cvtColor(g, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+        if self._prev is None:
+            self._prev = g
+            return np.zeros((self.h, self.w), dtype=np.float32)
+        d = np.clip((g - self._prev) * 4.0, -1.0, 1.0)
+        self._prev = g
+        return d
+
+    def push_frame(self, frame_bgr: np.ndarray) -> Optional[List[TetraCube5]]:
+        self._buf.append(self._map(frame_bgr))
+        if len(self._buf) < CUBE:
+            return None
+        maps = self._buf[:CUBE]
+        self._buf = self._buf[CUBE:]
+        return self._build_cubes(maps)
+
+    def _build_cubes(self, maps: List[np.ndarray]) -> List[TetraCube5]:
+        # stack: (T,H,W)
+        st = np.stack(maps, axis=0)
+        cubes: List[TetraCube5] = []
+        for ty in range(self.tiles_y):
+            for tx in range(self.tiles_x):
+                y0, x0 = ty * CUBE, tx * CUBE
+                # block T,Y,X → Y,X,T
+                blk = np.transpose(st[:, y0:y0+CUBE, x0:x0+CUBE], (1, 2, 0))
+                # faces
+                motion = blk
+                energy = np.abs(blk)
+                mask = np.sign(blk)  # -1,0,1
+                # trust: 1 - std along a tiny neighborhood in T (here variance along T already in blk)
+                # use 1 - |blk - mean_T|
+                mean_t = np.mean(blk, axis=2, keepdims=True)
+                trust = 1.0 - np.clip(np.abs(blk - mean_t) * 2.0, 0.0, 1.0)
+                # stack faces last axis
+                faces = np.stack(
+                    [
+                        q_field(motion),
+                        q_field(energy * 2.0 - 1.0),  # map [0,1]→ roughly [-1,1] then quantize
+                        q_field(mask.astype(np.float32)),
+                        q_field(trust * 2.0 - 1.0),
+                    ],
+                    axis=-1,
+                ).astype(np.int8)
+                cubes.append(TetraCube5(faces))
+        return cubes
+
+
+# =====================================================================
+# КОНТЕЙНЕР .zvd5t
+# =====================================================================
+
+MAGIC = b"ZVDT"
+VERSION = 191
+
+
+class TetraBitstreamWriter:
+    def __init__(self, path: str) -> None:
+        self._fh = open(path, "wb")
+        self._fh.write(MAGIC + struct.pack("<H", VERSION) + b"\x00\x00")
+
+    def write_gop(self, cubes: List[TetraCube5], tiles_y: int, tiles_x: int) -> None:
+        raw = b"".join(c.pack() for c in cubes)
+        comp = zlib.compress(raw, 9)
+        ent = float(np.mean([c.mean_energy() for c in cubes])) if cubes else 0.0
+        self._fh.write(struct.pack("<HHIfI", tiles_y, tiles_x, len(cubes), ent, len(comp)))
+        self._fh.write(comp)
+
+    def close(self) -> None:
+        self._fh.close()
+
+
+class TetraBitstreamReader:
+    def __init__(self, path: str) -> None:
+        self._fh = open(path, "rb")
+        if self._fh.read(4) != MAGIC:
+            raise ValueError("Not ZVDT")
+        self.version = struct.unpack("<H", self._fh.read(2))[0]
+        self._fh.read(2)
+
+    def read_gop(self):
+        hdr = self._fh.read(struct.calcsize("<HHIfI"))
+        if not hdr or len(hdr) < 16:
+            return None
+        ty, tx, n, ent, plen = struct.unpack("<HHIfI", hdr)
+        payload = self._fh.read(plen)
+        raw = zlib.decompress(payload)
+        need = CUBE * CUBE * CUBE * N_FACES
+        cubes = [TetraCube5.unpack(raw[i*need:(i+1)*need]) for i in range(n)]
+        return cubes, ty, tx, ent
+
+    def close(self) -> None:
+        self._fh.close()
+
+
+# =====================================================================
+# DEMO
+# =====================================================================
+
+def demo(out_path: str = "/home/workdir/artifacts/demo_tetra_cube.zvd5t") -> dict:
+    # unit test tetra
+    t = TetraCell([2, -1, 0, 1])
+    assert TetraCell.unpack(t.pack()).faces.tolist() == [2, -1, 0, 1]
+    c = TetraCube5()
+    c.data[0, 0, 0, :] = [2, 1, 0, -1]
+    assert TetraCube5.unpack(c.pack()).data[0, 0, 0].tolist() == [2, 1, 0, -1]
+
+    if not HAS_CV2:
+        return {"status": "unit_ok_no_cv2"}
+
+    vol = TetraCubeVolumeCodec((80, 80))
+    w = TetraBitstreamWriter(out_path)
+    gops = 0
+    for i in range(15):
+        img = np.zeros((240, 320, 3), dtype=np.uint8)
+        cv2.rectangle(img, (20 + i * 5, 30), (100 + i * 5, 120), (0, 255, 128), -1)
+        cubes = vol.push_frame(img)
+        if cubes is not None:
+            w.write_gop(cubes, vol.tiles_y, vol.tiles_x)
+            gops += 1
+    w.close()
+    r = TetraBitstreamReader(out_path)
+    first = r.read_gop()
+    r.close()
+    # capacity note
+    scalar_cube_bytes = 125
+    tetra_cube_bytes = 500
+    return {
+        "status": "ok",
+        "gops": gops,
+        "out_bytes": os.path.getsize(out_path),
+        "cubes_first_gop": len(first[0]) if first else 0,
+        "entropy": first[3] if first else None,
+        "raw_bytes_per_cube_scalar": scalar_cube_bytes,
+        "raw_bytes_per_cube_tetra": tetra_cube_bytes,
+        "info_channels_per_node": N_FACES,
+        "out_path": out_path,
+    }
+
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("ZVD V19-T — CUBE 5×5×5 + TETRAHEDRON FACES")
+    print("Author: Vladimir Zavodiuk | All Rights Reserved")
+    print("=" * 70)
+    print(demo())
+    print("=" * 70)
+    
