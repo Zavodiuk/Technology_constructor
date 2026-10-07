@@ -1,0 +1,342 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+ZVD V19 — ЛОКАЛЬНЫЕ КУБЫ 5×5×5 (вариант B)
+База: пентарный кодек Заводюка V18-Hybrid
+Новое: объёмное кодирование локальными блоками 5×5×5 (X×Y×T)
+
+Автор: Владимир Заводюк (Vladimir Zavodiuk)
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ
+VERSION: 19.0-CUBE5
+"""
+
+from __future__ import annotations
+
+import os
+import struct
+import time
+import zlib
+from typing import List, Optional, Tuple
+
+import numpy as np
+
+try:
+    import cv2
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
+
+
+# ---------------------------------------------------------------------------
+# Пентарное квантование
+# ---------------------------------------------------------------------------
+
+def quantize_pentarny(value: float) -> int:
+    if value > 0.75:
+        return 2
+    if value > 0.25:
+        return 1
+    if value >= -0.25:
+        return 0
+    if value >= -0.75:
+        return -1
+    return -2
+
+
+def quantize_field(arr: np.ndarray) -> np.ndarray:
+    """Векторное квантование float → int8 [-2..2]."""
+    out = np.zeros(arr.shape, dtype=np.int8)
+    out[arr > 0.75] = 2
+    out[(arr > 0.25) & (arr <= 0.75)] = 1
+    out[(arr >= -0.25) & (arr <= 0.25)] = 0
+    out[(arr >= -0.75) & (arr < -0.25)] = -1
+    out[arr < -0.75] = -2
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Кубический блок 5×5×5
+# ---------------------------------------------------------------------------
+
+CUBE = 5
+CUBE_VOL = CUBE * CUBE * CUBE  # 125
+
+
+class CubeBlock5:
+    """Один локальный куб 5×5×5, значения int8 ∈ [-2, 2]."""
+
+    __slots__ = ("data",)
+
+    def __init__(self, data: Optional[np.ndarray] = None) -> None:
+        if data is None:
+            self.data = np.zeros((CUBE, CUBE, CUBE), dtype=np.int8)
+        else:
+            if data.shape != (CUBE, CUBE, CUBE):
+                raise ValueError("CubeBlock5 expects shape (5,5,5)")
+            self.data = np.clip(data, -2, 2).astype(np.int8)
+
+    def pack(self) -> bytes:
+        """125 ячеек → 125 байт (значение+2 в младших битах, без потерь алфавита)."""
+        flat = (self.data.reshape(-1).astype(np.int16) + 2).astype(np.uint8)
+        return flat.tobytes()
+
+    @classmethod
+    def unpack(cls, raw: bytes) -> "CubeBlock5":
+        if len(raw) < CUBE_VOL:
+            raise ValueError("cube payload too short")
+        arr = np.frombuffer(raw[:CUBE_VOL], dtype=np.uint8).astype(np.int16) - 2
+        return cls(arr.reshape(CUBE, CUBE, CUBE).astype(np.int8))
+
+    def energy(self) -> float:
+        return float(np.mean(np.abs(self.data)))
+
+
+# ---------------------------------------------------------------------------
+# Нарезка объёма на кубы 5×5×5 (вариант B)
+# ---------------------------------------------------------------------------
+
+class CubeVolumeCodec5:
+    """
+    Вариант B: локальные блоки 5×5×5.
+
+    По осям:
+      X, Y — пространственные тайлы 5×5 на карте движения/кадра
+      T    — 5 последовательных кадров (временная глубина)
+
+    Пока в буфере < 5 кадров — накопление; на 5-м — пакет кубов.
+    """
+
+    def __init__(self, spatial_hw: Tuple[int, int] = (80, 80)) -> None:
+        # spatial_hw должно делиться на 5
+        h, w = spatial_hw
+        self.h = (h // CUBE) * CUBE
+        self.w = (w // CUBE) * CUBE
+        if self.h < CUBE or self.w < CUBE:
+            raise ValueError("spatial_hw too small for 5×5 tiles")
+        self.tiles_y = self.h // CUBE
+        self.tiles_x = self.w // CUBE
+        self._buffer: List[np.ndarray] = []  # до 5 карт float32 [0,1] или delta
+        self._prev_gray: Optional[np.ndarray] = None
+
+    def _frame_to_map(self, frame_bgr: np.ndarray) -> np.ndarray:
+        if not HAS_CV2:
+            raise RuntimeError("OpenCV (cv2) required")
+        resized = cv2.resize(frame_bgr, (self.w, self.h), interpolation=cv2.INTER_AREA)
+        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+        if self._prev_gray is None:
+            self._prev_gray = gray
+            # первый кадр — «покой»
+            return np.zeros((self.h, self.w), dtype=np.float32)
+        delta = gray - self._prev_gray
+        self._prev_gray = gray
+        # нормируем дельту примерно в [-1, 1]
+        return np.clip(delta * 4.0, -1.0, 1.0)
+
+    def push_frame(self, frame_bgr: np.ndarray) -> Optional[List[CubeBlock5]]:
+        """Добавить кадр. Если накопилось 5 — вернуть список кубов, иначе None."""
+        m = self._frame_to_map(frame_bgr)
+        self._buffer.append(m)
+        if len(self._buffer) < CUBE:
+            return None
+        # берём ровно 5, сдвигаем окно на 1 (overlap) или очищаем — здесь GOP=5 без overlap
+        volume_maps = self._buffer[:CUBE]
+        self._buffer = self._buffer[CUBE:]
+        return self._maps_to_cubes(volume_maps)
+
+    def _maps_to_cubes(self, maps: List[np.ndarray]) -> List[CubeBlock5]:
+        # maps: 5 × (H,W) float → stack (5,H,W) as T,Y,X then tile
+        stack = np.stack(maps, axis=0)  # (T=5, H, W)
+        cubes: List[CubeBlock5] = []
+        for ty in range(self.tiles_y):
+            for tx in range(self.tiles_x):
+                y0, x0 = ty * CUBE, tx * CUBE
+                # блок (T, 5, 5) → переставляем в (5,5,5) как (Y,X,T) для единообразия
+                block_t = stack[:, y0 : y0 + CUBE, x0 : x0 + CUBE]  # (5,5,5) as T,Y,X
+                block = np.transpose(block_t, (1, 2, 0))  # Y, X, T
+                cubes.append(CubeBlock5(quantize_field(block)))
+        return cubes
+
+    def cubes_to_preview_volume(self, cubes: List[CubeBlock5]) -> np.ndarray:
+        """Собрать обратно объём int8 (T,H,W) для отладки."""
+        vol = np.zeros((CUBE, self.h, self.w), dtype=np.int8)
+        i = 0
+        for ty in range(self.tiles_y):
+            for tx in range(self.tiles_x):
+                y0, x0 = ty * CUBE, tx * CUBE
+                block = cubes[i].data  # Y,X,T
+                i += 1
+                vol[:, y0 : y0 + CUBE, x0 : x0 + CUBE] = np.transpose(block, (2, 0, 1))
+        return vol
+
+
+# ---------------------------------------------------------------------------
+# Контейнер .zvd5 (кубический битстрим)
+# ---------------------------------------------------------------------------
+
+MAGIC = b"ZVD5"
+VERSION = 19
+
+
+class Zvd5BitstreamWriter:
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self._fh = open(path, "wb")
+        # header: magic4 + ver u16 + reserved
+        self._fh.write(MAGIC + struct.pack("<H", VERSION) + b"\x00\x00")
+
+    def write_gop(
+        self,
+        cubes: List[CubeBlock5],
+        tiles_y: int,
+        tiles_x: int,
+        meta: Optional[dict] = None,
+    ) -> None:
+        # pack all cubes
+        raw = bytearray()
+        for c in cubes:
+            raw.extend(c.pack())
+        compressed = zlib.compress(bytes(raw), level=9)
+        entropy = float(np.mean([c.energy() for c in cubes])) if cubes else 0.0
+        # record: tiles_y u16, tiles_x u16, n_cubes u32, entropy f32, payload_len u32, payload
+        rec = struct.pack(
+            "<HHIfI",
+            tiles_y,
+            tiles_x,
+            len(cubes),
+            entropy,
+            len(compressed),
+        )
+        self._fh.write(rec + compressed)
+
+    def close(self) -> None:
+        self._fh.close()
+
+
+class Zvd5BitstreamReader:
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self._fh = open(path, "rb")
+        magic = self._fh.read(4)
+        if magic != MAGIC:
+            raise ValueError("Not a ZVD5 file")
+        ver = struct.unpack("<H", self._fh.read(2))[0]
+        self._fh.read(2)  # reserved
+        self.version = ver
+
+    def read_gop(self) -> Optional[Tuple[List[CubeBlock5], int, int, float]]:
+        hdr = self._fh.read(struct.calcsize("<HHIfI"))
+        if not hdr or len(hdr) < struct.calcsize("<HHIfI"):
+            return None
+        tiles_y, tiles_x, n_cubes, entropy, payload_len = struct.unpack("<HHIfI", hdr)
+        payload = self._fh.read(payload_len)
+        if len(payload) < payload_len:
+            return None
+        raw = zlib.decompress(payload)
+        cubes = []
+        for i in range(n_cubes):
+            off = i * CUBE_VOL
+            cubes.append(CubeBlock5.unpack(raw[off : off + CUBE_VOL]))
+        return cubes, tiles_y, tiles_x, entropy
+
+    def close(self) -> None:
+        self._fh.close()
+
+
+# ---------------------------------------------------------------------------
+# Высокоуровневый кодер файла
+# ---------------------------------------------------------------------------
+
+class ZvdCube5Encoder:
+    """Кодирует видеофайл → .zvd5 кубами 5×5×5."""
+
+    def __init__(self, spatial_hw: Tuple[int, int] = (80, 80)) -> None:
+        self.volume = CubeVolumeCodec5(spatial_hw=spatial_hw)
+
+    def encode_video(self, video_path: str, out_path: str, max_frames: int = 0) -> dict:
+        if not HAS_CV2:
+            raise RuntimeError("pip install opencv-python-headless")
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise RuntimeError(f"Cannot open {video_path}")
+        writer = Zvd5BitstreamWriter(out_path)
+        t0 = time.perf_counter()
+        frames = 0
+        gops = 0
+        cubes_total = 0
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            frames += 1
+            cubes = self.volume.push_frame(frame)
+            if cubes is not None:
+                writer.write_gop(
+                    cubes, self.volume.tiles_y, self.volume.tiles_x
+                )
+                gops += 1
+                cubes_total += len(cubes)
+            if max_frames and frames >= max_frames:
+                break
+        cap.release()
+        writer.close()
+        dt = time.perf_counter() - t0
+        in_size = os.path.getsize(video_path) if os.path.exists(video_path) else 0
+        out_size = os.path.getsize(out_path)
+        return {
+            "frames": frames,
+            "gops": gops,
+            "cubes": cubes_total,
+            "tiles": (self.volume.tiles_y, self.volume.tiles_x),
+            "seconds": round(dt, 3),
+            "input_bytes": in_size,
+            "output_bytes": out_size,
+            "ratio": round(in_size / max(1, out_size), 2),
+            "out_path": out_path,
+        }
+
+
+def demo_synthetic(out_path: str = "/home/workdir/artifacts/demo_cube5.zvd5") -> dict:
+    """Быстрый тест без видеофайла: синтетические кадры."""
+    if not HAS_CV2:
+        # минимальный тест pack/unpack
+        c = CubeBlock5(np.random.randint(-2, 3, (5, 5, 5), dtype=np.int8))
+        raw = c.pack()
+        c2 = CubeBlock5.unpack(raw)
+        assert np.array_equal(c.data, c2.data)
+        return {"status": "pack_ok_no_cv2"}
+
+    enc = ZvdCube5Encoder(spatial_hw=(80, 80))
+    writer = Zvd5BitstreamWriter(out_path)
+    gops = 0
+    for i in range(15):
+        # синтетический BGR кадр
+        img = np.zeros((240, 320, 3), dtype=np.uint8)
+        cv2.rectangle(img, (20 + i * 5, 30), (100 + i * 5, 120), (0, 255, 128), -1)
+        cubes = enc.volume.push_frame(img)
+        if cubes is not None:
+            writer.write_gop(cubes, enc.volume.tiles_y, enc.volume.tiles_x)
+            gops += 1
+    writer.close()
+    # read back
+    r = Zvd5BitstreamReader(out_path)
+    first = r.read_gop()
+    r.close()
+    return {
+        "status": "ok",
+        "gops_written": gops,
+        "out_path": out_path,
+        "out_bytes": os.path.getsize(out_path),
+        "cubes_first_gop": len(first[0]) if first else 0,
+        "tiles": (first[1], first[2]) if first else None,
+        "entropy": first[3] if first else None,
+    }
+
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("ZVD V19 — LOCAL CUBES 5×5×5 (variant B)")
+    print("Author: Vladimir Zavodiuk | All Rights Reserved")
+    print("=" * 70)
+    res = demo_synthetic()
+    print(res)
+    print("=" * 70)
