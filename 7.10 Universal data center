@@ -1,0 +1,1218 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+================================================================================
+UNIVERSAL DATACENTER NODE V24.1.2 — INTEGRATED
+Inter-DC + BXOS File Protector
+================================================================================
+
+Стек:
+  • FastBuffer — zero-copy, быстрый checksum краёв
+  • Numba L3 triage (троичный −1/0/1) + BXOS guard
+  • BXOS + AES-256-GCM (FS-resilient, in-memory fallback)
+  • CounterRotatingBiCore — муар-диффузия (с обработкой хвоста)
+  • IntegrityChain — цепочка на timestamp_ns + tetra_sig [−2..2]
+  • Политика Рашимона (GO / REVISE / NO_GO)
+  • File Protector — protect/unprotect отдельных файлов (.bxfp)
+  • Пайплайн replicate: copy → store → optical transfer
+  • FastAPI: /replicate, /protect, /unprotect, /records
+
+Автор: Владимир Заводюк (Vladimir Zavodiuk)
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ
+VERSION: 24.1.2-INTEGRATED
+GitHub: https://github.com/Zavodiuk
+================================================================================
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import time
+import json
+import zlib
+import math
+import struct
+import hashlib
+import base64
+import secrets
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass, field
+from collections import deque
+from enum import Enum
+
+import numpy as np
+
+# ---------------------------------------------------------------------------
+# Optional deps
+# ---------------------------------------------------------------------------
+try:
+    from numba import njit, prange
+    HAS_NUMBA = True
+except ImportError:
+    HAS_NUMBA = False
+
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.hazmat.primitives import hashes
+    HAS_CRYPTO = True
+except ImportError:
+    HAS_CRYPTO = False
+
+try:
+    from fastapi import FastAPI, HTTPException
+    from pydantic import BaseModel
+    import uvicorn
+    HAS_FASTAPI = True
+except ImportError:
+    HAS_FASTAPI = False
+
+
+# File-protector container constants
+BXFP_MAGIC = b"BXFP"
+BXFP_VERSION = 1
+BXFP_HEADER = "<4sHBBI32s12s"  # magic, ver, flags, reserved, orig_size, file_hash, nonce
+FLAG_MOIRE = 0x01
+FLAG_PASSWORD = 0x02
+
+
+# ==============================================================================
+# 1. FAST COPY LAYER
+# ==============================================================================
+
+class FastBuffer:
+    """Zero-copy буфер. view() — share, clone() — ownership."""
+    __slots__ = ("_data", "_owned", "_meta")
+
+    def __init__(
+        self,
+        data: Union[bytes, bytearray, memoryview, np.ndarray],
+        owned: bool = False,
+        meta: Optional[Dict] = None,
+    ) -> None:
+        if isinstance(data, np.ndarray):
+            self._data = data
+        elif isinstance(data, (bytes, bytearray)):
+            self._data = memoryview(data)
+        else:
+            self._data = data
+        self._owned = owned
+        self._meta = meta or {}
+
+    @property
+    def size(self) -> int:
+        if isinstance(self._data, np.ndarray):
+            return int(self._data.nbytes)
+        return len(self._data)
+
+    def as_bytes(self) -> bytes:
+        if isinstance(self._data, np.ndarray):
+            return self._data.tobytes()
+        return bytes(self._data)
+
+    def as_memoryview(self) -> memoryview:
+        if isinstance(self._data, np.ndarray):
+            return memoryview(self._data)
+        if isinstance(self._data, memoryview):
+            return self._data
+        return memoryview(self._data)
+
+    def view(self) -> "FastBuffer":
+        return FastBuffer(self._data, owned=False, meta=dict(self._meta))
+
+    def clone(self) -> "FastBuffer":
+        if isinstance(self._data, np.ndarray):
+            return FastBuffer(self._data.copy(), owned=True, meta=dict(self._meta))
+        return FastBuffer(bytes(self._data), owned=True, meta=dict(self._meta))
+
+    def checksum(self) -> str:
+        raw = self.as_bytes()
+        n = len(raw)
+        if n <= 8192:
+            return hashlib.sha256(raw).hexdigest()[:16]
+        h = hashlib.sha256()
+        h.update(raw[:4096])
+        h.update(raw[-4096:])
+        h.update(struct.pack("<Q", n))
+        return h.hexdigest()[:16]
+
+
+def fast_copy(
+    src: Union[bytes, bytearray, memoryview, np.ndarray, FastBuffer],
+) -> FastBuffer:
+    if isinstance(src, FastBuffer):
+        return src.clone()
+    if isinstance(src, np.ndarray):
+        return FastBuffer(src.copy(), owned=True)
+    return FastBuffer(bytes(src), owned=True)
+
+
+# ==============================================================================
+# 2. NUMBA / ТРОИЧНЫЙ БАЗИС [−1, 0, 1]
+# ==============================================================================
+
+if HAS_NUMBA:
+    @njit(cache=True, fastmath=True)
+    def _bxos_guard(signal: np.ndarray) -> np.ndarray:
+        out = np.empty(signal.shape, dtype=np.int8)
+        flat_in = signal.ravel()
+        flat_out = out.ravel()
+        for i in range(flat_in.size):
+            v = flat_in[i]
+            if v > 1:
+                v = 1
+            elif v < -1:
+                v = -1
+            flat_out[i] = np.int8(v)
+        return out
+
+    @njit(cache=True, parallel=True, fastmath=True)
+    def _l3_triage(
+        scores: np.ndarray, low: float = 0.33, high: float = 0.66
+    ) -> np.ndarray:
+        n = scores.shape[0]
+        out = np.empty(n, dtype=np.int8)
+        for i in prange(n):
+            m = 0.0
+            for j in range(scores.shape[1]):
+                m += scores[i, j]
+            m /= scores.shape[1]
+            if m < low:
+                out[i] = -1
+            elif m > high:
+                out[i] = 1
+            else:
+                out[i] = 0
+        return out
+else:
+    def _bxos_guard(signal: np.ndarray) -> np.ndarray:
+        return np.clip(signal, -1, 1).astype(np.int8)
+
+    def _l3_triage(
+        scores: np.ndarray, low: float = 0.33, high: float = 0.66
+    ) -> np.ndarray:
+        m = scores.mean(axis=1)
+        out = np.zeros(len(m), dtype=np.int8)
+        out[m < low] = -1
+        out[m > high] = 1
+        return out
+
+
+# ============================================================================
+# 3. МУАР-СЛОЙ (диффузия, с хвостом; НЕ замена AES)
+# ==============================================================================
+
+class CounterRotatingBiCore:
+    def __init__(self, seed_a: float = 0.78, seed_b: float = 2.35, size: int = 3):
+        self.size = size
+        self.angle_a = seed_a
+        self.angle_b = seed_b
+        self.base_velocity = math.pi / 6.0
+        mid = size // 2
+        self.matrix_a = np.zeros((size, size), dtype=np.int8)
+        self.matrix_b = np.zeros((size, size), dtype=np.int8)
+        for x in range(size):
+            for y in range(size):
+                if x == mid and y == mid:
+                    self.matrix_a[x, y] = 0
+                    self.matrix_b[x, y] = 0
+                elif (x + y) % 2 == 0:
+                    self.matrix_a[x, y] = 1
+                    self.matrix_b[x, y] = -1
+                else:
+                    self.matrix_a[x, y] = -1
+                    self.matrix_b[x, y] = 1
+
+    def _rot_sample(self, matrix: np.ndarray, angle: float, tx: int, ty: int) -> int:
+        mid = self.size // 2
+        ox, oy = tx - mid, ty - mid
+        c, s = math.cos(angle), math.sin(angle)
+        rx = int(round(ox * c - oy * s))
+        ry = int(round(ox * s + oy * c))
+        x = max(0, min(self.size - 1, rx + mid))
+        y = max(0, min(self.size - 1, ry + mid))
+        return int(matrix[x, y])
+
+    def diffuse(self, data: bytes, encrypt: bool = True) -> bytes:
+        if not data:
+            return data
+        out = bytearray(data)
+        n = len(out)
+        ent = min(1.0, n / 4096.0)
+        vel = self.base_velocity / (1.0 + ent * 2.0)
+        angle_a = self.angle_a + vel
+        angle_b = self.angle_b - vel * 1.5
+
+        for i in range(0, n - 8, 9):
+            for k in range(9):
+                tx, ty = k // 3, k % 3
+                a = self._rot_sample(self.matrix_a, angle_a, tx, ty)
+                b = self._rot_sample(self.matrix_b, angle_b, tx, ty)
+                inter = a + b
+                val = out[i + k]
+                out[i + k] = (val + inter * 17 if encrypt else val - inter * 17) & 0xFF
+
+        # хвост (remainder)
+        remainder = n % 9
+        if remainder > 0:
+            for k in range(n - remainder, n):
+                idx = k % 9
+                tx, ty = idx // 3, idx % 3
+                a = self._rot_sample(self.matrix_a, angle_a, tx, ty)
+                b = self._rot_sample(self.matrix_b, angle_b, tx, ty)
+                inter = a + b
+                val = out[k]
+                out[k] = (val + inter * 17 if encrypt else val - inter * 17) & 0xFF
+        return bytes(out)
+
+
+# ==============================================================================
+# 4. ЦЕПОЧКА ЦЕЛОСТНОСТИ + РАШИМОН
+# ==============================================================================
+
+@dataclass
+class IntegrityBlock:
+    index: int
+    prev_hash: str
+    payload_hash: str
+    timestamp_ns: int
+    tetra_sig: int
+    block_hash: str = ""
+
+    def compute(self) -> str:
+        raw = (
+            f"{self.index}:{self.prev_hash}:{self.payload_hash}:"
+            f"{self.tetra_sig}:{self.timestamp_ns}"
+        )
+        self.block_hash = hashlib.sha256(raw.encode()).hexdigest()
+        return self.block_hash
+
+
+class IntegrityChain:
+    def __init__(self) -> None:
+        self.blocks: List[IntegrityBlock] = []
+        gen = IntegrityBlock(0, "0" * 64, "GENESIS", time.time_ns(), 0)
+        gen.compute()
+        self.blocks.append(gen)
+
+    def append(self, payload_hash: str) -> IntegrityBlock:
+        prev = self.blocks[-1].block_hash
+        sig = (int(payload_hash[:8], 16) % 5) - 2
+        blk = IntegrityBlock(
+            len(self.blocks), prev, payload_hash, time.time_ns(), sig
+        )
+        blk.compute()
+        self.blocks.append(blk)
+        return blk
+
+    def verify(self) -> Tuple[bool, str]:
+        for i in range(1, len(self.blocks)):
+            cur, prev = self.blocks[i], self.blocks[i - 1]
+            if cur.prev_hash != prev.block_hash:
+                return False, f"broken at index {i}"
+            expected = IntegrityBlock(
+                cur.index, cur.prev_hash, cur.payload_hash,
+                cur.timestamp_ns, cur.tetra_sig,
+            )
+            expected.compute()
+            if expected.block_hash != cur.block_hash:
+                return False, f"tampered at index {i}"
+        return True, "OK"
+
+
+class RashomonVerdict(str, Enum):
+    GO = "GO"
+    REVISE = "REVISE"
+    NO_GO = "NO_GO"
+
+
+def rashomon_gate(
+    file_hash_ok: bool,
+    chain_ok: bool,
+    entropy_score: float = 0.5,
+    force: bool = False,
+) -> RashomonVerdict:
+    if force:
+        return RashomonVerdict.GO
+    if not file_hash_ok or not chain_ok:
+        return RashomonVerdict.NO_GO
+    if entropy_score < 0.15 or entropy_score > 0.95:
+        return RashomonVerdict.REVISE
+    return RashomonVerdict.GO
+
+
+# ==============================================================================
+# 5. КЛЮЧИ
+# ==============================================================================
+
+def derive_key_from_password(
+    password: str, salt: bytes, iterations: int = 200_000
+) -> bytes:
+    if not HAS_CRYPTO:
+        raise RuntimeError("cryptography required")
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(), length=32, salt=salt, iterations=iterations
+    )
+    return kdf.derive(password.encode("utf-8"))
+
+
+def load_or_create_key(key_path: str) -> bytes:
+    if not HAS_CRYPTO:
+        raise RuntimeError("cryptography required: pip install cryptography")
+    if os.path.exists(key_path):
+        with open(key_path, "rb") as f:
+            key = f.read()
+        if len(key) != 32:
+            raise ValueError(f"invalid key length: {key_path}")
+        return key
+    key = AESGCM.generate_key(bit_length=256)
+    os.makedirs(os.path.dirname(key_path) or ".", exist_ok=True)
+    with open(key_path, "wb") as f:
+        f.write(key)
+    try:
+        os.chmod(key_path, 0o600)
+    except OSError:
+        pass
+    return key
+
+
+# ==============================================================================
+# 6. BXOS STORAGE
+# ==============================================================================
+
+class BXOSCrypto:
+    def __init__(self, storage_dir: str) -> None:
+        self.key_path = os.path.join(storage_dir, "_bxos.key")
+        self.enabled = HAS_CRYPTO
+        self._aes: Optional[Any] = None
+        if self.enabled:
+            self._aes = AESGCM(load_or_create_key(self.key_path))
+
+    def encrypt(self, plain: bytes) -> bytes:
+        if not self.enabled or self._aes is None:
+            return plain
+        nonce = os.urandom(12)
+        return nonce + self._aes.encrypt(nonce, plain, None)
+
+    def decrypt(self, blob: bytes) -> bytes:
+        if not self.enabled or self._aes is None:
+            return blob
+        return self._aes.decrypt(blob[:12], blob[12:], None)
+
+
+@dataclass
+class BXOSRecord:
+record_id: str
+    data_type: str
+    payload: bytes
+    original_size: int
+    checksum: str
+    ontology: List[int] = field(default_factory=lambda: [0, 0, 0, 0, 0])
+    ts_ns: int = field(default_factory=time.time_ns)
+
+    def to_wire(self) -> bytes:
+        header = {
+            "id": self.record_id,
+            "type": self.data_type,
+            "orig": self.original_size,
+            "sum": self.checksum,
+            "ont": self.ontology,
+            "ts": self.ts_ns,
+        }
+        h = json.dumps(header, separators=(",", ":")).encode("utf-8")
+        return struct.pack("<I", len(h)) + h + self.payload
+
+    @classmethod
+    def from_wire(cls, raw: bytes) -> "BXOSRecord":
+        hlen = struct.unpack("<I", raw[:4])[0]
+        header = json.loads(raw[4 : 4 + hlen].decode("utf-8"))
+        return cls(
+            record_id=header["id"],
+            data_type=header["type"],
+            payload=raw[4 + hlen :],
+            original_size=header["orig"],
+            checksum=header["sum"],
+            ontology=header.get("ont", [0, 0, 0, 0, 0]),
+            ts_ns=header.get("ts", 0),
+        )
+
+
+class BXOSStore:
+    def __init__(self, storage_dir: str = "./dc_v24_1_2_storage") -> None:
+        self.dir = storage_dir
+        os.makedirs(self.dir, exist_ok=True)
+        self.crypto = BXOSCrypto(self.dir)
+        self.registry: Dict[str, Dict[str, Any]] = {}
+        self._load_registry()
+
+    def _reg_path(self) -> str:
+        return os.path.join(self.dir, "_registry.json")
+
+    def _load_registry(self) -> None:
+        p = self._reg_path()
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    self.registry = json.load(f)
+            except Exception:
+                self.registry = {}
+
+    def _save_registry(self) -> None:
+        try:
+            with open(self._reg_path(), "w", encoding="utf-8") as f:
+                json.dump(self.registry, f, ensure_ascii=False, indent=1)
+        except OSError:
+            pass
+
+    def _path_for(self, record_id: str) -> str:
+        h = hashlib.sha256(record_id.encode()).hexdigest()[:32]
+        return os.path.join(self.dir, f"{h}.bxos")
+
+    def put(
+        self,
+        record_id: str,
+        data: Union[bytes, str, dict, list, np.ndarray, FastBuffer],
+        ontology: Optional[List[int]] = None,
+    ) -> str:
+        # FastBuffer → сохранить tensor-путь если внутри ndarray
+        if isinstance(data, FastBuffer):
+            actual: Any = data._data if isinstance(data._data, np.ndarray) else data.as_bytes()
+        else:
+            actual = data
+
+        if isinstance(actual, np.ndarray):
+            dtype = "tensor"
+            sanitized = _bxos_guard(actual)
+            hdr = json.dumps(
+                {"shape": sanitized.shape, "dtype": str(sanitized.dtype)}
+            ).encode()
+            raw = struct.pack("<I", len(hdr)) + hdr + sanitized.tobytes()
+        elif isinstance(actual, str):
+            dtype, raw = "text", actual.encode("utf-8")
+        elif isinstance(actual, (dict, list)):
+            dtype, raw = "json", json.dumps(actual, ensure_ascii=False).encode("utf-8")
+        else:
+            dtype, raw = "bin", bytes(actual)
+
+        compressed = zlib.compress(raw, 3)
+        checksum = hashlib.sha256(compressed).hexdigest()
+        rec = BXOSRecord(
+            record_id=record_id,
+            data_type=dtype,
+            payload=compressed,
+            original_size=len(raw),
+            checksum=checksum,
+            ontology=ontology or [0, 0, 0, 0, 0],
+        )
+        wire = rec.to_wire()
+        encrypted = self.crypto.encrypt(wire)
+
+        path = self._path_for(record_id)
+        written = False
+        try:
+            with open(path, "wb") as f:
+                f.write(encrypted)
+            written = True
+        except OSError:
+            path = ""
+
+        self.registry[record_id] = {
+            "path": path,
+            "type": dtype,
+            "orig": len(raw),
+            "comp": len(compressed),
+            "enc": len(encrypted),
+            "sum": checksum,
+            "ts": rec.ts_ns,
+            "wire": None if written else encrypted,
+        }
+        self._save_registry()
+        return path or f"mem://{record_id}"
+
+    def get(self, record_id: str) -> Any:
+        if record_id not in self.registry:
+            raise KeyError(f"record not found: {record_id}")
+        meta = self.registry[record_id]
+        path = meta.get("path") or ""
+        if path and os.path.exists(path):
+            with open(path, "rb") as f:
+                encrypted = f.read()
+        else:
+            encrypted = meta.get("wire")
+            if encrypted is None:
+                raise KeyError(f"record data missing: {record_id}")
+
+        wire = self.crypto.decrypt(encrypted)
+        rec = BXOSRecord.from_wire(wire)
+        if hashlib.sha256(rec.payload).hexdigest() != rec.checksum:
+            raise ValueError(f"integrity fail: {record_id}")
+        raw = zlib.decompress(rec.payload)
+
+        if rec.data_type == "tensor":
+            hlen = struct.unpack("<I", raw[:4])[0]
+            hdr = json.loads(raw[4 : 4 + hlen].decode())
+            return np.frombuffer(
+                raw[4 + hlen :], dtype=hdr["dtype"]
+            ).reshape(hdr["shape"])
+        if rec.data_type == "json":
+            return json.loads(raw.decode("utf-8"))
+        if rec.data_type == "text":
+            return raw.decode("utf-8")
+        return raw
+
+    def exists(self, record_id: str) -> bool:
+        return record_id in self.registry
+
+    def list_ids(self) -> List[str]:
+        return list(self.registry.keys())
+
+
+# ==============================================================================
+# 7. OPTICAL INTER-DC
+# ==============================================================================
+
+class FiberDecision(str, Enum):
+    GO = "GO"
+    REVISE = "REVISE"
+    NO_GO = "NO_GO"
+
+
+@dataclass
+class TransferResult:
+    success: bool
+    decision: str
+    bytes_sent: int
+    latency_ms: float
+    target_dc: str
+    message: str
+
+
+@dataclass
+class PipelineStats:
+    stage: str
+    latency_ms: float
+    bytes_in: int = 0
+    bytes_out: int = 0
+
+
+@dataclass
+class InterDCResult:
+    record_id: str
+    copied: bool
+    stored: bool
+    transferred: bool
+    target_dc: str
+    total_latency_ms: float
+    stages: List[PipelineStats]
+    optical_decision: str
+    checksum: str
+
+
+class OpticalInterDC:
+def __init__(self, local_dc_id: str = "DC-A") -> None:
+        self.local_dc_id = local_dc_id
+        self._peer_buffers: Dict[str, deque] = {}
+
+    def _stability(
+        self, distance_km: float, cd: float, kerr: float, osnr: float
+    ) -> float:
+        dist_pen = min(0.25, distance_km / 2000.0)
+        return (osnr / 30.0) - (cd * 0.4 + kerr * 0.4) - dist_pen
+
+    def evaluate_link(
+        self,
+        distance_km: float = 120.0,
+        chromatic_dispersion: float = 0.04,
+        kerr_nonlinearity: float = 0.015,
+        osnr_db: float = 26.0,
+    ) -> FiberDecision:
+        s = self._stability(
+            distance_km, chromatic_dispersion, kerr_nonlinearity, osnr_db
+        )
+        if s > 0.55:
+            return FiberDecision.GO
+        if s > 0.28:
+            return FiberDecision.REVISE
+        return FiberDecision.NO_GO
+
+    def transfer(
+        self,
+        payload: bytes,
+        target_dc: str,
+        distance_km: float = 120.0,
+        chromatic_dispersion: float = 0.04,
+        kerr_nonlinearity: float = 0.015,
+        osnr_db: float = 26.0,
+        force: bool = False,
+    ) -> TransferResult:
+        t0 = time.perf_counter()
+        decision = self.evaluate_link(
+            distance_km, chromatic_dispersion, kerr_nonlinearity, osnr_db
+        )
+        if decision == FiberDecision.NO_GO and not force:
+            return TransferResult(
+                False, decision.value, 0,
+                (time.perf_counter() - t0) * 1000, target_dc,
+                "Link NO_GO — transfer aborted",
+            )
+        if target_dc not in self._peer_buffers:
+            self._peer_buffers[target_dc] = deque(maxlen=2048)
+        self._peer_buffers[target_dc].append({
+            "from": self.local_dc_id,
+            "payload": payload,
+            "ts": time.time_ns(),
+            "size": len(payload),
+            "decision": decision.value,
+        })
+        time.sleep(min(0.0015, len(payload) / 80_000_000))
+        return TransferResult(
+            True, decision.value, len(payload),
+            (time.perf_counter() - t0) * 1000, target_dc,
+            f"Handoff OK → {target_dc} ({decision.value})",
+        )
+
+
+# ==============================================================================
+# 8. FILE PROTECTOR RESULTS
+# ==============================================================================
+
+@dataclass
+class ProtectResult:
+    success: bool
+    out_path: str
+    orig_size: int
+    sealed_size: int
+    file_hash: str
+    verdict: str
+    used_moire: bool
+    used_password: bool
+    message: str
+
+
+@dataclass
+class UnprotectResult:
+    success: bool
+    out_path: str
+    orig_size: int
+    file_hash: str
+    verdict: str
+    message: str
+
+
+# ==============================================================================
+# 9. MAIN NODE — Inter-DC + File Protector
+# ==============================================================================
+
+class UniversalDatacenterNodeV24:
+    """
+    V24.1.2 Integrated:
+      copy / store / load / replicate / triage_and_replicate
+      protect / unprotect  (.bxfp AES-GCM + optional moiré + password)
+    """
+
+    BXFP_HEADER_SIZE = struct.calcsize(BXFP_HEADER)
+    SALT_SIZE = 16
+
+    def __init__(
+        self,
+        dc_id: str = "DC-A",
+        storage_dir: str = "./dc_v24_1_2_storage",
+        use_moire: bool = False,
+        moire_seed_a: float = 0.78,
+        moire_seed_b: float = 2.35,
+    ) -> None:
+        self.dc_id = dc_id
+        self._storage = BXOSStore(storage_dir)
+        self.optical = OpticalInterDC(local_dc_id=dc_id)
+        self.use_moire = use_moire
+        self.moire = (
+            CounterRotatingBiCore(moire_seed_a, moire_seed_b) if use_moire else None
+        )
+        self.chain = IntegrityChain()
+        self.vault_dir = storage_dir
+        self.master_key_path = os.path.join(storage_dir, "_bxos_master.key")
+        self._master_key: Optional[bytes] = None
+        if HAS_CRYPTO:
+            self._master_key = load_or_create_key(self.master_key_path)
+        self._warmup()
+
+    def _warmup(self) -> None:
+        _ = _l3_triage(np.random.rand(8, 4).astype(np.float64))
+        _ = _bxos_guard(np.random.randint(-2, 3, (8, 8)).astype(np.int8))
+
+    # ----- copy / store / load -----
+    def copy_in(self, data: Any) -> FastBuffer:
+        return fast_copy(data)
+
+    def store(
+        self, record_id: str, data: Any, ontology: Optional[List[int]] = None
+    ) -> str:
+        return self._storage.put(record_id, data, ontology=ontology)
+
+    def load(self, record_id: str) -> Any:
+        return self._storage.get(record_id)
+
+    def exists(self, record_id: str) -> bool:
+        return self._storage.exists(record_id)
+
+    # ----- replicate -----
+    def replicate(
+        self,
+        record_id: str,
+        data: Any,
+        target_dc: str,
+        ontology: Optional[List[int]] = None,
+        distance_km: float = 120.0,
+        store_locally: bool = True,
+        **link_kwargs: Any,
+    ) -> InterDCResult:
+        t0 = time.perf_counter()
+        stages: List[PipelineStats] = []
+
+        t1 = time.perf_counter()
+        if isinstance(data, (str, dict, list)):
+            raw = (
+                data.encode("utf-8")
+                if isinstance(data, str)
+                else json.dumps(data, ensure_ascii=False).encode("utf-8")
+            )
+            buf = self.copy_in(raw)
+        else:
+            buf = self.copy_in(data)
+        stages.append(
+            PipelineStats("copy", (time.perf_counter() - t1) * 1000, buf.size, buf.size)
+        )
+
+        # variant C: typed data keeps type; raw → copy bytes
+        stored = False
+        if store_locally:
+            t2 = time.perf_counter()
+            if isinstance(data, (np.ndarray, str, dict, list)):
+                self.store(record_id, data, ontology=ontology)
+            elif isinstance(data, FastBuffer):
+                self.store(record_id, data, ontology=ontology)
+            else:
+                self.store(record_id, buf.as_bytes(), ontology=ontology)
+            stages.append(
+                PipelineStats("store", (time.perf_counter() - t2) * 1000, bytes_in=buf.size)
+            )
+            stored = True
+
+        t3 = time.perf_counter()
+        if stored and record_id in self._storage.registry:
+            meta = self._storage.registry[record_id]
+            path = meta.get("path") or ""
+            if path and os.path.exists(path):
+                with open(path, "rb") as f:
+                    wire = f.read()
+            else:
+                wire = meta.get("wire") or buf.as_bytes()
+        else:
+            wire = buf.as_bytes()
+
+        tr = self.optical.transfer(
+            wire, target_dc, distance_km=distance_km, **link_kwargs
+        )
+        stages.append(
+            PipelineStats(
+                "transfer", (time.perf_counter() - t3) * 1000,
+                len(wire), tr.bytes_sent,
+            )
+        )
+
+        return InterDCResult(
+            record_id=record_id,
+            copied=True,
+            stored=stored,
+            transferred=tr.success,
+            target_dc=target_dc,
+            total_latency_ms=(time.perf_counter() - t0) * 1000,
+            stages=stages,
+            optical_decision=tr.decision,
+            checksum=buf.checksum(),
+        )
+
+    def triage_and_replicate(
+        self,
+        batch_scores: np.ndarray,
+        payloads: List[bytes],
+        record_ids: List[str],
+        target_dc: str,
+        distance_km: float = 120.0,
+    ) -> List[InterDCResult]:
+        decisions = _l3_triage(batch_scores.astype(np.float64))
+        results: List[InterDCResult] = []
+        for dec, payload, rid in zip(decisions, payloads, record_ids):
+            if dec == -1:
+                results.append(
+                    InterDCResult(
+rid, False, False, False, target_dc, 0.0, [], "SKIPPED", ""
+                    )
+                )
+                continue
+            results.append(
+                self.replicate(rid, payload, target_dc, distance_km=distance_km)
+            )
+        return results
+
+    # ----- file protect / unprotect -----
+    def _sha256_bytes(self, data: bytes) -> str:
+        return hashlib.sha256(data).hexdigest()
+
+    def _entropy_norm(self, data: bytes) -> float:
+        if not data:
+            return 0.0
+        counts = np.zeros(256, dtype=np.float64)
+        for b in data:
+            counts[b] += 1
+        counts /= len(data)
+        nz = counts[counts > 0]
+        return float(-np.sum(nz * np.log2(nz))) / 8.0
+
+    def _aad(self, filename: str, orig_size: int, file_hash: str) -> bytes:
+        return f"{filename}|{orig_size}|{file_hash}|{BXFP_VERSION}".encode("utf-8")
+
+    def protect(
+        self,
+        src_path: str,
+        dst_path: Optional[str] = None,
+        password: Optional[str] = None,
+    ) -> ProtectResult:
+        if not HAS_CRYPTO or self._master_key is None:
+            return ProtectResult(
+                False, "", 0, 0, "", RashomonVerdict.NO_GO.value,
+                False, False, "cryptography not available",
+            )
+        src = Path(src_path)
+        if not src.is_file():
+            return ProtectResult(
+                False, "", 0, 0, "", RashomonVerdict.NO_GO.value,
+                False, False, f"file not found: {src_path}",
+            )
+
+        plain = src.read_bytes()
+        orig_size = len(plain)
+        file_hash = self._sha256_bytes(plain)
+        file_hash_bin = bytes.fromhex(file_hash)
+
+        body = plain
+        flags = 0
+        if self.use_moire and self.moire is not None:
+            body = self.moire.diffuse(body, encrypt=True)
+            flags |= FLAG_MOIRE
+
+        salt = b""
+        if password:
+            salt = secrets.token_bytes(self.SALT_SIZE)
+            key = derive_key_from_password(password, salt)
+            flags |= FLAG_PASSWORD
+        else:
+            key = self._master_key
+
+        nonce = secrets.token_bytes(12)
+        aad = self._aad(src.name, orig_size, file_hash)
+        ciphertext = AESGCM(key).encrypt(nonce, body, aad)
+
+        header = struct.pack(
+            BXFP_HEADER, BXFP_MAGIC, BXFP_VERSION, flags, 0,
+            orig_size, file_hash_bin, nonce,
+        )
+        sealed = header + salt + ciphertext
+
+        if dst_path is None:
+            dst_path = str(Path(self.vault_dir) / (src.name + ".bxfp"))
+        Path(dst_path).write_bytes(sealed)
+
+        self.chain.append(file_hash)
+        return ProtectResult(
+            True, dst_path, orig_size, len(sealed), file_hash,
+            RashomonVerdict.GO.value,
+            bool(flags & FLAG_MOIRE), bool(flags & FLAG_PASSWORD),
+            "protected OK",
+        )
+
+    def unprotect(
+        self,
+        sealed_path: str,
+        dst_path: Optional[str] = None,
+        password: Optional[str] = None,
+        force: bool = False,
+    ) -> UnprotectResult:
+        if not HAS_CRYPTO or self._master_key is None:
+            return UnprotectResult(
+                False, "", 0, "", RashomonVerdict.NO_GO.value,
+                "cryptography not available",
+            )
+        sealed_file = Path(sealed_path)
+        if not sealed_file.is_file():
+            return UnprotectResult(
+                False, "", 0, "", RashomonVerdict.NO_GO.value,
+                f"file not found: {sealed_path}",
+            )
+
+        blob = sealed_file.read_bytes()
+        if len(blob) < self.BXFP_HEADER_SIZE:
+            return UnprotectResult(
+                False, "", 0, "", RashomonVerdict.NO_GO.value, "truncated header",
+            )
+
+        magic, ver, flags, _r, orig_size, file_hash_bin, nonce = struct.unpack(
+            BXFP_HEADER, blob[: self.BXFP_HEADER_SIZE]
+        )
+        if magic != BXFP_MAGIC:
+            return UnprotectResult(
+                False, "", 0, "", RashomonVerdict.NO_GO.value, "bad magic",
+            )
+        if ver != BXFP_VERSION:
+            return UnprotectResult(
+                False, "", 0, "", RashomonVerdict.REVISE.value,
+                f"unsupported version {ver}",
+            )
+
+        offset = self.BXFP_HEADER_SIZE
+        if flags & FLAG_PASSWORD:
+            salt = blob[offset : offset + self.SALT_SIZE]
+            offset += self.SALT_SIZE
+            if not password:
+                return UnprotectResult(
+                    False, "", 0, "", RashomonVerdict.NO_GO.value,
+                    "password required",
+                )
+            key = derive_key_from_password(password, salt)
+        else:
+            key = self._master_key
+
+        ciphertext = blob[offset:]
+        file_hash = file_hash_bin.hex()
+        base_name = sealed_file.name
+        if base_name.endswith(".bxfp"):
+            base_name = base_name[:-5]
+        aad = self._aad(base_name, orig_size, file_hash)
+
+        try:
+            body = AESGCM(key).decrypt(nonce, ciphertext, aad)
+        except Exception as e:
+            return UnprotectResult(
+                False, "", 0, file_hash, RashomonVerdict.NO_GO.value,
+                f"AES-GCM decrypt failed: {e}",
+            )
+
+        if flags & FLAG_MOIRE:
+            if self.moire is None:
+                self.moire = CounterRotatingBiCore()
+            body = self.moire.diffuse(body, encrypt=False)
+
+        actual_hash = self._sha256_bytes(body)
+        hash_ok = actual_hash == file_hash and len(body) == orig_size
+        chain_ok, chain_msg = self.chain.verify()
+        ent = self._entropy_norm(body)
+        verdict = rashomon_gate(hash_ok, chain_ok, ent, force=force)
+
+        if verdict == RashomonVerdict.NO_GO and not force:
+            return UnprotectResult(
+                False, "", orig_size, file_hash, verdict.value,
+                f"Rashomon NO_GO (hash_ok={hash_ok}, chain={chain_msg})",
+            )
+
+        if dst_path is None:
+            dst_path = str(Path(self.vault_dir) / (base_name + ".restored"))
+        Path(dst_path).write_bytes(body)
+        self.chain.append(actual_hash)
+
+        return UnprotectResult(
+            True, dst_path, orig_size, actual_hash, verdict.value,
+            "unprotected OK" if verdict == RashomonVerdict.GO
+            else f"unprotected with {verdict.value}",
+        )
+
+    def status(self) -> Dict[str, Any]:
+        ok, msg = self.chain.verify()
+        return {
+            "version": "24.1.2-INTEGRATED",
+            "dc_id": self.dc_id,
+            "vault": self.vault_dir,
+            "moire": self.use_moire,
+            "chain_blocks": len(self.chain.blocks),
+            "chain_ok": ok,
+            "chain_msg": msg,
+            "stored_records": len(self._storage.list_ids()),
+            "crypto": HAS_CRYPTO,
+            "numba": HAS_NUMBA,
+        }
+
+
+# ==============================================================================
+# 10. FastAPI
+# ==============================================================================
+
+if HAS_FASTAPI:
+app = FastAPI(
+        title="Universal Datacenter Node V24.1.2 Integrated",
+        description="Inter-DC + BXOS File Protector",
+        version="24.1.2-INTEGRATED",
+    )
+    _node = UniversalDatacenterNodeV24(dc_id="DC-A", use_moire=True)
+
+    class ReplicateRequest(BaseModel):
+        record_id: str
+        payload_b64: str
+        target_dc: str = "DC-B"
+        distance_km: float = 120.0
+        store_locally: bool = True
+
+    class ProtectRequest(BaseModel):
+        src_path: str
+        password: Optional[str] = None
+
+    class UnprotectRequest(BaseModel):
+        sealed_path: str
+        password: Optional[str] = None
+        force: bool = False
+
+    @app.get("/")
+    def root():
+        return {
+            "author": "Vladimir Zavodiuk",
+            "rights": "All rights reserved",
+            "version": "24.1.2-INTEGRATED",
+            "ternary": "[-1, 0, 1]",
+            "endpoints": [
+                "GET /", "POST /replicate", "POST /protect",
+                "POST /unprotect", "GET /records", "GET /status",
+            ],
+        }
+
+    @app.post("/replicate")
+    def api_replicate(req: ReplicateRequest):
+        try:
+            data = base64.b64decode(req.payload_b64)
+            r = _node.replicate(
+                req.record_id, data, req.target_dc,
+                distance_km=req.distance_km, store_locally=req.store_locally,
+            )
+            return {
+                "record_id": r.record_id,
+                "transferred": r.transferred,
+                "stored": r.stored,
+                "optical_decision": r.optical_decision,
+                "checksum": r.checksum,
+                "total_latency_ms": round(r.total_latency_ms, 4),
+            }
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/protect")
+    def api_protect(req: ProtectRequest):
+        r = _node.protect(req.src_path, password=req.password)
+        if not r.success:
+            raise HTTPException(status_code=400, detail=r.message)
+        return {
+            "out_path": r.out_path,
+            "orig_size": r.orig_size,
+            "sealed_size": r.sealed_size,
+            "hash": r.file_hash,
+            "moire": r.used_moire,
+            "password": r.used_password,
+        }
+
+    @app.post("/unprotect")
+    def api_unprotect(req: UnprotectRequest):
+        r = _node.unprotect(
+            req.sealed_path, password=req.password, force=req.force
+        )
+        if not r.success:
+            raise HTTPException(status_code=400, detail=r.message)
+        return {
+            "out_path": r.out_path,
+            "orig_size": r.orig_size,
+            "hash": r.file_hash,
+            "verdict": r.verdict,
+        }
+
+    @app.get("/records")
+    def list_records():
+        return {
+            "ids": _node._storage.list_ids(),
+            "count": len(_node._storage.registry),
+        }
+
+    @app.get("/status")
+    def api_status():
+        return _node.status()
+
+
+# ==============================================================================
+# 11. DEMO
+# ==============================================================================
+
+def run_demo() -> Dict[str, Any]:
+    print("=" * 72)
+    print("Universal Datacenter Node V24.1.2 INTEGRATED")
+    print("Inter-DC + File Protector | Author: Vladimir Zavodiuk")
+    print("=" * 72)
+
+    node = UniversalDatacenterNodeV24(
+        dc_id="DC-SOFIA",
+        storage_dir="./dc_v24_1_2_storage",
+        use_moire=True,
+    )
+
+    # moiré roundtrip
+    core = CounterRotatingBiCore()
+    tb = b"Vladimir Zavodiuk Matrix Engineering 2026!"
+    assert core.diffuse(core.diffuse(tb, True), False) == tb
+
+    # ternary tensor store
+    src = np.random.randint(-1, 2, (128, 128), dtype=np.int8)
+    buf = node.copy_in(src)
+    node.store("amber-001", buf, ontology=[1, 0, -1, 0, 1])
+    loaded = node.load("amber-001")
+    assert np.array_equal(loaded, src)
+
+    # replicate
+    payload = b"ZVD-TETRA345-" + os.urandom(4096)
+    res = node.replicate("repl-001", payload, "DC-PLOVDIV", distance_km=150.0)
+
+    # file protect / unprotect
+    sample = os.path.join(node.vault_dir, "secret_note.txt")
+    Path(sample).write_text(
+        "BXOS protected — Vladimir Zavodiuk\n", encoding="utf-8"
+    )
+    pr = node.protect(sample)
+    assert pr.success, pr.message
+    ur = node.unprotect(pr.out_path)
+    assert ur.success, ur.message
+    assert Path(ur.out_path).read_text(encoding="utf-8") == Path(sample).read_text(
+        encoding="utf-8"
+    )
+
+    # password
+    sample2 = os.path.join(node.vault_dir, "pass.bin")
+    Path(sample2).write_bytes(os.urandom(512))
+    pp = node.protect(sample2, password="Zavodiuk-V23")
+    pu = node.unprotect(pp.out_path, password="Zavodiuk-V23")
+    bad = node.unprotect(pp.out_path, password="wrong")
+
+    ok, msg = node.chain.verify()
+    report = {
+        "status": "ok",
+        "version": "24.1.2-INTEGRATED",
+        "tensor_roundtrip": True,
+        "moire_roundtrip": True,
+        "replicate_decision": res.optical_decision,
+        "protect_ok": pr.success,
+        "unprotect_ok": ur.success,
+        "password_ok": pu.success,
+        "wrong_password_rejected": not bad.success,
+        "chain_ok": ok,
+        "status_block": node.status(),
+    }
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    print("=" * 72)
+    return report
+
+
+if __name__ == "__main__":
+    run_demo()
