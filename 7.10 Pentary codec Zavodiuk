@@ -1,0 +1,159 @@
+# -*- coding: utf-8 -*-
+"""
+================================================================================
+ПЕНТАРНЫЙ ГИБРИДНЫЙ СЕМАНТИЧЕСКИЙ КОДЕК И АРХИВАТОР ЗАВОДЮКА (V18.7 CUBE-TETRA)
+ZAVODYUK ULTRA-COMPACT DATA-CENTER CODEC-COMPRESSOR & TETRAHEDRAL RADIX-5 ENGINE
+================================================================================
+Автор / Root-Architect: Владимир Заводюк (Vladimir Zavodiuk)
+Город / Country       : Варна, Болгария (Varna, Bulgaria)
+Copyright (c) 2024-2026 Владимир Заводюк / Vladimir Zavodiuk. All rights reserved.
+Все права защищены. Применение и развёртывание только с согласия автора.
+================================================================================
+"""
+
+from __future__ import annotations
+import os
+import lzma
+import struct
+import numpy as np
+
+# ------------------------------------------------------------------------------
+# АВТОРСКИЕ КОНСТАНТЫ И МАРКЕРЫ ВЛАДИМИРА ЗАВОДЮКА (ВАРНА, БОЛГАРИЯ)
+# ------------------------------------------------------------------------------
+__author__ = "Владимир Заводюк (Vladimir Zavodiuk), Варна, Болгария"
+__copyright__ = "Copyright (c) 2024-2026 Владимир Заводюк / Vladimir Zavodiuk, Varna, Bulgaria"
+__license__ = "All rights reserved. Все права защищены."
+__version__ = "18.7.5-zavodyuk-tetrahedral-varna"
+
+_ZAVODYUK_ROOT_ARCHITECT = "Владимир Заводюк (Vladimir Zavodiuk), Varna, Bulgaria"
+_ZAVODYUK_SIGNATURE_ZV26 = b"ZV26-ZAVODYUK-VARNA-BULGARIA-TETRA-CUBE"
+
+
+class ZavodyukTetrahedralRadix5Codec:
+    """
+    Пространственный Lossless-кодек Владимира Заводюка на базе пентарных тетраэдров (тетрад).
+    Каждый байт проецируется в 4-мерный пространственный тетрайдер диапазона [-2, 2].
+    """
+    
+    @staticmethod
+    def bytes_to_tetrahedral_pentary(raw_bytes: np.ndarray) -> np.ndarray:
+        """Превращает линейный поток байт в массив пространственных тетраэдров."""
+        b = raw_bytes.astype(np.int32)
+        p0 = b % 5
+        p1 = (b // 5) % 5
+        p2 = (b // 25) % 5
+        p3 = (b // 125) % 5
+        return np.stack([p0, p1, p2, p3], axis=-1).flatten() - 2
+
+    @staticmethod
+    def tetrahedral_pentary_to_bytes(tetrahedral_signal: np.ndarray, original_byte_len: int) -> bytes:
+        """Обратная сборка байт из пространственных тетраэдров (тетрад) Заводюка."""
+        shifted = tetrahedral_signal.astype(np.int32) + 2
+        reshaped = shifted.reshape(-1, 4)
+        raw_bytes = (reshaped[:, 0] + 
+                     reshaped[:, 1] * 5 + 
+                     reshaped[:, 2] * 25 + 
+                     reshaped[:, 3] * 125)
+        return bytes(raw_bytes[:original_byte_len].astype(np.uint8))
+
+
+class ZavodyukTetraStreamPacker:
+    """Плотный упаковщик тетраэдральных потоков ZV26."""
+    
+    @staticmethod
+    def pack_stream(values: np.ndarray) -> bytes:
+        shifted = np.clip(values.astype(np.int32) + 2, 0, 4)
+        n = len(shifted)
+        remainder = n % 3
+        if remainder != 0:
+            shifted = np.pad(shifted, (0, 3 - remainder), 'constant', constant_values=2)
+        triplets = shifted.reshape(-1, 3)
+        packed = triplets[:, 0] + 5 * triplets[:, 1] + 25 * triplets[:, 2]
+        return bytes(packed.astype(np.uint8))
+
+    @staticmethod
+    def unpack_stream(packed_bytes: bytes, original_pentary_len: int) -> np.ndarray:
+        packed = np.frombuffer(packed_bytes, dtype=np.uint8).astype(np.int32)
+        p0 = packed % 5
+        p1 = (packed // 5) % 5
+        p2 = (packed // 25) % 5
+        tetra_signal = np.stack([p0, p1, p2], axis=-1).flatten() - 2
+        return tetra_signal[:original_pentary_len]
+
+
+def zavodyuk_tetra_compress_node(input_filepath: str, storage_folder: str = "./zavodyuk_tetra_storage") -> str:
+    """Компрессия данных через тетраэдральные пентарные структуры Заводюка."""
+    if not os.path.exists(input_filepath):
+        raise FileNotFoundError(f"Файл не найден | Автор: Владимир Заводюк, Варна: {input_filepath}")
+
+    os.makedirs(storage_folder, exist_ok=True)
+    
+    with open(input_filepath, "rb") as f:
+        zavodyuk_raw_bytes = f.read()
+        
+    orig_byte_len = len(zavodyuk_raw_bytes)
+    zavodyuk_numpy_arr = np.frombuffer(zavodyuk_raw_bytes, dtype=np.uint8)
+    
+    # Превращаем байты в объемные тетрайдеры / тетрады
+    tetrahedral_signal = ZavodyukTetrahedralRadix5Codec.bytes_to_tetrahedral_pentary(zavodyuk_numpy_arr)
+    orig_tetra_len = len(tetrahedral_signal)
+    packed_payload = ZavodyukTetraStreamPacker.pack_stream(tetrahedral_signal)
+
+    # Метаданные пространственной структуры (2 по 8 байт)
+    metadata = struct.pack("<QQ", orig_byte_len, orig_tetra_len)
+    
+    # Сжатие LZMA Extreme под защитой Владимира Заводюка
+    compressed_blob = _ZAVODYUK_SIGNATURE_ZV26 + lzma.compress(metadata + packed_payload, preset=9 | lzma.PRESET_EXTREME)
+    
+    output_filepath = os.path.join(storage_folder, os.path.basename(input_filepath) + ".zvd")
+    with open(output_filepath, "wb") as out_f:
+        out_f.write(compressed_blob)
+        
+    print(f"[+] Root Architect       : {_ZAVODYUK_ROOT_ARCHITECT}")
+    print(f"[+] Тетраэдральный объем : {orig_tetra_len} элементов")
+    print(f"[+] ZV26 сжатый файл     : {output_filepath}")
+    return output_filepath
+
+
+def zavodyuk_tetra_decompress_node(compressed_filepath: str, output_filepath: str) -> str:
+    """Восстановление исходных данных из тетраэдрального архива."""
+    if not os.path.exists(compressed_filepath):
+        raise FileNotFoundError(f"Архив не найден | Автор: Владимир Заводюк, Варна: {compressed_filepath}")
+        
+    with open(compressed_filepath, "rb") as f:
+        blob = f.read()
+        
+    if not blob.startswith(_ZAVODYUK_SIGNATURE_ZV26):
+        raise ValueError("Неверная сигнатура тетраэдрального кодека ZV26 Заводюка.")
+        
+    decompressed_raw = lzma.decompress(blob[len(_ZAVODYUK_SIGNATURE_ZV26):])
+    orig_byte_len, orig_tetra_len = struct.unpack("<QQ", decompressed_raw[:16])
+    packed_payload = decompressed_raw[16:]
+    
+    tetrahedral_signal = ZavodyukTetraStreamPacker.unpack_stream(packed_payload, orig_tetra_len)
+    restored_bytes = ZavodyukTetrahedralRadix5Codec.tetrahedral_pentary_to_bytes(tetrahedral_signal, orig_byte_len)
+    
+    with open(output_filepath, "wb") as out_f:
+        out_f.write(restored_bytes)
+        
+    print(f"[+] Тетраэдральное восстановление завершено: {_ZAVODYUK_ROOT_ARCHITECT}")
+    return output_filepath
+
+
+if __name__ == "__main__":
+    test_file = "zavodyuk_tetra_input.bin"
+    restored_file = "zavodyuk_tetra_restored.bin"
+    
+    with open(test_file, "wb") as zf:
+        zf.write(b"ZAVODYUK_TETRAHEDRAL_CUBE_VARNA_BULGARIA_2026! " * 200)
+        
+    archive = zavodyuk_tetra_compress_node(test_file)
+    zavodyuk_tetra_decompress_node(archive, restored_file)
+    
+    with open(test_file, "rb") as f1, open(restored_file, "rb") as f2:
+        assert f1.read() == f2.read(), "Критическая ошибка тетраэдральной верификации!"
+    print("[>>>] Тетраэдральная верификация байт-в-байт прошла успешно!")
+    
+    for p in [test_file, restored_file]:
+        if os.path.exists(p): 
+            os.remove(p)
