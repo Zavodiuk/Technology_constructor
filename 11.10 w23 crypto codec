@@ -1,0 +1,315 @@
+# -*- coding: utf-8 -*-
+"""
+================================================================================
+КРИПТО-СЕМАНТИЧЕСКИЙ ВИДЕОКОДЕК «ZVD-MOIRE-CRYPTO» (W23.1-V18 INTEGRATED CORE)
+Главный Архитектор: Владимир Заводюк (Root-Architect)
+Версия: Ultimate Defense-Semantic Protocol (W23.1 Moiré Bi-Core + V18 Tensor Codec)
+
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ПРИМЕНЕНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С СОГЛАСИЯ АВТОРА.
+================================================================================
+"""
+
+import numpy as np
+import time
+import math
+from collections import deque
+from typing import Dict, List, Tuple, Optional, Any
+
+try:
+    import cv2
+    OPENCV_AVAILABLE = True
+except ImportError:
+    OPENCV_AVAILABLE = False
+
+# --- ТРОИЧНЫЙ БАЗИС И СЛОВАРИ ---
+TERNARY_BASIS = np.array([1, 0, -1], dtype=np.int8)
+
+TERNARY_CODE: Dict[int, str] = {
+    -1: "ЛОЖЬ / БЛОКИРОВКА (Аппаратный обрыв / Рекуперационный сток)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Ламинарный регенерированный ноль)",
+     1: "ИСТИНА / АКТИВАЦИЯ (Индукционный резонансный подъем ядра)"
+}
+
+# ============================================================================
+# МОДУЛЬ 1: МАКРО-ПОЛЕ С ВЕКТОРНОЙ РЕКУПЕРАЦИЕЙ И БЫСТРОЙ ЭНТРОПИЕЙ BASE-3
+# ============================================================================
+class MacroFieldW23:
+    def __init__(self, dimensions: Tuple[int, int] = (7, 7)):
+        self.dimensions = dimensions
+        # ⚡ Векторизованная инициализация Манхэттенской матрицы без циклов
+        mid_x, mid_y = dimensions[0] // 2, dimensions[1] // 2
+        x = np.arange(dimensions[0])[:, None]
+        y = np.arange(dimensions[1])[None, :]
+        dist = np.abs(x - mid_x) + np.abs(y - mid_y)
+        
+        self.field = np.where(dist == 0, np.int8(1), 
+                              np.where(dist <= 2, np.int8(0), np.int8(-1)))
+
+    def calculate_entropy(self) -> float:
+        """⚡ Безопасная векторизованная энтропия Base-3 на np.bincount."""
+        total = self.field.size
+        if total == 0:
+            return 0.0
+        # Защита от выхода за границы троичного базиса
+        flat_shifted = np.clip(self.field.flatten().astype(np.intp) + 1, 0, 2)
+        counts = np.bincount(flat_shifted, minlength=3)[:3]
+        
+        p = counts / total
+        nonzero_p = p[p > 0]
+        if nonzero_p.size > 0:
+            return float(-np.sum(nonzero_p * (np.log(nonzero_p) / np.log(3))))
+        return 0.0
+
+    def recover_extremes(self) -> int:
+        """⚡ Векторизованный сброс заблокированных состояний (-1) в баланс (0)."""
+        mask = (self.field == -1)
+        count = np.sum(mask).item()
+        if count > 0:
+            self.field[mask] = np.int8(0)
+        return count
+
+
+# ============================================================================
+# МОДУЛЬ 2: БИ-ЯДЕРНЫЙ КОНТРВРАЩАТЕЛЬ С ВЕКТОРНЫМ ПОВОРОТОМ МУАРОВЫХ МАТРИЦ
+# ============================================================================
+class CounterRotatingTernaryBiCore:
+    def __init__(self, size: int = 3):
+        self.size = size
+        self.matrix_a = self._generate_ternary(size)
+        self.matrix_b = self._generate_ternary(size)
+        self.step_index_a: int = 0
+        self.step_index_b: int = 0
+
+    def _generate_ternary(self, size: int) -> np.ndarray:
+        mid = size // 2
+        x = np.arange(size)[:, None]
+        y = np.arange(size)[None, :]
+        mat = np.where((x + y) % 2 == 0, np.int8(1), np.int8(-1))
+        mat[mid, mid] = np.int8(0)
+        return mat
+
+    def update_rotation(self, entropy: float) -> None:
+        # Адаптивный шаг в зависимости от энтропии среды
+        step_delta = 2 if entropy > 0.4 else 1
+        self.step_index_a = (self.step_index_a + step_delta) % 12
+        # Безопасный разворот фазы для предотвращения отрицательного остатка
+        self.step_index_b = (self.step_index_b + 12 - int(step_delta * 1.5)) % 12
+
+    @property
+    def angle_a(self) -> float:
+        return self.step_index_a * (math.pi / 6.0)
+
+    @property
+    def angle_b(self) -> float:
+        return self.step_index_b * (math.pi / 6.0)
+
+    def rotate_matrix(self, matrix: np.ndarray, angle: float) -> np.ndarray:
+        size = self.size
+        mid = size // 2
+        x_grid, y_grid = np.meshgrid(np.arange(size), np.arange(size), indexing='ij')
+        ox, oy = x_grid - mid, y_grid - mid
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        
+        rx = np.round(ox * cos_a - oy * sin_a).astype(np.intp)
+        ry = np.round(ox * sin_a + oy * cos_a).astype(np.intp)
+        
+        tx = np.clip(rx + mid, 0, size - 1)
+        ty = np.clip(ry + mid, 0, size - 1)
+        return matrix[tx, ty]
+
+
+# ============================================================================
+# МОДУЛЬ 3: ТОПОЛОГИЧЕСКАЯ ПАМЯТЬ И ФАЗОВЫЙ ГИСТЕРЕЗИС
+# ============================================================================
+class PhaseHysteresisMemory:
+    def __init__(self, window_size: int = 4):
+        self.history = deque([0] * window_size, maxlen=window_size)
+        self.running_sum = 0
+
+    def register_state(self, state: int) -> int:
+        self.running_sum -= self.history[0]
+        self.history.append(state)
+        self.running_sum += state
+        
+        avg = self.running_sum / len(self.history)
+        if avg > 0.33: return 1
+        elif avg >= -0.33: return 0
+        else: return -1
+
+
+# ============================================================================
+# МОДУЛЬ 4: КОМПЛЕКС V18 (ENCODER, CONDENSER, DECODER)
+# ============================================================================
+class V18CoreEncoder:
+    @staticmethod
+    def extract_attractors(frame: np.ndarray) -> List[Tuple[int, int]]:
+        h, w = frame.shape[:2]
+        v_a = (w // 4, h // 4)
+        v_b = (3 * w // 4, h // 4)
+        v_c = (w // 2, 3 * h // 4)
+        return [v_a, v_b, v_c]
+
+
+class V18CoreCondenser:
+    @staticmethod
+    def condense(attractors: List[Tuple[int, int]]) -> np.ndarray:
+        return np.array(attractors, dtype=np.int32)
+
+
+class PentarnyVideoDecoder:
+    @staticmethod
+    def decode_frame(attractors: np.ndarray, target_shape: Tuple[int, int] = (120, 160)) -> np.ndarray:
+        h, w = target_shape
+        canvas = np.zeros((h, w, 3), dtype=np.uint8)
+        if not OPENCV_AVAILABLE:
+            return canvas
+            
+        for pt in attractors:
+            x, y = int(pt[0]), int(pt[1])
+            if 0 <= x < w and 0 <= y < h:
+                cv2.circle(canvas, (x, y), 5, (0, 255, 128), -1)
+        return canvas
+
+
+# ============================================================================
+# МОДУЛЬ 5: КРИПТОГРАФИЧЕСКИЙ ЗАЦЕПИТЕЛЬ «ZVD-MOIRE-CRYPTO»
+# ============================================================================
+class ZvdMoireCryptoEngine:
+    @staticmethod
+    def encrypt_packet(attractors: np.ndarray, moire_mask_3x3: np.ndarray) -> np.ndarray:
+        flat = moire_mask_3x3.flatten()
+        n = len(attractors)
+        idx = np.arange(n)
+        shift_x = flat[idx % 3].reshape(-1, 1) * 10
+        shift_y = flat[(idx + 1) % 3].reshape(-1, 1) * 10
+        shifts = np.hstack((shift_x, shift_y)).astype(attractors.dtype)
+        return attractors + shifts
+
+    @staticmethod
+    def decrypt_packet(encrypted_attractors: np.ndarray, moire_mask_3x3: np.ndarray) -> np.ndarray:
+        flat = moire_mask_3x3.flatten()
+        n = len(encrypted_attractors)
+        idx = np.arange(n)
+        shift_x = flat[idx % 3].reshape(-1, 1) * 10
+        shift_y = flat[(idx + 1) % 3].reshape(-1, 1) * 10
+        shifts = np.hstack((shift_x, shift_y)).astype(encrypted_attractors.dtype)
+        return encrypted_attractors - shifts
+
+
+class TernaryEnergyEdge:
+    def __init__(self):
+        self.energy_flow: float = 1.0
+
+
+# ============================================================================
+# МОДУЛЬ 6: ИНТЕГРИРОВАННЫЙ ОРКЕСТРАТОР С ПОТОКОВЫМ ВИДЕО И TELEMETRY
+# ============================================================================
+class MoiréUnifiedOrchestratorW23:
+    def __init__(self):
+        self.macro_field = MacroFieldW23((7, 7))
+        self.bi_core = CounterRotatingTernaryBiCore(size=3)
+        self.hysteresis = PhaseHysteresisMemory(window_size=4)
+        self.edge = TernaryEnergyEdge()
+        self.crypto_engine = ZvdMoireCryptoEngine()
+        self.time_step: int = 0
+        self.fps: float = 0.0
+
+    def execute_sync_cycle(self, raw_frame: np.ndarray) -> Tuple[int, int, float, float, int, np.ndarray]:
+        t_start = time.perf_counter()
+        self.time_step += 1
+        current_entropy = self.macro_field.calculate_entropy()
+        recovered_nodes = 0
+        
+        if current_entropy > 0.55:
+            recovered_nodes = self.macro_field.recover_extremes()
+
+        self.bi_core.update_rotation(current_entropy)
+        
+        rot_a = self.bi_core.rotate_matrix(self.bi_core.matrix_a, self.bi_core.angle_a)
+        rot_b = self.bi_core.rotate_matrix(self.bi_core.matrix_b, self.bi_core.angle_b)
+        
+        moire_matrix_3x3 = np.clip(rot_a.astype(np.int32) + rot_b.astype(np.int32), -1, 1).astype(np.int8)
+        
+        slice_field = self.macro_field.field[2:5, 2:5]
+        product_matrix = moire_matrix_3x3.astype(np.int32) * slice_field.astype(np.int32)
+        interaction_sum = int(np.sum(product_matrix))
+        matches = int(np.sum(moire_matrix_3x3 == slice_field))
+
+        if interaction_sum > 2: raw_gate = 1
+        elif interaction_sum >= -2: raw_gate = 0
+        else: raw_gate = -1
+
+        stabilized_gate = self.hysteresis.register_state(raw_gate)
+        coherence = float(matches / 9.0)
+
+        attractors = V18CoreEncoder.extract_attractors(raw_frame)
+        condensed_vector = V18CoreCondenser.condense(attractors)
+        
+        encrypted_packet = self.crypto_engine.encrypt_packet(condensed_vector, moire_matrix_3x3)
+        decrypted_packet = self.crypto_engine.decrypt_packet(encrypted_packet, moire_matrix_3x3)
+        decoded_view = PentarnyVideoDecoder.decode_frame(decrypted_packet, target_shape=raw_frame.shape[:2])
+
+        # Расчет дивергенции поля
+        try:
+            grad = np.gradient(self.macro_field.field.astype(np.float32))
+            field_divergence = float(np.sum([np.sum(np.abs(g)) for g in grad]))
+        except Exception:
+            diffs = [np.sum(np.abs(np.diff(self.macro_field.field, axis=i))) for i in range(self.macro_field.field.ndim)]
+            field_divergence = float(np.sum(diffs))
+            
+        # Оптимизация демпфирования: подкачка энергии от когерентности фаз
+        self.edge.energy_flow = max(0.01, self.edge.energy_flow * (1.0 - (field_divergence * 0.01)) + (coherence * 0.05))
+        
+        t_duration = time.perf_counter() - t_start
+        self.fps = 1.0 / max(t_duration, 1e-6)
+        
+        return stabilized_gate, interaction_sum, current_entropy, coherence, recovered_nodes, decoded_view
+
+    def display_telemetry(self, gate: int, sum_val: int, entropy: float, coherence: float, recovered: int) -> None:
+        deg_a = math.degrees(self.bi_core.angle_a) % 360
+        deg_b = math.degrees(self.bi_core.angle_b) % 360
+        print(f"\n================ [ ZVD-MOIRE-CRYPTO ТАКТ №{self.time_step} ] ================")
+        print(f"  -> Энтропия среды (Base-3 / np.bincount): {entropy:.4f}")
+        print(f"  -> Индексы фазы [Alpha: {self.bi_core.step_index_a} ({deg_a:.1f}°) | Beta: {self.bi_core.step_index_b} ({deg_b:.1f}°)]")
+        print(f"  -> Интегральный индекс муара (Σ): {sum_val:+d}")
+        print(f"  -> Крипто-замок Когерентность (Matches): {coherence:.2f}")
+        print(f"  -> Восстановлено узлов (NumPy Mask): {recovered}")
+        print(f"  -> Энергетический поток канала (Flow): {self.edge.energy_flow:.4f}")
+        print(f"  -> Производительность кодека: {self.fps:.1f} FPS")
+        print(f"  -> Стабилизированный крипто-шлюз: {gate:+d} ({TERNARY_CODE[gate]})")
+
+
+if __name__ == "__main__":
+    print("=" * 80)
+    print("🧠 КРИПТО-СЕМАНТИЧЕСКИЙ ВИДЕОКОДЕК «ZVD-MOIRE-CRYPTO» (W23.1 + V18)")
+    print("⚠️ АВТОРСКИЕ ПРАВА ЗАЩИЩЕНЫ. ГЛАВНЫЙ АРХИТЕКТОР: ВЛАДИМИР ЗАВОДЮК.")
+    print("=" * 80)
+    
+    orchestrator = MoiréUnifiedOrchestratorW23()
+    
+    cap = None
+    if OPENCV_AVAILABLE:
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            cap = None
+            
+    print("[*] Запуск живого контура шифрования и передачи .zvd потока...")
+    try:
+        for cycle in range(5):  # Тестовые 5 тактов
+            if cap is not None:
+                ret, frame = cap.read()
+                if not ret:
+                    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                else:
+                    frame = cv2.resize(frame, (320, 240))
+            else:
+                frame = np.zeros((240, 320, 3), dtype=np.uint8)
+                
+            res = orchestrator.execute_sync_cycle(frame)
+            orchestrator.display_telemetry(res[0], res[1], res[2], res[3], res[4])
+            time.sleep(0.1)
+    finally:
+        if cap is not None:
+            cap.release()
+        print("\n[*] Сессия успешно завершена. Крипто-шлюзы заблокированы.")
