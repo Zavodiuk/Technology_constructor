@@ -1,0 +1,239 @@
+# -*- coding: utf-8 -*-
+"""
+ТРОИЧНАЯ ИНТЕГРИРОВАННАЯ СИСТЕМА — W15 (W4.2 ARMORED CORE)
+Модернизированная версия: W15.2-MODERNIZED
+Автор концепта: Владимир Заводюк (Root-Architect)
+Оптимизация: ИИ-Коллаборатор (Векторизация макро-поля, инлайнинг скаляров)
+
+ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+"""
+
+import numpy as np
+import time
+from itertools import product
+
+# --- БАЗИС И СЛОВАРИ (СТРОГО ТРОИЧНЫЕ: -1, 0, 1) ---
+LOGIC_BASIS = np.array([1, 0, -1], dtype=np.int8)
+
+TERNARY_CODE = {
+    -1: "ЛОЖЬ / БЛОКИРОВКА (Отрицательный фронт / Обрыв канала)",
+     0: "НЕОПРЕДЕЛЕННОСТЬ / ПОКОЙ (Свободный транзит / Баланс)",
+     1: "ИСТИНА / АКТИВАЦИЯ (Положительный фронт / Сверхпроводимость)"
+}
+
+def quantize_ternary(value: float) -> int:
+    """Оптимизированное квантование на уровне нативных типов Python"""
+    if value > 0.33:
+        return 1
+    elif value >= -0.33:
+        return 0
+    else:
+        return -1
+
+def ternary_clip(val: int) -> int:
+    """Быстрое строгое ограничение в рамках троичного базиса [-1, 1]"""
+    if val > 1: return 1
+    if val < -1: return -1
+    return val
+
+# --- МОДУЛЬ 1: МАКРО-ПОЛЕ (ТЕНЗОРНАЯ СРЕДА С ОПТИМИЗИРОВАННЫМИ ВОЛНАМИ) ---
+class TernaryTensorField:
+    def __init__(self, dimensions: tuple):
+        self.dimensions = dimensions
+        self.field = np.zeros(dimensions, dtype=np.int8)
+
+    def inject_quantum_impulse(self, coordinates: tuple, value: int):
+        self.field[coordinates] = ternary_clip(value)
+
+    def calculate_field_entropy(self) -> float:
+        total_elements = self.field.size
+        if total_elements == 0:
+            return 0.0
+        # Быстрый подсчет экстремальных состояний через векторный C-индекс
+        extreme_states = np.count_nonzero(self.field)
+        return float(extreme_states / total_elements)
+
+
+class TernaryTensorEvolution:
+    def __init__(self, tensor_field: TernaryTensorField):
+        self.field = tensor_field
+        self.step_counter = 0
+
+    def propagate_wave(self, origin: tuple, radius: int = 1):
+        """
+        Векторизованное симметричное волновое распространение W15.
+        Вычисляет Манхэттенскую метрику через координатные сетки без медленного product().
+        """
+        self.step_counter += 1
+        orig_val = int(self.field.field[origin])
+        if orig_val == 0:
+            return
+
+        # Границы локального окна
+        slices = []
+        origin_offsets = []
+        for d, dim_size in enumerate(self.field.dimensions):
+            coord = origin[d]
+            low = max(0, coord - radius)
+            high = min(dim_size, coord + radius + 1)
+            slices.append(slice(low, high))
+            origin_offsets.append(coord - low)
+
+        # Локальный подмассив поля
+        local_window = self.field.field[tuple(slices)]
+        
+        # Генерация сеток индексов для расчета расстояний
+        grids = np.ogrid[[slice(-offset, size - offset) for offset, size in zip(origin_offsets, local_window.shape)]]
+        
+        # Расчет Манхэттенского расстояния
+        dist_matrix = sum(np.abs(g) for g in grids)
+        
+        # Логическая маска волнового фронта Заводюка
+        mask = (dist_matrix > 0) & (dist_matrix <= radius)
+        
+        # Целочисленный расчет затухания троичного импульса
+        impulse_grid = np.zeros_like(dist_matrix, dtype=int)
+        
+        # Эмуляция знакового деления троичного базиса: сохраняем симметрию направления фронта
+        sign = 1 if orig_val > 0 else -1
+        impulse_grid[mask] = (abs(orig_val) // (dist_matrix[mask] + 1)) * sign
+        
+        # Применение импульса in-place
+        if np.any(impulse_grid):
+            # Векторизованный клиппинг в троичном базисе [-1, 1]
+            local_window[:] = np.clip(local_window + impulse_grid, -1, 1)
+
+    def calculate_field_divergence(self) -> float:
+        try:
+            gradient = np.gradient(self.field.field.astype(np.float32))
+            return float(np.sum([np.sum(np.abs(g)) for g in gradient]))
+        except Exception:
+            # Безопасный фолбек для микро-кубов размерности 3
+            diffs = [np.sum(np.abs(np.diff(self.field.field, axis=i))) for i in range(self.field.field.ndim)]
+            return float(np.sum(diffs))
+
+
+# --- МОДУЛЬ 2: МИКРО-ГРАФ С ТРОИЧНЫМ ЯДРОМ W4.2 ---
+class TernaryNode:
+    def __init__(self, node_id):
+        self.node_id = node_id
+        self.internal_state = 0
+        self.mass = 0.0
+        self.decision = 0
+
+    def process_signals(self, signal_A: int, signal_B: int) -> int:
+        a = ternary_clip(signal_A)
+        b = ternary_clip(signal_B)
+
+        sum_signals = a + b
+        conflict = abs(a - b)
+        
+        if conflict >= 2:
+            informational_mass = conflict * 2.0
+            self.internal_state = 0
+        else:
+            informational_mass = conflict * 0.5
+            self.internal_state = ternary_clip(sum_signals)
+            
+        self.mass = informational_mass
+        self.decision = self.internal_state
+        return self.decision
+
+
+class TernaryEdge:
+    def __init__(self, source: TernaryNode, target: TernaryNode):
+        self.source = source
+        self.target = target
+        self.energy_flow = 1.0
+        self.temp = 1.0
+        self.rhythm = 0.0
+
+    def update_dynamics(self):
+        decision_sum = self.source.decision + self.target.decision
+        total_mass = self.source.mass + self.target.mass
+        old_temp = self.temp
+        base_modifier = 1.0 + (decision_sum * 0.2) - (total_mass * 0.15)
+        self.temp = max(0.05, base_modifier)
+        self.rhythm = self.temp - old_temp
+        
+        # Жесткая троичная блокировка по канону W15
+        if self.source.decision == -1 or self.target.decision == -1:
+            self.energy_flow = 0.0
+        else:
+            self.energy_flow = (self.temp * 1.2) + (total_mass * 0.4)
+
+
+class TernaryUniverseGraph:
+    def __init__(self):
+        self.nodes = {}
+        self.edges = []
+        self.time_step = 0
+
+    def add_node(self, name):
+        self.nodes[name] = TernaryNode(name)
+
+    def add_edge(self, src, tgt):
+        self.edges.append(TernaryEdge(self.nodes[src], self.nodes[tgt]))
+
+    def pulse(self, external_signals: dict = None):
+        """Полная каноническая реализация пульсации графа W15"""
+        self.time_step += 1
+        
+        # 1. Если переданы внешние сигналы, узлы их обрабатывают пары сигналов
+        if external_signals:
+            for node_name, signals in external_signals.items():
+                if node_name in self.nodes:
+                    sig_A, sig_B = signals
+                    self.nodes[node_name].process_signals(sig_A, sig_B)
+                    
+        # 2. Перерасчет динамики термодинамических связей ребер
+        for edge in self.edges:
+            edge.update_dynamics()
+
+
+# --- ДЕМОНСТРАЦИОННЫЙ ЗАПУСК ИЗОЛИРОВАННОГО ЯДРА W15 ---
+if __name__ == "__main__":
+    print("=" * 70)
+    print("🚀 ИСПЫТАНИЕ МОДЕРНИЗИРОВАННОГО ТРОИЧНОГО ЯДРА W15.2-MODERNIZED")
+    print("=" * 70)
+    
+    # Инициализация макро-поля размерностью 20х20 (например, сетка датчиков)
+    field_size = (20, 20)
+    tensor_field = TernaryTensorField(field_size)
+    evolution = TernaryTensorEvolution(tensor_field)
+    
+    # Инъекция положительного импульса АКТИВАЦИИ в центр поля
+    center = (10, 10)
+    tensor_field.inject_quantum_impulse(center, 1)
+    print(f"[*] Импульс ИСТИНЫ (+1) введен в точку {center}")
+    
+    # Замер скорости волнового дыхания
+    t_start = time.perf_counter()
+    evolution.propagate_wave(center, radius=5)
+    t_end = time.perf_counter()
+    
+    print(f"[+] Волна распространена за {t_end - t_start:.6f} сек.")
+    print(f"[*] Текущая энтропия троичного поля: {tensor_field.calculate_field_entropy():.4f}")
+    print(f"[*] Дивергенция поля: {evolution.calculate_field_divergence():.4f}")
+    print("-" * 70)
+    
+    # Тест микро-графа W15
+    graph = TernaryUniverseGraph()
+    graph.add_node("Core-Alpha")
+    graph.add_node("Core-Beta")
+    graph.add_edge("Core-Alpha", "Core-Beta")
+    
+    # Симуляция конфликта (Alpha получает сигналы активации, Beta уходит в блокировку)
+    print("[*] Пульсация графа: Атака сигналами на узлы...")
+    signals = {
+        "Core-Alpha": (1, 1),   # Активация
+        "Core-Beta": (-1, 0)    # Торможение/Блокировка
+    }
+    graph.pulse(external_signals=signals)
+    
+    edge = graph.edges[0]
+    print(f" -> Состояние Alpha (Decision): {graph.nodes['Core-Alpha'].decision}")
+    print(f" -> Состояние Beta (Decision): {graph.nodes['Core-Beta'].decision}")
+    print(f" -> Энергетический поток ребра: {edge.energy_flow:.2f} (Ожидается 0.0 из-за Beta=-1)")
+    print("=" * 70)
+    
