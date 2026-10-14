@@ -1,0 +1,475 @@
+# -*- coding: utf-8 -*-
+"""
+TRINARY CYBERNETIC SYSTEM - W23.0 (ADAPTIVE BI-CORE SYNCHRONIZATION MOIRE)
+Root Architect: Vladimir Zavaduk
+Version: W23.0 (Adaptive Bi-Core Counter-Rotating Moire Architecture - Ternary Conversion)
+
+ALL RIGHTS RESERVED.
+DEPLOYMENT AND EXECUTION AUTHORIZED FOR ROOT ARCHITECT.
+"""
+
+import numpy as np
+import time
+import math
+import struct
+import zlib
+from collections import deque, Counter
+from typing import Dict, List, Tuple, Optional, Union, Literal
+
+from numba import njit, prange
+
+CUBE = 5
+N_FACES = 4
+MAGIC = b"ZVDT"
+VERSION = 230
+
+TERNARY_BASIS = np.array([1, 0, -1], dtype=np.int8)
+
+TERNARY_CODE: Dict[int, str] = {
+    -1: "FALSE / BLOCK (Hardware cut / Recuperation drain)",
+     0: "UNCERTAINTY / REST (Laminar regenerated zero)",
+     1: "TRUE / ACTIVATION (Induction resonance lift)"
+}
+
+def ternary_clip(val: int) -> np.int8:
+    return np.int8(max(-1, min(1, val)))
+
+
+# ============================================================================
+# NATIVE JIT KERNELS & ACCELERATED OPERATIONS
+# ============================================================================
+
+@njit(fastmath=True, cache=True)
+def _njit_guard(arr: np.ndarray) -> np.ndarray:
+    flat_arr = arr.ravel()
+    for i in range(flat_arr.size):
+        v = flat_arr[i]
+        if v > 2:
+            flat_arr[i] = 2
+        elif v < -2:
+            flat_arr[i] = -2
+    return arr
+
+
+@njit(fastmath=True, cache=True)
+def _njit_reduce_1d(arr: np.ndarray, strategy_is_godel: bool) -> int:
+    n = arr.shape[0]
+    if strategy_is_godel:
+        min_val = 99
+        for j in range(n):
+            if arr[j] < min_val:
+                min_val = arr[j]
+        return int(min_val)
+    else:
+        if n == 0:
+            return -2
+        total_sum = np.int64(0)
+        for j in range(n):
+            total_sum += arr[j]
+        luka_val = total_sum - 2 * (n - 1)
+        if luka_val < -2:
+            return -2
+        elif luka_val > 2:
+            return 2
+        return int(luka_val)
+
+
+@njit(fastmath=True, cache=True)
+def _njit_reduce_batch(batch: np.ndarray, strategy_is_godel: bool) -> np.ndarray:
+    rows = batch.shape[0]
+    cols = batch.shape[1]
+    res = np.empty(rows, dtype=np.int8)
+    for i in range(rows):
+        if strategy_is_godel:
+            min_val = np.int8(127)
+            for j in range(cols):
+                val = batch[i, j]
+                if val < min_val:
+                    min_val = val
+            res[i] = min_val
+        else:
+            total_sum = np.int64(0)
+            for j in range(cols):
+                total_sum += batch[i, j]
+            luka_val = total_sum - 2 * (cols - 1)
+            if luka_val < -2:
+                luka_val = -2
+            elif luka_val > 2:
+                luka_val = 2
+            res[i] = np.int8(luka_val)
+    return res
+
+
+@njit(parallel=True, fastmath=True, cache=True)
+def _njit_rashomon_evaluate(matrix: np.ndarray):
+    if matrix.ndim == 1:
+        mat = matrix.reshape(1, -1)
+    else:
+        mat = matrix
+    rows = mat.shape[0]
+    cols = mat.shape[1]
+    
+    technical = np.zeros(rows, dtype=np.float64)
+    operational = np.zeros(rows, dtype=np.float64)
+    structural = np.zeros(rows, dtype=np.float64)
+    boundary = np.zeros(rows, dtype=np.float64)
+    risk = np.zeros(rows, dtype=np.float64)
+    
+    if cols == 0:
+        return technical, operational, structural, boundary, risk
+        
+    for i in prange(rows):
+        sum_val = 0.0
+        abs_sum_val = 0.0
+        min_val = 1e9
+        max_val = -1e9
+        
+        for j in range(cols):
+            val = float(mat[i, j])
+            sum_val += val
+            abs_sum_val += abs(val)
+            if val < min_val:
+                min_val = val
+            if val > max_val:
+                max_val = val
+        
+        mean_val = sum_val / cols
+        var_sum = 0.0
+        for j in range(cols):
+            val = float(mat[i, j])
+            diff = val - mean_val
+            var_sum += diff * diff
+        std_val = np.sqrt(var_sum / cols)
+        
+        technical[i] = mean_val
+        operational[i] = min_val
+        structural[i] = max_val
+        boundary[i] = std_val
+        risk[i] = -(abs_sum_val / cols)
+        
+    return technical, operational, structural, boundary, risk
+
+
+@njit(fastmath=True, cache=True)
+def _njit_calculate_text_residual(source: np.ndarray, recon: np.ndarray) -> np.ndarray:
+    n = source.shape[0]
+    residual = np.zeros(n, dtype=np.int16)
+    for i in range(n):
+        residual[i] = np.int16(int(source[i]) - int(recon[i]))
+    return residual
+
+
+@njit(fastmath=True, cache=True)
+def _njit_calculate_video_residual(block: np.ndarray, pred: np.ndarray) -> np.ndarray:
+    res = np.zeros_like(block, dtype=np.int16)
+    for t in range(block.shape[0]):
+        for y in range(block.shape[1]):
+            for x in range(block.shape[2]):
+                res[t, y, x] = np.int16(int(block[t, y, x]) - int(pred[t, y, x]))
+    return res
+
+
+# ============================================================================
+# OBJECT MODULES: MACRO FIELD, BI-CORE, HYSTERESIS, CUBE & STREAM
+# ============================================================================
+
+class MacroFieldW23:
+    def __init__(self, dimensions: Tuple[int, int] = (7, 7)):
+        self.dimensions = dimensions
+        self.field = np.zeros(dimensions, dtype=np.int8)
+        
+        mid_x, mid_y = dimensions[0] // 2, dimensions[1] // 2
+        for x in range(dimensions[0]):
+            for y in range(dimensions[1]):
+                dist = abs(x - mid_x) + abs(y - mid_y)
+                if dist == 0: self.field[x, y] = np.int8(1)
+                elif dist <= 2: self.field[x, y] = np.int8(0)
+                else: self.field[x, y] = np.int8(-1)
+
+    def calculate_entropy(self) -> float:
+        total = self.field.size
+        if total == 0:
+            return 0.0
+        counts = Counter(int(x) for x in self.field.flatten())
+        entropy = 0.0
+        for count in counts.values():
+            p = count / total
+            if p > 0:
+                entropy -= p * math.log(p, 3)
+        return float(entropy)
+
+    def recover_extremes(self) -> int:
+        mask = (self.field == -1)
+        count = int(np.sum(mask))
+        if count > 0:
+            self.field[mask] = np.int8(0)
+        return count
+
+
+class CounterRotatingTernaryBiCore:
+    def __init__(self, size: int = 3):
+        self.size = size
+        self.matrix_a = self._generate_ternary(size)
+        self.matrix_b = self._generate_ternary(size)
+        self.step_index_a: int = 0
+        self.step_index_b: int = 0
+
+    def _generate_ternary(self, size: int) -> np.ndarray:
+        mat = np.zeros((size, size), dtype=np.int8)
+        mid = size // 2
+        for x in range(size):
+            for y in range(size):
+                if x == mid and y == mid: mat[x, y] = np.int8(0)
+                elif (x + y) % 2 == 0: mat[x, y] = np.int8(1)
+                else: mat[x, y] = np.int8(-1)
+        return mat
+
+    def update_rotation(self, entropy: float) -> None:
+        step_delta = 1 if entropy < 0.5 else 1
+        self.step_index_a = (self.step_index_a + step_delta) % 12
+        self.step_index_b = (self.step_index_b - int(step_delta * 1.5)) % 12
+
+    @property
+    def angle_a(self) -> float:
+        return self.step_index_a * (math.pi / 6.0)
+
+    @property
+    def angle_b(self) -> float:
+        return self.step_index_b * (math.pi / 6.0)
+
+    def get_combined_state(self, local_coord: Tuple[int, int], angle: float, matrix: np.ndarray) -> int:
+        x, y = local_coord
+        mid = self.size // 2
+        ox, oy = x - mid, y - mid
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        rx = int(round(ox * cos_a - oy * sin_a))
+        ry = int(round(ox * sin_a + oy * cos_a))
+        tx = max(0, min(self.size - 1, rx + mid))
+        ty = max(0, min(self.size - 1, ry + mid))
+        return int(matrix[tx, ty])
+
+
+class PhaseHysteresisMemory:
+    def __init__(self, window_size: int = 4):
+        self.history = deque(maxlen=window_size)
+
+    def register_state(self, state: int) -> int:
+        self.history.append(state)
+        avg = sum(self.history) / len(self.history)
+        if avg > 0.33: return 1
+        elif avg >= -0.33: return 0
+        else: return -1
+
+
+class TetraCube5:
+    """
+    Dual-layer 5x5x5 cube structure (1000 bytes monolith):
+    Layer 1 (data): Physical layer / Compressed residual_delta bytes (500 bytes)
+    Layer 2 (semantic): AI judgments and semantic states (500 bytes)
+    """
+    __slots__ = ("data", "semantic_data")
+
+    def __init__(self, data: Optional[np.ndarray] = None, semantic_data: Optional[np.ndarray] = None) -> None:
+        self.data = np.zeros((CUBE, CUBE, CUBE, N_FACES), dtype=np.int8) if data is None else data
+        self.semantic_data = np.zeros((CUBE, CUBE, CUBE, N_FACES), dtype=np.int8) if semantic_data is None else semantic_data
+
+    @classmethod
+    def from_text_residual(cls, raw_text: str, semantic_val: int = 0) -> "TetraCube5":
+        source_bytes = np.frombuffer(raw_text.encode('utf-8'), dtype=np.uint8)
+        recon = np.zeros_like(source_bytes)
+        if len(recon) > 0:
+            recon[0] = source_bytes[0]
+            
+        residual_delta = _njit_calculate_text_residual(source_bytes.astype(np.int16), recon.astype(np.int16))
+        compressed_residual = zlib.compress(residual_delta.tobytes(), 9)
+        
+        comp_len = len(compressed_residual)
+        if comp_len > 498:
+            raise ValueError("Compressed residual exceeds physical layer capacity (498 bytes)")
+            
+        phys_data = np.zeros((CUBE, CUBE, CUBE, N_FACES), dtype=np.int8)
+        flat_phys = phys_data.ravel().view(np.uint8)
+        flat_phys[0] = comp_len & 0xFF
+        flat_phys[1] = (comp_len >> 8) & 0xFF
+        flat_phys[2:2+comp_len] = np.frombuffer(compressed_residual, dtype=np.uint8)
+        
+        sem_data = np.full((CUBE, CUBE, CUBE, N_FACES), semantic_val, dtype=np.int8)
+        return cls(data=phys_data, semantic_data=sem_data)
+
+    def pack_monolith(self) -> bytes:
+        return self.data.tobytes() + self.semantic_data.tobytes()
+
+    @classmethod
+    def unpack_monolith(cls, raw: bytes) -> "TetraCube5":
+        if len(raw) < 1000:
+            raise ValueError("Monolithic payload too short (need 1000 bytes)")
+        arr_phys = np.frombuffer(raw[:500], dtype=np.int8).copy().reshape(CUBE, CUBE, CUBE, N_FACES)
+        arr_sem = np.frombuffer(raw[500:1000], dtype=np.int8).copy().reshape(CUBE, CUBE, CUBE, N_FACES)
+        return cls(data=arr_phys, semantic_data=arr_sem)
+
+    def mean_energy(self) -> float:
+        return float((np.mean(np.abs(self.data)) + np.mean(np.abs(self.semantic_data))) / 2.0)
+
+
+class TetraBitstreamWriter:
+    __slots__ = ("_fh",)
+
+    def __init__(self, path: str) -> None:
+        self._fh = open(path, "wb")
+        self._fh.write(MAGIC + struct.pack("<H", VERSION))
+
+    def __enter__(self) -> "TetraBitstreamWriter":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
+    def write_gop(self, cubes: List[TetraCube5], tiles_y: int, tiles_x: int) -> None:
+        raw = b"".join(c.pack_monolith() for c in cubes)
+        comp = zlib.compress(raw, 9)
+        ent = float(np.mean([c.mean_energy() for c in cubes])) if cubes else 0.0
+        
+        self._fh.write(struct.pack("<HHIfI", tiles_y, tiles_x, len(cubes), ent, len(comp)))
+        self._fh.write(comp)
+
+    def close(self) -> None:
+        if self._fh and not self._fh.closed:
+            self._fh.close()
+
+
+class TetraBitstreamReader:
+    __slots__ = ("_fh", "version")
+
+    def __init__(self, path: str) -> None:
+        self._fh = open(path, "rb")
+        if self._fh.read(4) != MAGIC:
+            raise ValueError("Invalid format: Magic bytes 'ZVDT' not found")
+        self.version = struct.unpack("<H", self._fh.read(2))[0]
+
+    def __enter__(self) -> "TetraBitstreamReader":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
+    def read_gop(self) -> Optional[Tuple[List[TetraCube5], int, int, float]]:
+        hdr_size = struct.calcsize("<HHIfI")
+        hdr = self._fh.read(hdr_size)
+        if len(hdr) != hdr_size:
+            return None
+            
+        ty, tx, n, ent, plen = struct.unpack("<HHIfI", hdr)
+        payload = self._fh.read(plen)
+        if len(payload) != plen:
+            return None
+            
+        raw = zlib.decompress(payload)
+        need = 1000
+        cubes = [TetraCube5.unpack_monolith(raw[i*need:(i+1)*need]) for i in range(n)]
+        return cubes, ty, tx, ent
+
+    def close(self) -> None:
+        if self._fh and not self._fh.closed:
+            self._fh.close()
+
+
+class MoireUnifiedOrchestratorW23:
+    def __init__(self):
+        self.macro_field = MacroFieldW23((7, 7))
+        self.bi_core = CounterRotatingTernaryBiCore(size=3)
+        self.hysteresis = PhaseHysteresisMemory(window_size=4)
+        self.time_step: int = 0
+
+    def execute_sync_cycle(self) -> Tuple[int, int, float, float, int]:
+        self.time_step += 1
+        current_entropy = self.macro_field.calculate_entropy()
+        recovered_nodes = 0
+        
+        if current_entropy > 0.55:
+            recovered_nodes = self.macro_field.recover_extremes()
+
+        self.bi_core.update_rotation(current_entropy)
+        slice_field = self.macro_field.field[2:5, 2:5]
+        
+        interaction_sum = 0
+        matches = 0
+        
+        for tx in range(3):
+            for ty in range(3):
+                val_a = self.bi_core.get_combined_state((tx, ty), self.bi_core.angle_a, self.bi_core.matrix_a)
+                val_b = self.bi_core.get_combined_state((tx, ty), self.bi_core.angle_b, self.bi_core.matrix_b)
+                
+                core_interference = ternary_clip(val_a + val_b)
+                
+                if tx < slice_field.shape[0] and ty < slice_field.shape[1]:
+                    p_val = int(slice_field[tx, ty])
+                    product_val = core_interference * p_val
+                    interaction_sum += product_val
+                    if core_interference == p_val:
+                        matches += 1
+
+        if interaction_sum > 2: raw_gate = 1
+        elif interaction_sum >= -2: raw_gate = 0
+        else: raw_gate = -1
+
+        stabilized_gate = self.hysteresis.register_state(raw_gate)
+        coherence = float(matches / 9.0)
+        
+        return stabilized_gate, interaction_sum, current_entropy, coherence, recovered_nodes
+
+    def display_telemetry(self) -> None:
+        gate, sum_val, entropy, coherence, recovered = self.execute_sync_cycle()
+        deg_a = math.degrees(self.bi_core.angle_a) % 360
+        deg_b = math.degrees(self.bi_core.angle_b) % 360
+        print(f"\n================ [ MOIRE SYNCHRO W23.0: STEP #{self.time_step} ] ================")
+        print(f"  -> Medium Entropy (Base-3): {entropy:.4f}")
+        print(f"  -> Phase Indices [Alpha: {self.bi_core.step_index_a} ({deg_a:.1f}deg) | Beta: {self.bi_core.step_index_b} ({deg_b:.1f}deg)]")
+        print(f"  -> Moire Integral Index (Sigma): {sum_val:+d}")
+        print(f"  -> Grid Coherence: {coherence:.2f}")
+        print(f"  -> Recovered Nodes (NumPy Mask): {recovered}")
+        print(f"  -> Stabilized Gate (Hysteresis): {gate:+d} ({TERNARY_CODE[gate]})")
+
+
+# ============================================================================
+# MAIN EXECUTION, JIT WARMUP & VERIFICATION
+# ============================================================================
+
+if __name__ == "__main__":
+    print("=" * 78)
+    print("  TRINARY SYSTEM W23.0: WARMUP AND JIT COMPILATION INITIATED")
+    print("  Root Architect: Vladimir Zavaduk")
+    print("=" * 78)
+    
+    print(">> [WARMUP] Compiling Numba JIT kernels...")
+    dummy_arr_1d = np.array([1, 0, -1, 2, -2], dtype=np.int8)
+    _njit_guard(dummy_arr_1d.copy())
+    _njit_reduce_1d(dummy_arr_1d, True)
+    _njit_reduce_1d(dummy_arr_1d, False)
+    _njit_reduce_batch(np.vstack([dummy_arr_1d, dummy_arr_1d]), True)
+    _njit_rashomon_evaluate(np.random.choice([-1, 0, 1], size=(3, 3)).astype(np.float64))
+    _njit_calculate_text_residual(np.array([10, 20, 30], dtype=np.int16), np.array([10, 10, 10], dtype=np.int16))
+    _njit_calculate_video_residual(np.zeros((5, 5, 5), dtype=np.int16), np.zeros((5, 5, 5), dtype=np.int16))
+    print(">> [WARMUP COMPLETE] All JIT kernels successfully compiled and locked.")
+
+    test_file = "/tmp/zvd_test_output.zvd5t"
+    cube_sample = TetraCube5.from_text_residual("ZVD-TETRA-W23 DATASTREAM TEST", semantic_val=1)
+    
+    with TetraBitstreamWriter(test_file) as writer:
+        writer.write_gop([cube_sample], 1, 1)
+    print(f">> [CONTAINER WRITER] GOP successfully written to {test_file}")
+
+    with TetraBitstreamReader(test_file) as reader:
+        gop_data = reader.read_gop()
+        if gop_data:
+            cubes, ty, tx, ent = gop_data
+            print(f">> [CONTAINER READER] Read GOP successfully: cubes={len(cubes)}, tiles=({ty}x{tx}), mean_energy={ent:.2f}")
+
+    print("\n>> [ORCHESTRATOR] Starting Moire telemetry execution loop:")
+    orchestrator = MoireUnifiedOrchestratorW23()
+    for cycle in range(5):
+        orchestrator.display_telemetry()
+        time.sleep(0.1)
+        
+    print("\n" + "=" * 78)
+    print("  [SUCCESS] W23.0 SYSTEM READY FOR GITHUB DEPLOYMENT")
+    print("=" * 78)
