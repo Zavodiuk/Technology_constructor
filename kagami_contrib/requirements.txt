@@ -1,0 +1,3 @@
+numpy
+pytest
+# по желанию: numba (для ZVD), fastapi uvicorn pydantic (HTTP-режимы)
