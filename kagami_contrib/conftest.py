@@ -32,6 +32,7 @@ def load_author_module(name: str, modname: str):
     loader = importlib.machinery.SourceFileLoader(modname, str(path))
     spec = importlib.util.spec_from_loader(modname, loader)
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[modname] = mod  # нужно для @dataclass при `from __future__ import annotations`
     old_argv = sys.argv
     sys.argv = [str(path)]
     try:

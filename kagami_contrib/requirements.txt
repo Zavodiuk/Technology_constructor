@@ -1,3 +1,4 @@
 numpy
 pytest
-# по желанию: numba (для ZVD), fastapi uvicorn pydantic (HTTP-режимы)
+# для ZVD: numba; для 28.10 60D v3 ещё zstd; для видео — opencv-python
+# по желанию: fastapi uvicorn pydantic (HTTP-режимы)
