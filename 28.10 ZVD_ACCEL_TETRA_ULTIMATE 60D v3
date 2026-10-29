@@ -558,8 +558,8 @@ class LosslessTextVolumeCodec60D:
         
         source_bytes = np.frombuffer(raw_text.encode('utf-8'), dtype=np.uint8)
         reconstructed_bytes = np.zeros_like(source_bytes)
-        if len(reconstructed_bytes) > 0:
-            reconstructed_bytes[:] = source_bytes[:]
+        
+    
             
         delta_residual = _njit_calculate_text_residual(source_bytes.astype(np.int16), reconstructed_bytes.astype(np.int16))
         compressed_delta = zstd.compress(delta_residual.tobytes(), 3)
