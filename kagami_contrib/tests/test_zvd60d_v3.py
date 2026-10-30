@@ -137,9 +137,8 @@ def text_codec(v3):
     return v3.LosslessTextVolumeCodec60D(v3.W60DAdaptiveProductionPipeline())
 
 
-@pytest.mark.xfail(reason="строки 561–562: reconstructed_bytes = source_bytes → остаток всегда 0, "
-                          "текст восстанавливается нулями. Удалить эти две строки.", strict=False)
 def test_text_roundtrip(text_codec):
+    """Текст «туда и обратно» байт в байт (исправлено автором 29.10.2026: удалены строки 561–562)."""
     with quiet():
         rep = check(lambda b: text_codec.pack_lossless_text(b.decode("utf-8")),
                     lambda c: text_codec.unpack_lossless_text(c).encode("utf-8"),
@@ -147,7 +146,6 @@ def test_text_roundtrip(text_codec):
     assert rep.lossless, str(rep)
 
 
-@pytest.mark.xfail(reason="та же причина: все тексты дают одинаковый куб из нулей", strict=False)
 def test_text_distinct_inputs_give_distinct_cubes(text_codec):
     with quiet():
         assert distinct_inputs_distinct_codes(
@@ -155,7 +153,6 @@ def test_text_distinct_inputs_give_distinct_cubes(text_codec):
             "Перевести 1000 евро Ивану".encode(), "Перевести 9000 евро Петру".encode())
 
 
-@pytest.mark.xfail(reason="сейчас сжимаются нули (строки 561–562), поэтому любой текст «помещается»", strict=False)
 def test_text_too_long_raises(text_codec):
     """В один куб помещается не больше 498 байт сжатого текста — дальше честная ошибка."""
     rng = np.random.default_rng(3)
@@ -164,7 +161,6 @@ def test_text_too_long_raises(text_codec):
         text_codec.pack_lossless_text(big)
 
 
-@pytest.mark.xfail(reason="зависит от исправления строк 561–562", strict=False)
 def test_text_through_bitstream(v3, text_codec, tmp_path):
     with quiet():
         cube = text_codec.pack_lossless_text(TEXTS[1])
