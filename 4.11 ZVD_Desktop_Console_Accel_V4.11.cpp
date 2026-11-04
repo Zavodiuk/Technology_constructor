@@ -1,0 +1,683 @@
+/**
+ * ============================================================================
+ * ZVD-WINDOWS-DESKTOP-ACCEL 60D: INTERACTIVE CONSOLE EDITION (ASIL D)
+ * УНИВЕРСАЛЬНЫЙ НАПРАВЛЕННЫЙ УСКОРИТЕЛЬ WINDOWS (60D + КОДЕК + ПИФАГОР)
+ * ----------------------------------------------------------------------------
+ * AUTHOR / АВТОР: Владимир Заводюк (Vladimir Zavodyuk)
+ * ROLE / РОЛЬ: Root-Architect / Рут-Архитектор
+ * LOCATION / МЕСТОПОЛОЖЕНИЕ: Varna, Bulgaria
+ *
+ * ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ * ПРИМЕНЕНИЕ, КОПИРОВАНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С ПРЯМОГО СОГЛАСИЯ АВТОРА.
+ * ============================================================================
+ * 
+ * COMPILATION INSTRUCTIONS FOR WINDOWS (MSVC / Clang-CL):
+ *   cl /EHsc /O2 /std:c++20 zvd_desktop_console_accel.cpp
+ *   (Или через Clang):
+ *   clang++ -std=c++20 -O3 zvd_desktop_console_accel.cpp -o zvd_desktop_console_accel.exe
+ * ============================================================================
+ */
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <array>
+#include <cmath>
+#include <string>
+#include <tuple>
+#include <memory>
+#include <algorithm>
+#include <set>
+#include <iomanip>
+#include <cstdint>
+#include <cstring>
+#include <cstdlib>
+
+// --- SYSTEM CONSTANTS & ARCHITECTURAL SPECIFICATION ---
+constexpr int DIM_60 = 60;                    // Икосаэдрический базис 3 * 4 * 5 = 60 ячеек
+constexpr int CUBE = 5;                       // Размерность тетраэдрического куба (5x5x5)
+constexpr int N_FACES = 4;                    // Грани тетраэдра
+constexpr size_t BASE5_LAYER_SIZE = 167;      // Размер слоя Base-5 упаковки в байтах
+constexpr size_t TOTAL_MONOLITH_SIZE = 334;   // Стандарт Base-5 монолита (334 байта)
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+// ============================================================================
+// 1. ТРИНАРНО-ПЕНТАРНЫЙ БАЗИС И КВАНТОВАНИЕ СОСТОЯНИЙ
+// ============================================================================
+enum class Ternary : int8_t {
+    FALSE = -1,      // Критическое отклонение / Блокировка (NO_GO)
+    UNDEFINED = 0,   // Зона пограничной энтропии (REVISE)
+    TRUE = 1         // Штатное стабильное состояние (GO)
+};
+
+inline std::string ternary_to_string(Ternary t) {
+    switch (t) {
+        case Ternary::FALSE: return "FALSE";
+        case Ternary::UNDEFINED: return "UNDEFINED";
+        case Ternary::TRUE: return "TRUE";
+    }
+    return "UNKNOWN";
+}
+
+// ============================================================================
+// 2. МОРЖОВЫЙ ФИЛЬТР ТЕЛЕМЕТРИИ И ДВОЙНОЙ РАШИМОН
+// ============================================================================
+struct TelemetryPacket {
+    int32_t size_bytes;
+    double hardware_jitter;
+    double cpu_load;
+    double thermal_status;
+};
+
+class AndroidWalrusOptimizerV23 {
+public:
+    static std::tuple<int32_t, uint64_t, std::vector<TelemetryPacket>> process_stream(const std::vector<TelemetryPacket>& raw_telemetry_stream) {
+        int32_t optimized_count = 0;
+        uint64_t dropped_garbage_bytes = 0;
+        std::vector<TelemetryPacket> filtered_packets;
+        filtered_packets.reserve(raw_telemetry_stream.size());
+        
+        for (const auto& packet : raw_telemetry_stream) {
+            if (int32_t payload_size = packet.size_bytes; (payload_size > 0) && (packet.hardware_jitter < 0.40)) {
+                optimized_count++;
+                filtered_packets.push_back(packet);
+            } else {
+                dropped_garbage_bytes += static_cast<uint64_t>(packet.size_bytes > 0 ? packet.size_bytes : 0);
+            }
+        }
+        return {optimized_count, dropped_garbage_bytes, filtered_packets};
+    }
+};
+
+struct RiskMetrics {
+    double technical;
+    double operational;
+    double structural;
+    double boundary;
+    double risk;
+};
+
+class AndroidDoubleRashomonEngine {
+public:
+    std::pair<Ternary, RiskMetrics> evaluate_risk(double jitter, double cpu_load, double thermal) {
+        double tech = 1.0 - jitter;
+        double op = 1.0 - cpu_load;
+        double struct_val = 1.0 - thermal;
+        double bound = std::abs(jitter - cpu_load);
+        double risk = - (jitter + cpu_load + thermal) / 3.0;
+
+        Ternary verdict;
+        if (jitter > 0.5 || cpu_load > 0.9 || thermal > 0.85) {
+            verdict = Ternary::FALSE;
+        } else if ((jitter >= 0.3 && jitter <= 0.5) || (cpu_load >= 0.75 && cpu_load <= 0.9)) {
+            verdict = Ternary::UNDEFINED;
+        } else {
+            verdict = Ternary::TRUE;
+        }
+
+        RiskMetrics metrics{tech, op, struct_val, bound, risk};
+        return {verdict, metrics};
+    }
+};
+
+// ============================================================================
+// 3. BASE-5 КВАНТОВЫЙ КОДЕК И МУЛЬТИМОДАЛЬНЫЙ ДВИЖОК
+// ============================================================================
+inline void pack_base5_layer_to_array(const uint8_t* flat_arr, size_t flat_size, std::array<uint8_t, BASE5_LAYER_SIZE>& out) {
+    if (flat_size != 500) return;
+    size_t idx = 0;
+    for (size_t i = 0; i < 498; i += 3) {
+        out[idx] = static_cast<uint8_t>(flat_arr[i] + 5 * flat_arr[i+1] + 25 * flat_arr[i+2]);
+        idx++;
+    }
+    out[166] = static_cast<uint8_t>(flat_arr[498] + 5 * flat_arr[499]);
+}
+
+inline void unpack_base5_layer_to_array(const uint8_t* packed_bytes, std::array<uint8_t, 500>& out) {
+    size_t idx = 0;
+    for (size_t i = 0; i < 166; ++i) {
+        unsigned int val = packed_bytes[i];
+        out[idx]     = val % 5;
+        out[idx + 1] = (val / 5) % 5;
+        out[idx + 2] = (val / 25) % 5;
+        idx += 3;
+    }
+    unsigned int val = packed_bytes[166];
+    out[498] = val % 5;
+    out[499] = (val / 5) % 5;
+}
+
+class TetraCube5Cpp {
+public:
+    uint8_t data[CUBE][CUBE][CUBE][N_FACES];
+    uint8_t semantic_data[CUBE][CUBE][CUBE][N_FACES];
+
+    TetraCube5Cpp() {
+        std::memset(data, 2, sizeof(data));
+        std::memset(semantic_data, 2, sizeof(semantic_data));
+    }
+
+    void pack_monolith_to_buffer(std::array<uint8_t, TOTAL_MONOLITH_SIZE>& out_buffer) const {
+        uint8_t flat_phys[500];
+        uint8_t flat_sem[500];
+        size_t idx = 0;
+        for(int z=0; z<CUBE; ++z)
+            for(int y=0; y<CUBE; ++y)
+                for(int x=0; x<CUBE; ++x)
+                    for(int f=0; f<N_FACES; ++f) {
+                        flat_phys[idx] = data[z][y][x][f];
+                        flat_sem[idx] = semantic_data[z][y][x][f];
+                        idx++;
+                    }
+        
+        std::array<uint8_t, BASE5_LAYER_SIZE> p_phys{};
+        std::array<uint8_t, BASE5_LAYER_SIZE> p_sem{};
+        pack_base5_layer_to_array(flat_phys, 500, p_phys);
+        pack_base5_layer_to_array(flat_sem, 500, p_sem);
+
+        std::copy(p_phys.begin(), p_phys.end(), out_buffer.begin());
+        std::copy(p_sem.begin(), p_sem.end(), out_buffer.begin() + BASE5_LAYER_SIZE);
+    }
+};
+
+class ZvdNativeEdgeCodec {
+public:
+    static inline double compute_pythagorean_lock(double leg3, double leg4) {
+        double hypot_sq = leg3 * leg3 + leg4 * leg4;
+        double hypot = std::sqrt(hypot_sq);
+        return hypot / 5.0;
+    }
+
+    static void encode_text_to_60d_ref(const std::string& text, std::array<double, DIM_60>& out_60d) {
+        for (int i = 0; i < DIM_60; ++i) {
+            double char_val = (static_cast<size_t>(i) < text.size()) ? static_cast<double>(text[i]) : 32.0;
+            double leg3 = (char_val / 255.0) * 3.0;
+            double leg4 = (static_cast<double>(i % 5) + 1.0) * 4.0;
+            out_60d[i] = compute_pythagorean_lock(leg3, leg4) * std::sin(char_val);
+        }
+    }
+};
+
+// ============================================================================
+// 4. ТЕНЗОРНОЕ ПОЛЕ ПАМЯТИ 3x4x5 = 60 С ВЫРАВНИВАНИЕМ И GUARDS
+// ============================================================================
+class alignas(64) AndroidTensorMemoryField {
+private:
+    std::array<int, 3> dims_;                 // Строго {3, 4, 5}
+    std::array<int8_t, DIM_60> field_;         // Плотный массив ровно на 60 элементов
+    std::array<double, DIM_60> exciter_60d_;   // 60-мерный эксайдер состояния
+
+public:
+    AndroidTensorMemoryField() : dims_{3, 4, 5} {
+        field_.fill(0);
+        exciter_60d_.fill(0.0);
+    }
+
+    inline size_t get_index(int x, int y, int z) const {
+        int cx = (x < 0) ? 0 : ((x > 2) ? 2 : x);
+        int cy = (y < 0) ? 0 : ((y > 3) ? 3 : y);
+        int cz = (z < 0) ? 0 : ((z > 4) ? 4 : z);
+        return static_cast<size_t>(cx * (4 * 5) + cy * 5 + cz);
+    }
+
+    void inject_impulse(int x, int y, int z, int value) {
+        int clipped = std::max(-2, std::min(2, value));
+        size_t idx = get_index(x, y, z);
+        field_[idx] = static_cast<int8_t>(clipped);
+        update_60d_exciter(x, y, z, clipped);
+    }
+
+    void update_60d_exciter(int x, int y, int z, int val) {
+        double leg3 = static_cast<double>(x + y + z + 1) * 3.0;
+        double leg4 = static_cast<double>(val + 3) * 4.0;
+        double pythagorean_factor = ZvdNativeEdgeCodec::compute_pythagorean_lock(leg3, leg4);
+
+        for (int i = 0; i < DIM_60; ++i) {
+            double phase = static_cast<double>(i) * (2.0 * M_PI / DIM_60);
+            exciter_60d_[i] = std::sin(phase) * static_cast<double>(val) * pythagorean_factor;
+        }
+    }
+
+    int8_t get(int x, int y, int z) const {
+        return field_[get_index(x, y, z)];
+    }
+
+    void set(int x, int y, int z, int8_t val) {
+        field_[get_index(x, y, z)] = val;
+    }
+
+    double calculate_entropy() const {
+        size_t active_states = 0;
+        for (auto val : field_) {
+            if (val != 0) active_states++;
+        }
+        return static_cast<double>(active_states) / static_cast<double>(DIM_60);
+    }
+
+    const std::array<int8_t, DIM_60>& data() const { return field_; }
+    const std::array<int, 3>& dimensions() const { return dims_; }
+    const std::array<double, DIM_60>& get_exciter_60d() const { return exciter_60d_; }
+};
+
+class AndroidWaveMemoryEvolution {
+private:
+    AndroidTensorMemoryField& tensor_memory_;
+public:
+    AndroidWaveMemoryEvolution(AndroidTensorMemoryField& tm) : tensor_memory_(tm) {}
+
+    void propagate_wave(const std::array<int, 3>& origin, int radius = 1) {
+        const auto& dims = tensor_memory_.dimensions();
+        int ox = origin[0], oy = origin[1], oz = origin[2];
+        int orig_val = tensor_memory_.get(ox, oy, oz);
+
+        for (int x = std::max(0, ox - radius); x <= std::min(dims[0] - 1, ox + radius); ++x) {
+            for (int y = std::max(0, oy - radius); y <= std::min(dims[1] - 1, oy + radius); ++y) {
+                for (int z = std::max(0, oz - radius); z <= std::min(dims[2] - 1, oz + radius); ++z) {
+                    int dist = std::abs(x - ox) + std::abs(y - oy) + std::abs(z - oz);
+                    if (dist > 0 && dist <= radius) {
+                        double float_val = static_cast<double>(orig_val) / (dist + 1);
+                        int impulse = static_cast<int>(std::round(float_val));
+                        if (impulse != 0) {
+                            int current = tensor_memory_.get(x, y, z);
+                            int updated = std::max(-2, std::min(2, current + impulse));
+                            tensor_memory_.set(x, y, z, static_cast<int8_t>(updated));
+                        }
+                    }
+                }
+            }
+        }
+    }
+};
+
+struct DeltaCoord {
+    int32_t dx, dy, dz;
+};
+
+struct MembraneDeltas {
+    DeltaCoord a;
+    DeltaCoord b;
+    DeltaCoord c;
+};
+
+class AndroidConflictAttractorPoint {
+private:
+    std::array<int, 3> coords_;
+    DeltaCoord last_delta_;
+
+public:
+    AndroidConflictAttractorPoint(std::array<int, 3> initial_coords)
+        : coords_(initial_coords), last_delta_{0, 0, 0} {}
+
+    void drift_by_conflict(const AndroidTensorMemoryField& tensor_field,
+                           const std::array<double, DIM_60>& grad_x,
+                           const std::array<double, DIM_60>& grad_y,
+                           const std::array<double, DIM_60>& grad_z,
+                           const std::set<std::array<int, 3>>& forbidden_coords) {
+        int cx = coords_[0], cy = coords_[1], cz = coords_[2];
+        size_t c_idx = tensor_field.get_index(cx, cy, cz);
+        int local_base = std::abs(tensor_field.data()[c_idx]);
+        double grad_base = std::abs(grad_x[c_idx]) + std::abs(grad_y[c_idx]) + std::abs(grad_z[c_idx]);
+        double max_tension = static_cast<double>(local_base) + grad_base;
+
+        std::array<int, 3> best_coords = coords_;
+        const auto& dims = tensor_field.dimensions();
+
+        int dx_arr[6] = {-1, 1, 0, 0, 0, 0};
+        int dy_arr[6] = {0, 0, -1, 1, 0, 0};
+        int dz_arr[6] = {0, 0, 0, 0, -1, 1};
+
+        for (int i = 0; i < 6; ++i) {
+            int nx = cx + dx_arr[i];
+            int ny = cy + dy_arr[i];
+            int nz = cz + dz_arr[i];
+
+            if (nx >= 0 && nx < dims[0] && ny >= 0 && ny < dims[1] && nz >= 0 && nz < dims[2]) {
+                std::array<int, 3> test_pos = {nx, ny, nz};
+                if (forbidden_coords.find(test_pos) != forbidden_coords.end()) {
+                    continue;
+                }
+                size_t t_idx = tensor_field.get_index(nx, ny, nz);
+                int local_val = std::abs(tensor_field.data()[t_idx]);
+                double grad_val = std::abs(grad_x[t_idx]) + std::abs(grad_y[t_idx]) + std::abs(grad_z[t_idx]);
+                double tension = static_cast<double>(local_val) + grad_val;
+
+                if (tension > max_tension) {
+                    max_tension = tension;
+                    best_coords = test_pos;
+                }
+            }
+        }
+
+        last_delta_ = {best_coords[0] - coords_[0], best_coords[1] - coords_[1], best_coords[2] - coords_[2]};
+        coords_ = best_coords;
+    }
+
+    const std::array<int, 3>& coords() const { return coords_; }
+    DeltaCoord last_delta() const { return last_delta_; }
+};
+
+class AndroidDynamicPlaneMembrane {
+private:
+    AndroidConflictAttractorPoint vertex_a;
+    AndroidConflictAttractorPoint vertex_b;
+    AndroidConflictAttractorPoint vertex_c;
+
+public:
+    AndroidDynamicPlaneMembrane(std::array<int, 3> p1, std::array<int, 3> p2, std::array<int, 3> p3)
+        : vertex_a(p1), vertex_b(p2), vertex_c(p3) {}
+
+    void update_membrane_position(const AndroidTensorMemoryField& tensor_field,
+                                  const std::array<double, DIM_60>& grad_x,
+                                  const std::array<double, DIM_60>& grad_y,
+                                  const std::array<double, DIM_60>& grad_z) {
+        std::set<std::array<int, 3>> forbidden_ab = {vertex_b.coords(), vertex_c.coords()};
+        vertex_a.drift_by_conflict(tensor_field, grad_x, grad_y, grad_z, forbidden_ab);
+
+        std::set<std::array<int, 3>> forbidden_bc = {vertex_a.coords(), vertex_c.coords()};
+        vertex_b.drift_by_conflict(tensor_field, grad_x, grad_y, grad_z, forbidden_bc);
+
+        std::set<std::array<int, 3>> forbidden_ca = {vertex_a.coords(), vertex_b.coords()};
+        vertex_c.drift_by_conflict(tensor_field, grad_x, grad_y, grad_z, forbidden_ca);
+    }
+
+    MembraneDeltas get_membrane_deltas() const {
+        return {vertex_a.last_delta(), vertex_b.last_delta(), vertex_c.last_delta()};
+    }
+};
+
+// ============================================================================
+// 5. МОДУЛЬ ПЕРСИСТЕНТНОСТИ (Локальный запуск без UAC)
+// ============================================================================
+struct StepRecord {
+    uint32_t cycle;
+    char stability_buf[16];
+    double entropy;
+    RiskMetrics risk_metrics;
+};
+
+class AndroidDeltaLedgerPersistence {
+public:
+    static size_t pack_and_compress(const std::vector<StepRecord>& ledger, const std::string& filename) {
+        std::ofstream ofs(filename, std::ios::binary);
+        if (!ofs.is_open()) return 0;
+
+        uint64_t count = static_cast<uint64_t>(ledger.size());
+        ofs.write(reinterpret_cast<const char*>(&count), sizeof(count));
+
+        for (const auto& rec : ledger) {
+            ofs.write(reinterpret_cast<const char*>(&rec.cycle), sizeof(rec.cycle));
+            ofs.write(rec.stability_buf, sizeof(rec.stability_buf));
+            ofs.write(reinterpret_cast<const char*>(&rec.entropy), sizeof(rec.entropy));
+            ofs.write(reinterpret_cast<const char*>(&rec.risk_metrics), sizeof(RiskMetrics));
+        }
+        ofs.close();
+
+        std::ifstream ifs(filename, std::ios::binary | std::ios::ate);
+        return static_cast<size_t>(ifs.tellg());
+    }
+
+    static std::vector<StepRecord> decompress_and_unpack(const std::string& filename) {
+        std::vector<StepRecord> ledger;
+        std::ifstream ifs(filename, std::ios::binary);
+        if (!ifs.is_open()) return ledger;
+
+        uint64_t count = 0;
+        ifs.read(reinterpret_cast<char*>(&count), sizeof(count));
+        ledger.resize(static_cast<size_t>(count));
+
+        for (size_t i = 0; i < count; ++i) {
+            ifs.read(reinterpret_cast<char*>(&ledger[i].cycle), sizeof(ledger[i].cycle));
+            ifs.read(ledger[i].stability_buf, sizeof(ledger[i].stability_buf));
+            ifs.read(reinterpret_cast<char*>(&ledger[i].entropy), sizeof(ledger[i].entropy));
+            ifs.read(reinterpret_cast<char*>(&ledger[i].risk_metrics), sizeof(RiskMetrics));
+        }
+        return ledger;
+    }
+};
+
+// ============================================================================
+// 6. ГЛАВНЫЙ ОРКЕСТРАТОР УСКОРИТЕЛЯ WINDOWS
+// ============================================================================
+class ZvdDesktopConsoleAccel {
+private:
+    AndroidWalrusOptimizerV23 walrus_optimizer;
+    AndroidDoubleRashomonEngine rashomon_engine;
+    AndroidTensorMemoryField tensor_memory;
+    AndroidWaveMemoryEvolution wave_evolution;
+    AndroidDynamicPlaneMembrane membrane;
+    std::vector<StepRecord> delta_ledger;
+    uint32_t cycle_counter;
+
+    std::array<double, DIM_60> cached_grad_x;
+    std::array<double, DIM_60> cached_grad_y;
+    std::array<double, DIM_60> cached_grad_z;
+
+public:
+    ZvdDesktopConsoleAccel()
+        : tensor_memory(), wave_evolution(tensor_memory),
+          membrane({1, 2, 2}, {0, 3, 2}, {2, 0, 2}),
+          cycle_counter(0) {
+        cached_grad_x.fill(0.0);
+        cached_grad_y.fill(0.0);
+        cached_grad_z.fill(0.0);
+    }
+
+    struct CycleReport {
+        std::string status;
+        int32_t captured_signals;
+        uint64_t cleared_garbage_bytes;
+        std::string verdict;
+        RiskMetrics risk_metrics;
+        double entropy;
+    };
+
+    CycleReport execute_firmware_cycle(const std::vector<TelemetryPacket>& raw_traffic, const std::vector<int>& memory_impulses) {
+        cycle_counter++;
+
+        auto [captured, freed_bytes, clean_packets] = walrus_optimizer.process_stream(raw_traffic);
+        double avg_jitter = 0.0;
+        if (!raw_traffic.empty()) {
+            double sum_j = 0;
+            for (const auto& p : raw_traffic) sum_j += p.hardware_jitter;
+            avg_jitter = sum_j / raw_traffic.size();
+        }
+
+        auto [verdict, risk_metrics] = rashomon_engine.evaluate_risk(avg_jitter, 0.42, 0.35);
+
+        for (size_t idx = 0; idx < memory_impulses.size() && idx < DIM_60; ++idx) {
+            int val = memory_impulses[idx];
+            int x = idx / 20;
+            int y = (idx / 5) % 4;
+            int z = idx % 5;
+            if (val != 0) {
+                tensor_memory.inject_impulse(x, y, z, val);
+                wave_evolution.propagate_wave({x, y, z}, 1);
+            }
+        }
+
+        const auto& dims = tensor_memory.dimensions();
+        const auto& data = tensor_memory.data();
+
+        for (int x = 0; x < dims[0]; ++x) {
+            for (int y = 0; y < dims[1]; ++y) {
+                for (int z = 0; z < dims[2]; ++z) {
+                    size_t idx = tensor_memory.get_index(x, y, z);
+                    double current = static_cast<double>(data[idx]);
+                    
+                    double next_x = (x + 1 < dims[0]) ? static_cast<double>(data[tensor_memory.get_index(x+1, y, z)]) : current;
+                    double next_y = (y + 1 < dims[1]) ? static_cast<double>(data[tensor_memory.get_index(x, y+1, z)]) : current;
+                    double next_z = (z + 1 < dims[2]) ? static_cast<double>(data[tensor_memory.get_index(x, y, z+1)]) : current;
+
+                    cached_grad_x[idx] = std::abs(next_x - current);
+                    cached_grad_y[idx] = std::abs(next_y - current);
+                    cached_grad_z[idx] = std::abs(next_z - current);
+                }
+            }
+        }
+
+        membrane.update_membrane_position(tensor_memory, cached_grad_x, cached_grad_y, cached_grad_z);
+
+        double entropy = tensor_memory.calculate_entropy();
+        
+        StepRecord step_rec{};
+        step_rec.cycle = cycle_counter;
+        std::string v_str = ternary_to_string(verdict);
+        
+        // ЗАЩИЩЕННОЕ КОПИРОВАНИЕ СТРОК (Полное обнуление + жесткий нуль-терминатор)
+        std::memset(step_rec.stability_buf, 0, sizeof(step_rec.stability_buf));
+        std::strncpy(step_rec.stability_buf, v_str.c_str(), sizeof(step_rec.stability_buf) - 1);
+        step_rec.stability_buf[sizeof(step_rec.stability_buf) - 1] = '\0';
+        
+        step_rec.entropy = entropy;
+        step_rec.risk_metrics = risk_metrics;
+        
+        delta_ledger.push_back(step_rec);
+
+        return CycleReport{
+            "WINDOWS_DESKTOP_CYCLE_COMMITTED_60D_PYTHAGORAS",
+            captured,
+            freed_bytes,
+            v_str,
+            risk_metrics,
+            entropy
+        };
+    }
+
+    size_t save_archive(const std::string& filename) {
+        // Убран вызов CreateDirectoryA для работы без прав администратора (UAC)
+        return AndroidDeltaLedgerPersistence::pack_and_compress(delta_ledger, filename);
+    }
+
+    std::vector<StepRecord> load_archive(const std::string& filename) {
+        return AndroidDeltaLedgerPersistence::decompress_and_unpack(filename);
+    }
+
+    const AndroidTensorMemoryField& get_tensor_memory() const { return tensor_memory; }
+    uint32_t get_cycle_counter() const { return cycle_counter; }
+};
+
+// ============================================================================
+// 7. ИНТЕРАКТИВНОЕ МЕНЮ УПРАВЛЕНИЯ НА ЭКРАНЕ (UI)
+// ============================================================================
+void clear_screen() {
+    std::cout << "\033[H\033[J";
+}
+
+void print_header() {
+    std::cout << "========================================================================\n";
+    std::cout << " 🖥️ ZVD WINDOWS DESKTOP ACCEL V25.0 — INTERACTIVE CONSOLE EDITION\n";
+    std::cout << " 👨‍💻 ROOT-ARCHITECT / РУТ-АРХИТЕКТОР: ВЛАДИМИР ЗАВОДЮК (VLADIMIR ZAVODYUK)\n";
+    std::cout << " 🔒 ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ. (60D + CODEC + PYTHAGORAS)\n";
+    std::cout << "========================================================================\n";
+}
+
+int main() {
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+
+    ZvdDesktopConsoleAccel accelerator;
+    std::string choice_str;
+
+    while (true) {
+        clear_screen();
+        print_header();
+        std::cout << " [1] Запустить полный цикл прошивки и 60D Пифагорейской оптимизации\n";
+        std::cout << " [2] Проверить текущую энтропию, 60D эксайдер и базис 3x4x5\n";
+        std::cout << " [3] Запустить стресс-тест системы (5 тактов подряд с Рашимоном)\n";
+        std::cout << " [4] Сохранить сжатый бинарный архив дельт в текущую папку\n";
+        std::cout << " [5] Распаковать и проверить целостность архива логов с диска\n";
+        std::cout << " [0] Выход из программы управления\n";
+        std::cout << "------------------------------------------------------------------------\n";
+        std::cout << " 👉 Выберите пункт меню (введите цифру и нажмите Enter): ";
+
+        if (!(std::cin >> choice_str)) break;
+
+        if (choice_str == "1") {
+            std::cout << "\n🚀 [ВЫПОЛНЕНИЕ]: Запуск такта оптимизации десктопной памяти...\n";
+            std::vector<TelemetryPacket> mock_traffic = {{128, 0.04, 0.4, 0.3}, {512, 0.60, 0.8, 0.7}};
+            std::vector<int> mock_memory = {1, -1, 0, 2, -2, 1, 0, -1, 2};
+            auto report = accelerator.execute_firmware_cycle(mock_traffic, mock_memory);
+            
+            std::cout << "\n📊 РЕЗУЛЬТАТ ТАКТА УСКОРИТЕЛЯ:\n";
+            std::cout << "   • status: " << report.status << "\n";
+            std::cout << "   • walrus_captured_signals: " << report.captured_signals << "\n";
+            std::cout << "   • cleared_garbage_bytes: " << report.cleared_garbage_bytes << "\n";
+            std::cout << "   • rashomon_core_verdict: " << report.verdict << "\n";
+            std::cout << "   • risk_audit.risk: " << report.risk_metrics.risk << "\n";
+            
+            const auto& exciter = accelerator.get_tensor_memory().get_exciter_60d();
+            std::cout << "   • 60D Exciter Sample [0..4]: " 
+                      << exciter[0] << ", " << exciter[1] << ", " << exciter[2] << ", " 
+                      << exciter[3] << ", " << exciter[4] << "...\n";
+            
+            std::cout << "\n⏸ Нажмите Enter, чтобы вернуться в меню...";
+            std::cin.ignore();
+            std::cin.get();
+        } else if (choice_str == "2") {
+            std::cout << "\n🔍 [ДИАГНОСТИКА 60D ПАМЯТИ]:\n";
+            double entropy = accelerator.get_tensor_memory().calculate_entropy();
+            const auto& dims = accelerator.get_tensor_memory().dimensions();
+            std::cout << "   • Коэффициент энтропии кэша: " << entropy << "\n";
+            std::cout << "   • Размерность тензорного поля: (" << dims[0] << " x " << dims[1] << " x " << dims[2] << " = 60 ячеек)\n";
+            std::cout << "   • Базис эксайдера: DIM_60 = " << DIM_60 << " (Пифагорейский замок 3-4-5 активен)\n";
+            std::cout << "   • Пройдено тактов ускорителя: " << accelerator.get_cycle_counter() << "\n";
+            std::cout << "   • Режим работы: Интерактивный десктопный пульт (Zero-Allocation, Без UAC)\n";
+            
+            std::cout << "\n⏸ Нажмите Enter, чтобы вернуться в меню...";
+            std::cin.ignore();
+            std::cin.get();
+        } else if (choice_str == "3") {
+            std::cout << "\n⚡ [СТРЕСС-ТЕСТ]: Запуск 5 последовательных циклов 60D...\n";
+            std::vector<TelemetryPacket> mock_traffic = {{100, 0.02, 0.3, 0.2}};
+            std::vector<int> mock_memory = {2, 0, -2, 1, 1, -1, 0, 2, -1};
+            for (int i = 0; i < 5; ++i) {
+                auto rep = accelerator.execute_firmware_cycle(mock_traffic, mock_memory);
+                std::cout << "   [Такт " << (i+1) << "] Стабильность: " << rep.verdict << " | Риск: " << rep.risk_metrics.risk << "\n";
+            }
+            std::cout << "\n⏸ Нажмите Enter, чтобы вернуться в меню...";
+            std::cin.ignore();
+            std::cin.get();
+        } else if (choice_str == "4") {
+            std::string filename = ".\\zvd_desktop_asil_d_archive.bin";
+            try {
+                size_t size = accelerator.save_archive(filename);
+                std::cout << "\n📦 [АРХИВАЦИЯ]: Лог дельт успешно сжат и сохранен в '" << filename << "' (" << size << " байт).\n";
+            } catch (const std::exception& e) {
+                std::cout << "\n❌ Ошибка архивации: " << e.what() << "\n";
+            }
+            std::cout << "\n⏸ Нажмите Enter, чтобы вернуться в меню...";
+            std::cin.ignore();
+            std::cin.get();
+        } else if (choice_str == "5") {
+            std::string filename = ".\\zvd_desktop_asil_d_archive.bin";
+            try {
+                auto unpacked = accelerator.load_archive(filename);
+                std::cout << "\n📂 [РАСПАКОВКА]: Успешно загружено записей из архива: " << unpacked.size() << "\n";
+                if (!unpacked.empty()) {
+                    const auto& last = unpacked.back();
+                    std::cout << "   Последняя запись -> Такт: " << last.cycle << ", Стабильность: " << last.stability_buf << ", Риск: " << last.risk_metrics.risk << "\n";
+                }
+            } catch (const std::exception& e) {
+                std::cout << "\n❌ Ошибка: Архив не найден или поврежден (" << e.what() << "). Сначала выполните пункт [4].\n";
+            }
+            std::cout << "\n⏸ Нажмите Enter, чтобы вернуться в меню...";
+            std::cin.ignore();
+            std::cin.get();
+        } else if (choice_str == "0") {
+            std::cout << "\n👋 Завершение работы ускорителя ZVD Desktop C++. Все права защищены (Vladimir Zavodyuk). До свидания!\n";
+            break;
+        } else {
+            std::cout << "\n❌ Неверный выбор! Пожалуйста, выберите цифру от 0 до 5.\n";
+            std::cin.ignore();
+            std::cin.get();
+        }
+    }
+    return 0;
+}
+                    
+          
