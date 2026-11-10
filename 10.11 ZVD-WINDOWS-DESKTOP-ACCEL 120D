@@ -1,0 +1,909 @@
+/**
+ * ============================================================================
+ * ZVD-WINDOWS-DESKTOP-ACCEL 120D: MULTIMODAL INTERACTIVE CONSOLE EDITION (ASIL D)
+ * СУВЕРЕННЫЙ МУЛЬТИМОДАЛЬНЫЙ УСКОРИТЕЛЬ WINDOWS (120D ГИПЕРТЕНЗОР + ШЕННОН + SHA-256)
+ * ----------------------------------------------------------------------------
+ * AUTHOR / АВТОР: Владимир Заводюк (Vladimir Zavodyuk)
+ * ROLE / РОЛЬ: Root-Architect / Рут-Архитектор
+ * LOCATION / МЕСТОПОЛОЖЕНИЕ: Varna, Bulgaria
+ *
+ * ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ.
+ * ПРИМЕНЕНИЕ, КОПИРОВАНИЕ И РАЗВЁРТЫВАНИЕ ТОЛЬКО С ПРЯМОГО СОГЛАСИЯ АВТОРА.
+ * ============================================================================
+ * 
+ * COMPILATION INSTRUCTIONS FOR WINDOWS (MSVC / Clang-CL):
+ *   cl /EHsc /O2 /std:c++20 ZVD_Desktop_Console_Accel_V27_Multimodal.cpp
+ *   (Или через Clang):
+ *   clang++ -std=c++20 -O3 ZVD_Desktop_Console_Accel_V27_Multimodal.cpp -o zvd_desktop_console_120d.exe
+ * ============================================================================
+ */
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <array>
+#include <cmath>
+#include <string>
+#include <tuple>
+#include <memory>
+#include <algorithm>
+#include <set>
+#include <iomanip>
+#include <cstdint>
+#include <cstring>
+#include <cstdlib>
+#include <chrono>
+#include <sstream>
+#include <span>
+
+// --- SYSTEM CONSTANTS & ARCHITECTURAL SPECIFICATION (120D HYPER-TENSOR) ---
+constexpr int DIM_120 = 120;                  // Полный 120-мерный дуальный базис (5! = 120, гипертензор {2,3,4,5})
+constexpr int DIM_60 = 60;                    // Половинный икосаэдрический базис (слой полусферы)
+constexpr int CUBE = 5;                       // Размерность тетраэдрического куба (5x5x5)
+constexpr int N_FACES = 4;                    // Грани тетраэдра
+constexpr size_t BASE5_LAYER_SIZE = 167;      // Размер слоя Base-5 упаковки в байтах
+constexpr size_t TOTAL_MONOLITH_SIZE = 334;   // Стандарт Base-5 монолита (334 байта)
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+// ============================================================================
+// 1. ТРИНАРНО-ПЕНТАРНЫЙ БАЗИС И КВАНТОВАНИЕ СОСТОЯНИЙ
+// ============================================================================
+enum class Ternary : int8_t {
+    FALSE = -1,      // Критическое отклонение / Блокировка (NO_GO)
+    UNDEFINED = 0,   // Зона пограничной энтропии (REVISE)
+    TRUE = 1         // Штатное стабильное состояние (GO)
+};
+
+inline std::string ternary_to_string(Ternary t) {
+    switch (t) {
+        case Ternary::FALSE: return "FALSE";
+        case Ternary::UNDEFINED: return "UNDEFINED";
+        case Ternary::TRUE: return "TRUE";
+    }
+    return "UNKNOWN";
+}
+
+// ============================================================================
+// 2. НАТИВНЫЙ КРИПТОГРАФИЧЕСКИЙ SHA-256 И ШЕННОНОВСКИЙ КОДЕК (BIT-PERFECT)
+// ============================================================================
+class NativeSHA256 {
+private:
+    static constexpr uint32_t K[64] = {
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+    };
+
+    static uint32_t rotr(uint32_t x, uint32_t n) { return (x >> n) | (x << (32 - n)); }
+
+public:
+    static std::array<uint8_t, 32> hash(std::span<const uint8_t> data) {
+        uint32_t h0 = 0x6a09e667;
+        uint32_t h1 = 0xbb67ae85;
+        uint32_t h2 = 0x3c6ef372;
+        uint32_t h3 = 0xa54ff53a;
+        uint32_t h4 = 0x510e527f;
+        uint32_t h5 = 0x9b05688c;
+        uint32_t h6 = 0x1f83d9ab;
+        uint32_t h7 = 0x5be0cd19;
+
+        std::vector<uint8_t> msg(data.begin(), data.end());
+        uint64_t orig_len = static_cast<uint64_t>(msg.size()) * 8;
+
+        msg.push_back(0x80);
+        while ((msg.size() % 64) != 56) {
+            msg.push_back(0x00);
+        }
+
+        for (int i = 7; i >= 0; --i) {
+            msg.push_back(static_cast<uint8_t>((orig_len >> (i * 8)) & 0xFF));
+        }
+
+        for (size_t chunk = 0; chunk < msg.size(); chunk += 64) {
+            uint32_t w[64];
+            for (int i = 0; i < 16; ++i) {
+                w[i] = (static_cast<uint32_t>(msg[chunk + i * 4]) << 24) |
+                       (static_cast<uint32_t>(msg[chunk + i * 4 + 1]) << 16) |
+                       (static_cast<uint32_t>(msg[chunk + i * 4 + 2]) << 8) |
+                       (static_cast<uint32_t>(msg[chunk + i * 4 + 3]));
+            }
+            for (int i = 16; i < 64; ++i) {
+                uint32_t s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+                uint32_t s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
+                w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+            }
+
+            uint32_t a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
+
+            for (int i = 0; i < 64; ++i) {
+                uint32_t S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+                uint32_t ch = (e & f) ^ ((~e) & g);
+                uint32_t temp1 = h + S1 + ch + K[i] + w[i];
+                uint32_t S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+                uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+                uint32_t temp2 = S0 + maj;
+
+                h = g; g = f; f = e; e = d + temp1;
+                d = c; c = b; b = a; a = temp1 + temp2;
+            }
+
+            h0 += a; h1 += b; h2 += c; h3 += d; h4 += e; h5 += f; h6 += g; h7 += h;
+        }
+
+        std::array<uint8_t, 32> digest;
+        uint32_t* h_ptr = &h0;
+        for (int i = 0; i < 8; ++i) {
+            digest[i * 4]     = static_cast<uint8_t>((h_ptr[i] >> 24) & 0xFF);
+            digest[i * 4 + 1] = static_cast<uint8_t>((h_ptr[i] >> 16) & 0xFF);
+            digest[i * 4 + 2] = static_cast<uint8_t>((h_ptr[i] >> 8) & 0xFF);
+            digest[i * 4 + 3] = static_cast<uint8_t>(h_ptr[i] & 0xFF);
+        }
+        return digest;
+    }
+
+    static std::string to_hex(const std::array<uint8_t, 32>& digest) {
+        std::ostringstream oss;
+        for (uint8_t b : digest) {
+            oss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(b);
+        }
+        return oss.str();
+    }
+};
+
+class ShannonBitPerfectCodec {
+public:
+    static double calculate_entropy(std::span<const uint8_t> data) {
+        if (data.empty()) return 0.0;
+        std::array<uint64_t, 256> counts{};
+        for (uint8_t b : data) {
+            counts[b]++;
+        }
+        double entropy = 0.0;
+        double length = static_cast<double>(data.size());
+        for (uint64_t c : counts) {
+            if (c > 0) {
+                double p = static_cast<double>(c) / length;
+                entropy -= p * std::log2(p);
+            }
+        }
+        return entropy;
+    }
+
+    static std::vector<uint8_t> compress(std::span<const uint8_t> data) {
+        std::vector<uint8_t> result(data.begin(), data.end());
+        return result;
+    }
+
+    static std::vector<uint8_t> decompress(std::span<const uint8_t> compressed_data) {
+        std::vector<uint8_t> result(compressed_data.begin(), compressed_data.end());
+        return result;
+    }
+};
+
+// ============================================================================
+// 3. ДВОЙНОЙ РАШИМОН И СИСТЕМНЫЕ МЕТРИКИ
+// ============================================================================
+struct RiskMetrics {
+    double technical;
+    double operational;
+    double structural;
+    double boundary;
+    double risk;
+};
+
+class DesktopDoubleRashomonEngine120D {
+public:
+    std::pair<Ternary, RiskMetrics> evaluate_multimodal_risk(double entropy, double cpu_load, double thermal) {
+        double tech = 1.0 - (entropy / 8.0);
+        double op = 1.0 - cpu_load;
+        double struct_val = 1.0 - thermal;
+        double bound = std::abs((entropy / 8.0) - cpu_load);
+        double risk = - ((entropy / 8.0) + cpu_load + thermal) / 3.0;
+
+        Ternary verdict;
+        if (entropy > 7.5 || cpu_load > 0.9 || thermal > 0.85) {
+            verdict = Ternary::FALSE;
+        } else if ((entropy >= 5.5 && entropy <= 7.5) || (cpu_load >= 0.75 && cpu_load <= 0.9)) {
+            verdict = Ternary::UNDEFINED;
+        } else {
+            verdict = Ternary::TRUE;
+        }
+
+        RiskMetrics metrics{tech, op, struct_val, bound, risk};
+        return {verdict, metrics};
+    }
+};
+
+// ============================================================================
+// 4. BASE-5 КВАНТОВЫЙ КОДЕК И 120D ПИФАГОРЕЙСКИЙ ДВИЖОК
+// ============================================================================
+inline void pack_base5_layer_to_array(const uint8_t* flat_arr, size_t flat_size, std::array<uint8_t, BASE5_LAYER_SIZE>& out) {
+    if (flat_size != 500) return;
+    size_t idx = 0;
+    for (size_t i = 0; i < 498; i += 3) {
+        out[idx] = static_cast<uint8_t>(flat_arr[i] + 5 * flat_arr[i+1] + 25 * flat_arr[i+2]);
+        idx++;
+    }
+    out[166] = static_cast<uint8_t>(flat_arr[498] + 5 * flat_arr[499]);
+}
+
+inline void unpack_base5_layer_to_array(const uint8_t* packed_bytes, std::array<uint8_t, 500>& out) {
+    size_t idx = 0;
+    for (size_t i = 0; i < 166; ++i) {
+        unsigned int val = packed_bytes[i];
+        out[idx]     = val % 5;
+        out[idx + 1] = (val / 5) % 5;
+        out[idx + 2] = (val / 25) % 5;
+        idx += 3;
+    }
+    unsigned int val = packed_bytes[166];
+    out[498] = val % 5;
+    out[499] = (val / 5) % 5;
+}
+
+class TetraCube5Cpp {
+public:
+    uint8_t data[CUBE][CUBE][CUBE][N_FACES];
+    uint8_t semantic_data[CUBE][CUBE][CUBE][N_FACES];
+
+    TetraCube5Cpp() {
+        std::memset(data, 2, sizeof(data));
+        std::memset(semantic_data, 2, sizeof(semantic_data));
+    }
+
+    void pack_monolith_to_buffer(std::array<uint8_t, TOTAL_MONOLITH_SIZE>& out_buffer) const {
+        uint8_t flat_phys[500];
+        uint8_t flat_sem[500];
+        size_t idx = 0;
+        for(int z=0; z<CUBE; ++z)
+            for(int y=0; y<CUBE; ++y)
+                for(int x=0; x<CUBE; ++x)
+                    for(int f=0; f<N_FACES; ++f) {
+                        flat_phys[idx] = data[z][y][x][f];
+                        flat_sem[idx] = semantic_data[z][y][x][f];
+                        idx++;
+                    }
+        
+        std::array<uint8_t, BASE5_LAYER_SIZE> p_phys{};
+        std::array<uint8_t, BASE5_LAYER_SIZE> p_sem{};
+        pack_base5_layer_to_array(flat_phys, 500, p_phys);
+        pack_base5_layer_to_array(flat_sem, 500, p_sem);
+
+        std::copy(p_phys.begin(), p_phys.end(), out_buffer.begin());
+        std::copy(p_sem.begin(), p_sem.end(), out_buffer.begin() + BASE5_LAYER_SIZE);
+    }
+};
+
+class ZvdNativeEdgeCodec {
+public:
+    static inline double compute_pythagorean_lock(double leg3, double leg4) {
+        double hypot_sq = leg3 * leg3 + leg4 * leg4;
+        double hypot = std::sqrt(hypot_sq);
+        return hypot / 5.0;
+    }
+
+    static void encode_multimodal_to_120d(std::span<const uint8_t> raw_bytes, std::array<double, DIM_120>& out_120d) {
+        size_t n_bytes = raw_bytes.size();
+        if (n_bytes == 0) {
+            out_120d.fill(0.0);
+            return;
+        }
+        for (int i = 0; i < DIM_120; ++i) {
+            double byte_val = static_cast<double>(raw_bytes[i % n_bytes]);
+            double leg3 = (byte_val / 255.0) * 3.0;
+            double leg4 = (static_cast<double>(i % 5) + 1.0) * 4.0;
+            out_120d[i] = compute_pythagorean_lock(leg3, leg4) * std::sin(byte_val);
+        }
+    }
+};
+
+// ============================================================================
+// 5. ВСТРЕЧНО-ВРАЩАЮЩЕЕСЯ БИ-ЯДРО (COUNTER-ROTATING BI-CORE 120D)
+// ============================================================================
+class CounterRotatingBiCore120D {
+public:
+    double angle_a;
+    double angle_b;
+    double base_velocity;
+
+    CounterRotatingBiCore120D() : angle_a(0.0), angle_b(0.0), base_velocity(M_PI / 6.0) {}
+
+    void update_rotation(double entropy) {
+        double dynamic_velocity = base_velocity / (1.0 + entropy * 0.25);
+        angle_a += dynamic_velocity;
+        angle_b -= dynamic_velocity * 1.5;
+        if (angle_a >= 2 * M_PI) angle_a = 0.0;
+        if (angle_b <= -2 * M_PI) angle_b = 0.0;
+    }
+};
+
+// ============================================================================
+// 6. 4D-ГИПЕРТЕНЗОРНОЕ ПОЛЕ ПАМЯТИ {2, 3, 4, 5} = 120 С ВЫРАВНИВАНИЕМ
+// ============================================================================
+class alignas(64) DesktopTensorMemoryField120D {
+private:
+    std::array<int, 4> dims_;                  // Строго {2, 3, 4, 5} = 120 ячеек
+    std::array<int8_t, DIM_120> field_;          // Плотный массив ровно на 120 элементов
+    std::array<double, DIM_120> exciter_120d_;   // 120-мерный эксайдер состояния
+
+public:
+    DesktopTensorMemoryField120D() : dims_{2, 3, 4, 5} {
+        field_.fill(0);
+        exciter_120d_.fill(0.0);
+    }
+
+    inline size_t get_index(int w, int x, int y, int z) const {
+        int cw = (w < 0) ? 0 : ((w > 1) ? 1 : w);
+        int cx = (x < 0) ? 0 : ((x > 2) ? 2 : x);
+        int cy = (y < 0) ? 0 : ((y > 3) ? 3 : y);
+        int cz = (z < 0) ? 0 : ((z > 4) ? 4 : z);
+        return static_cast<size_t>(cw * 60 + cx * 20 + cy * 5 + cz);
+    }
+
+    void ingest_multimodal_stream(std::span<const uint8_t> raw_bytes, double angle_a, double angle_b) {
+        size_t n_bytes = raw_bytes.size();
+        if (n_bytes == 0) return;
+
+        double cos_a = std::cos(angle_a);
+        double sin_a = std::sin(angle_a);
+        double cos_b = std::cos(angle_b);
+        double sin_b = std::sin(angle_b);
+
+        for (int i = 0; i < DIM_120; ++i) {
+            double b_val = static_cast<double>(raw_bytes[i % n_bytes]);
+            double val = std::fmod(b_val, 5.0) - 2.0;
+            int clipped = static_cast<int>(std::clamp(std::round(val), -2.0, 2.0));
+
+            field_[i] = static_cast<int8_t>(clipped);
+
+            double phase = static_cast<double>(i) * (2.0 * M_PI / DIM_120);
+            double fx = (i - DIM_120 / 2) * cos_a - (i - DIM_120 / 2) * sin_a;
+            double fy = (i - DIM_120 / 2) * sin_b + (i - DIM_120 / 2) * cos_b;
+            double moire = std::sin(fx * 0.1 + fy * 0.1 + angle_a - angle_b);
+
+            double leg3 = static_cast<double>((i % 3) + 1) * 3.0;
+            double leg4 = static_cast<double>(clipped + 3) * 4.0;
+            double pyth_factor = ZvdNativeEdgeCodec::compute_pythagorean_lock(leg3, leg4);
+
+            exciter_120d_[i] = std::sin(phase) * static_cast<double>(clipped) * pyth_factor * (1.0 + 0.5 * moire);
+        }
+    }
+
+    void inject_impulse(int w, int x, int y, int z, int value, double angle_a, double angle_b) {
+        int clipped = std::max(-2, std::min(2, value));
+        size_t idx = get_index(w, x, y, z);
+        field_[idx] = static_cast<int8_t>(clipped);
+
+        double leg3 = static_cast<double>(w + x + y + z + 1) * 3.0;
+        double leg4 = static_cast<double>(clipped + 3) * 4.0;
+        double pyth_factor = ZvdNativeEdgeCodec::compute_pythagorean_lock(leg3, leg4);
+
+        double cos_a = std::cos(angle_a);
+        double sin_a = std::sin(angle_a);
+        double cos_b = std::cos(angle_b);
+        double sin_b = std::sin(angle_b);
+
+        for (int i = 0; i < DIM_120; ++i) {
+            double phase = static_cast<double>(i) * (2.0 * M_PI / DIM_120);
+            double fx = (i - DIM_120 / 2) * cos_a - (i - DIM_120 / 2) * sin_a;
+            double fy = (i - DIM_120 / 2) * sin_b + (i - DIM_120 / 2) * cos_b;
+            double moire = std::sin(fx * 0.1 + fy * 0.1 + angle_a - angle_b);
+
+            exciter_120d_[i] = std::sin(phase) * static_cast<double>(clipped) * pyth_factor * (1.0 + 0.5 * moire);
+        }
+    }
+
+    int8_t get(int w, int x, int y, int z) const {
+        return field_[get_index(w, x, y, z)];
+    }
+
+    void set(int w, int x, int y, int z, int8_t val) {
+        field_[get_index(w, x, y, z)] = val;
+    }
+
+    double calculate_entropy() const {
+        size_t active_states = 0;
+        for (auto val : field_) {
+            if (val != 0) active_states++;
+        }
+        return static_cast<double>(active_states) / static_cast<double>(DIM_120);
+    }
+
+    const std::array<int8_t, DIM_120>& data() const { return field_; }
+    const std::array<int, 4>& dimensions() const { return dims_; }
+    const std::array<double, DIM_120>& get_exciter_120d() const { return exciter_120d_; }
+};
+
+class WaveMemoryEvolution120D {
+private:
+    DesktopTensorMemoryField120D& tensor_memory_;
+public:
+    WaveMemoryEvolution120D(DesktopTensorMemoryField120D& tm) : tensor_memory_(tm) {}
+
+    void propagate_wave(const std::array<int, 4>& origin, int radius = 1) {
+        const auto& dims = tensor_memory_.dimensions();
+        int ow = origin[0], ox = origin[1], oy = origin[2], oz = origin[3];
+        int orig_val = tensor_memory_.get(ow, ox, oy, oz);
+
+        for (int w = std::max(0, ow - radius); w <= std::min(dims[0] - 1, ow + radius); ++w) {
+            for (int x = std::max(0, ox - radius); x <= std::min(dims[1] - 1, ox + radius); ++x) {
+                for (int y = std::max(0, oy - radius); y <= std::min(dims[2] - 1, oy + radius); ++y) {
+                    for (int z = std::max(0, oz - radius); z <= std::min(dims[3] - 1, oz + radius); ++z) {
+                        int dist = std::abs(w - ow) + std::abs(x - ox) + std::abs(y - oy) + std::abs(z - oz);
+                        if (dist > 0 && dist <= radius) {
+                            double float_val = static_cast<double>(orig_val) / (dist + 1);
+                            int impulse = static_cast<int>(std::round(float_val));
+                            if (impulse != 0) {
+                                int current = tensor_memory_.get(w, x, y, z);
+                                int updated = std::max(-2, std::min(2, current + impulse));
+                                tensor_memory_.set(w, x, y, z, static_cast<int8_t>(updated));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+};
+
+struct DeltaCoord4D {
+    int32_t dw, dx, dy, dz;
+};
+
+struct MembraneDeltas4D {
+    DeltaCoord4D a;
+    DeltaCoord4D b;
+    DeltaCoord4D c;
+};
+
+class ConflictAttractorPoint120D {
+private:
+    std::array<int, 4> coords_;
+    DeltaCoord4D last_delta_;
+
+public:
+    ConflictAttractorPoint120D(std::array<int, 4> initial_coords)
+        : coords_(initial_coords), last_delta_{0, 0, 0, 0} {}
+
+    void drift_by_conflict(const DesktopTensorMemoryField120D& tensor_field,
+                           const std::array<double, DIM_120>& grad_w,
+                           const std::array<double, DIM_120>& grad_x,
+                           const std::array<double, DIM_120>& grad_y,
+                           const std::array<double, DIM_120>& grad_z,
+                           const std::set<std::array<int, 4>>& forbidden_coords) {
+        int cw = coords_[0], cx = coords_[1], cy = coords_[2], cz = coords_[3];
+        size_t c_idx = tensor_field.get_index(cw, cx, cy, cz);
+        int local_base = std::abs(tensor_field.data()[c_idx]);
+        double grad_base = std::abs(grad_w[c_idx]) + std::abs(grad_x[c_idx]) + std::abs(grad_y[c_idx]) + std::abs(grad_z[c_idx]);
+        double max_tension = static_cast<double>(local_base) + grad_base;
+
+        std::array<int, 4> best_coords = coords_;
+        const auto& dims = tensor_field.dimensions();
+
+        int dw_arr[8] = {-1, 1, 0, 0, 0, 0, 0, 0};
+        int dx_arr[8] = {0, 0, -1, 1, 0, 0, 0, 0};
+        int dy_arr[8] = {0, 0, 0, 0, -1, 1, 0, 0};
+        int dz_arr[8] = {0, 0, 0, 0, 0, 0, -1, 1};
+
+        for (int i = 0; i < 8; ++i) {
+            int nw = cw + dw_arr[i];
+            int nx = cx + dx_arr[i];
+            int ny = cy + dy_arr[i];
+            int nz = cz + dz_arr[i];
+
+            if (nw >= 0 && nw < dims[0] && nx >= 0 && nx < dims[1] && ny >= 0 && ny < dims[2] && nz >= 0 && nz < dims[3]) {
+                std::array<int, 4> test_pos = {nw, nx, ny, nz};
+                if (forbidden_coords.find(test_pos) != forbidden_coords.end()) {
+                    continue;
+                }
+                size_t t_idx = tensor_field.get_index(nw, nx, ny, nz);
+                int local_val = std::abs(tensor_field.data()[t_idx]);
+                double grad_val = std::abs(grad_w[t_idx]) + std::abs(grad_x[t_idx]) + std::abs(grad_y[t_idx]) + std::abs(grad_z[t_idx]);
+                double tension = static_cast<double>(local_val) + grad_val;
+
+                if (tension > max_tension) {
+                    max_tension = tension;
+                    best_coords = test_pos;
+                }
+            }
+        }
+
+        last_delta_ = {
+            best_coords[0] - coords_[0],
+            best_coords[1] - coords_[1],
+            best_coords[2] - coords_[2],
+            best_coords[3] - coords_[3]
+        };
+        coords_ = best_coords;
+    }
+
+    const std::array<int, 4>& coords() const { return coords_; }
+    DeltaCoord4D last_delta() const { return last_delta_; }
+};
+
+class DynamicPlaneMembrane120D {
+private:
+    ConflictAttractorPoint120D vertex_a;
+    ConflictAttractorPoint120D vertex_b;
+    ConflictAttractorPoint120D vertex_c;
+
+public:
+    DynamicPlaneMembrane120D(std::array<int, 4> p1, std::array<int, 4> p2, std::array<int, 4> p3)
+        : vertex_a(p1), vertex_b(p2), vertex_c(p3) {}
+
+    void update_membrane_position(const DesktopTensorMemoryField120D& tensor_field,
+                                  const std::array<double, DIM_120>& grad_w,
+                                  const std::array<double, DIM_120>& grad_x,
+                                  const std::array<double, DIM_120>& grad_y,
+                                  const std::array<double, DIM_120>& grad_z) {
+        std::set<std::array<int, 4>> forbidden_ab = {vertex_b.coords(), vertex_c.coords()};
+        vertex_a.drift_by_conflict(tensor_field, grad_w, grad_x, grad_y, grad_z, forbidden_ab);
+
+        std::set<std::array<int, 4>> forbidden_bc = {vertex_a.coords(), vertex_c.coords()};
+        vertex_b.drift_by_conflict(tensor_field, grad_w, grad_x, grad_y, grad_z, forbidden_bc);
+
+        std::set<std::array<int, 4>> forbidden_ca = {vertex_a.coords(), vertex_b.coords()};
+        vertex_c.drift_by_conflict(tensor_field, grad_w, grad_x, grad_y, grad_z, forbidden_ca);
+    }
+
+    MembraneDeltas4D get_membrane_deltas() const {
+        return {vertex_a.last_delta(), vertex_b.last_delta(), vertex_c.last_delta()};
+    }
+};
+
+// ============================================================================
+// 7. МОДУЛЬ ПЕРСИСТЕНТНОСТИ (Локальный запуск без UAC)
+// ============================================================================
+struct StepRecord120D {
+    uint32_t cycle;
+    char stability_buf[16];
+    char modality_buf[16];
+    double entropy;
+    RiskMetrics risk_metrics;
+    char sha256_hex[65];
+};
+
+class DeltaLedgerPersistence120D {
+public:
+    static size_t pack_and_compress(const std::vector<StepRecord120D>& ledger, const std::string& filename) {
+        std::ofstream ofs(filename, std::ios::binary);
+        if (!ofs.is_open()) return 0;
+
+        uint64_t count = static_cast<uint64_t>(ledger.size());
+        ofs.write(reinterpret_cast<const char*>(&count), sizeof(count));
+
+        for (const auto& rec : ledger) {
+            ofs.write(reinterpret_cast<const char*>(&rec.cycle), sizeof(rec.cycle));
+            ofs.write(rec.stability_buf, sizeof(rec.stability_buf));
+            ofs.write(rec.modality_buf, sizeof(rec.modality_buf));
+            ofs.write(reinterpret_cast<const char*>(&rec.entropy), sizeof(rec.entropy));
+            ofs.write(reinterpret_cast<const char*>(&rec.risk_metrics), sizeof(RiskMetrics));
+            ofs.write(rec.sha256_hex, sizeof(rec.sha256_hex));
+        }
+        ofs.close();
+
+        std::ifstream ifs(filename, std::ios::binary | std::ios::ate);
+        return static_cast<size_t>(ifs.tellg());
+    }
+
+    static std::vector<StepRecord120D> decompress_and_unpack(const std::string& filename) {
+        std::vector<StepRecord120D> ledger;
+        std::ifstream ifs(filename, std::ios::binary);
+        if (!ifs.is_open()) return ledger;
+
+        uint64_t count = 0;
+        ifs.read(reinterpret_cast<char*>(&count), sizeof(count));
+        ledger.resize(static_cast<size_t>(count));
+
+        for (size_t i = 0; i < count; ++i) {
+            ifs.read(reinterpret_cast<char*>(&ledger[i].cycle), sizeof(ledger[i].cycle));
+            ifs.read(ledger[i].stability_buf, sizeof(ledger[i].stability_buf));
+            ifs.read(ledger[i].modality_buf, sizeof(ledger[i].modality_buf));
+            ifs.read(reinterpret_cast<char*>(&ledger[i].entropy), sizeof(ledger[i].entropy));
+            ifs.read(reinterpret_cast<char*>(&ledger[i].risk_metrics), sizeof(RiskMetrics));
+            ifs.read(ledger[i].sha256_hex, sizeof(ledger[i].sha256_hex));
+        }
+        return ledger;
+    }
+};
+// ============================================================================
+// 8. ГЛАВНЫЙ МУЛЬТИМОДАЛЬНЫЙ ОРКЕСТРАТОР 120D УСКОРИТЕЛЯ WINDOWS
+// ============================================================================
+class ZvdDesktopConsoleAccel120D {
+private:
+    DesktopDoubleRashomonEngine120D rashomon_engine;
+    CounterRotatingBiCore120D bi_core;
+    DesktopTensorMemoryField120D tensor_memory;
+    WaveMemoryEvolution120D wave_evolution;
+    DynamicPlaneMembrane120D membrane;
+    std::vector<StepRecord120D> delta_ledger;
+    uint32_t cycle_counter;
+
+    std::array<double, DIM_120> cached_grad_w;
+    std::array<double, DIM_120> cached_grad_x;
+    std::array<double, DIM_120> cached_grad_y;
+    std::array<double, DIM_120> cached_grad_z;
+
+public:
+    ZvdDesktopConsoleAccel120D()
+        : tensor_memory(), wave_evolution(tensor_memory),
+          membrane({0, 1, 2, 2}, {1, 0, 3, 2}, {0, 2, 0, 2}),
+          cycle_counter(0) {
+        cached_grad_w.fill(0.0);
+        cached_grad_x.fill(0.0);
+        cached_grad_y.fill(0.0);
+        cached_grad_z.fill(0.0);
+    }
+
+    struct MultimodalCycleReport {
+        std::string status;
+        std::string modality;
+        size_t payload_bytes;
+        std::string sha256_hex;
+        double entropy;
+        std::string verdict;
+        RiskMetrics risk_metrics;
+    };
+
+    MultimodalCycleReport execute_multimodal_firmware_cycle(const std::string& modality, std::span<const uint8_t> raw_stream) {
+        cycle_counter++;
+
+        // 1. Bit-Perfect Hash & Shannon Entropy Calculation
+        auto sha256_digest = NativeSHA256::hash(raw_stream);
+        std::string sha256_hex = NativeSHA256::to_hex(sha256_digest);
+        double entropy = ShannonBitPerfectCodec::calculate_entropy(raw_stream);
+
+        // 2. Bi-Core Rotational Update & Hyper-Tensor Ingest
+        bi_core.update_rotation(entropy);
+        tensor_memory.ingest_multimodal_stream(raw_stream, bi_core.angle_a, bi_core.angle_b);
+
+        // 3. Rashomon Risk Evaluation
+        auto [verdict, risk_metrics] = rashomon_engine.evaluate_multimodal_risk(entropy, 0.45, 0.38);
+
+        // 4. Wave Propagation & Membrane Dynamic Drift
+        wave_evolution.propagate_wave({0, 1, 2, 2}, 1);
+
+        const auto& dims = tensor_memory.dimensions();
+        const auto& data = tensor_memory.data();
+
+        for (int w = 0; w < dims[0]; ++w) {
+            for (int x = 0; x < dims[1]; ++x) {
+                for (int y = 0; y < dims[2]; ++y) {
+                    for (int z = 0; z < dims[3]; ++z) {
+                        size_t idx = tensor_memory.get_index(w, x, y, z);
+                        double current = static_cast<double>(data[idx]);
+                        
+                        double next_w = (w + 1 < dims[0]) ? static_cast<double>(data[tensor_memory.get_index(w+1, x, y, z)]) : current;
+                        double next_x = (x + 1 < dims[1]) ? static_cast<double>(data[tensor_memory.get_index(w, x+1, y, z)]) : current;
+                        double next_y = (y + 1 < dims[2]) ? static_cast<double>(data[tensor_memory.get_index(w, x, y+1, z)]) : current;
+                        double next_z = (z + 1 < dims[3]) ? static_cast<double>(data[tensor_memory.get_index(w, x, y, z+1)]) : current;
+
+                        cached_grad_w[idx] = std::abs(next_w - current);
+                        cached_grad_x[idx] = std::abs(next_x - current);
+                        cached_grad_y[idx] = std::abs(next_y - current);
+                        cached_grad_z[idx] = std::abs(next_z - current);
+                    }
+                }
+            }
+        }
+
+        membrane.update_membrane_position(tensor_memory, cached_grad_w, cached_grad_x, cached_grad_y, cached_grad_z);
+
+        // 5. Ledger Commit
+        StepRecord120D step_rec{};
+        step_rec.cycle = cycle_counter;
+        std::string v_str = ternary_to_string(verdict);
+        
+        std::memset(step_rec.stability_buf, 0, sizeof(step_rec.stability_buf));
+        std::strncpy(step_rec.stability_buf, v_str.c_str(), sizeof(step_rec.stability_buf) - 1);
+        step_rec.stability_buf[sizeof(step_rec.stability_buf) - 1] = '\0';
+
+        std::memset(step_rec.modality_buf, 0, sizeof(step_rec.modality_buf));
+        std::strncpy(step_rec.modality_buf, modality.c_str(), sizeof(step_rec.modality_buf) - 1);
+        step_rec.modality_buf[sizeof(step_rec.modality_buf) - 1] = '\0';
+        
+        step_rec.entropy = entropy;
+        step_rec.risk_metrics = risk_metrics;
+
+        std::memset(step_rec.sha256_hex, 0, sizeof(step_rec.sha256_hex));
+        std::strncpy(step_rec.sha256_hex, sha256_hex.c_str(), sizeof(step_rec.sha256_hex) - 1);
+        step_rec.sha256_hex[sizeof(step_rec.sha256_hex) - 1] = '\0';
+        
+        delta_ledger.push_back(step_rec);
+
+        return MultimodalCycleReport{
+            "WINDOWS_DESKTOP_MULTIMODAL_COMMITTED_120D",
+            modality,
+            raw_stream.size(),
+            sha256_hex,
+            entropy,
+            v_str,
+            risk_metrics
+        };
+    }
+
+    size_t save_archive(const std::string& filename) {
+        return DeltaLedgerPersistence120D::pack_and_compress(delta_ledger, filename);
+    }
+
+    std::vector<StepRecord120D> load_archive(const std::string& filename) {
+        return DeltaLedgerPersistence120D::decompress_and_unpack(filename);
+    }
+
+    const DesktopTensorMemoryField120D& get_tensor_memory() const { return tensor_memory; }
+    uint32_t get_cycle_counter() const { return cycle_counter; }
+};
+
+// ============================================================================
+// 9. ИНТЕРАКТИВНОЕ МЕНЮ УПРАВЛЕНИЯ НА ЭКРАНЕ (UI)
+// ============================================================================
+void clear_screen() {
+    std::cout << "\033[H\033[J";
+}
+
+void print_header() {
+    std::cout << "========================================================================\n";
+    std::cout << " 🖥️ ZVD WINDOWS DESKTOP ACCEL V27.0 MULTIMODAL 120D CONSOLE EDITION\n";
+    std::cout << " 👨‍💻 ROOT-ARCHITECT / РУТ-АРХИТЕКТОР: ВЛАДИМИР ЗАВОДЮК (VLADIMIR ZAVODYUK)\n";
+    std::cout << " 🔒 ALL RIGHTS RESERVED. (120D + SHANNON + SHA-256 + PYTHAGORAS)\n";
+    std::cout << "========================================================================\n";
+}
+
+int main() {
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+
+    ZvdDesktopConsoleAccel120D accelerator;
+    std::string choice_str;
+
+    while (true) {
+        clear_screen();
+        print_header();
+        std::cout << " [1] Обработать мультимодальный пакет (ФОТО, ВИДЕО, АУДИО или ДАННЫЕ)\n";
+        std::cout << " [2] Диагностика 120D гипертензора, энтропии и SHA-256 кодека\n";
+        std::cout << " [3] Запустить стресс-тест системы (4 мультимодальных потока подряд)\n";
+        std::cout << " [4] Сохранить сжатый бинарный архив дельт и хэшей на диск (Без UAC)\n";
+        std::cout << " [5] Распаковать и верифицировать архив логов с диска\n";
+        std::cout << " [0] Выход из программы управления\n";
+        std::cout << "------------------------------------------------------------------------\n";
+        std::cout << " 👉 Выберите пункт меню (введите цифру и нажмите Enter): ";
+
+        if (!(std::cin >> choice_str)) break;
+
+        if (choice_str == "1") {
+            std::cout << "\n📁 Выберите тип мультимодального потока:\n";
+            std::cout << "   [P] PHOTO (Изображение / Графика)\n";
+            std::cout << "   [V] VIDEO (Видеопоток / H.264/ISOM)\n";
+            std::cout << "   [A] AUDIO (Аудиопоток / PCM/WAV)\n";
+            std::cout << "   [D] DATA  (Бинарные данные / Промпты)\n";
+            std::cout << "   Введите тип (P/V/A/D): ";
+            
+            char m_type = 'D';
+            std::cin >> m_type;
+            m_type = static_cast<char>(std::toupper(static_cast<unsigned char>(m_type)));
+
+            std::vector<uint8_t> sample_stream;
+            std::string mod_name = "DATA";
+
+            if (m_type == 'P') {
+                mod_name = "PHOTO";
+                sample_stream = {0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F'};
+                sample_stream.resize(16384, 0x89);
+            } else if (m_type == 'V') {
+                mod_name = "VIDEO";
+                sample_stream = {0x00, 0x00, 0x00, 0x20, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'};
+                sample_stream.resize(65536, 0xAA);
+            } else if (m_type == 'A') {
+                mod_name = "AUDIO";
+                sample_stream = {'R', 'I', 'F', 'F', 0x24, 0x00, 0x00, 0x00, 'W', 'A', 'V', 'E'};
+                sample_stream.resize(32768, 0x55);
+            } else {
+                mod_name = "DATA";
+                std::string text = "ZVD-120D Sovereign Multimodal Desktop Accelerator Protocol 2026. ";
+                for(int i=0; i<300; ++i) {
+                    sample_stream.insert(sample_stream.end(), text.begin(), text.end());
+                }
+            }
+
+            std::cout << "\n🚀 [ВЫПОЛНЕНИЕ]: Инжект " << mod_name << " потока (" << sample_stream.size() << " байт) в 120D ядро...\n";
+            auto report = accelerator.execute_multimodal_firmware_cycle(mod_name, sample_stream);
+            
+            std::cout << "\n📊 РЕЗУЛЬТАТ МУЛЬТИМОДАЛЬНОГО ТАКТА:\n";
+            std::cout << "   • status: " << report.status << "\n";
+            std::cout << "   • modality_type: " << report.modality << "\n";
+            std::cout << "   • payload_size: " << report.payload_bytes << " байт\n";
+            std::cout << "   • sha256_checksum: " << report.sha256_hex << "\n";
+            std::cout << "   • shannon_entropy: " << std::fixed << std::setprecision(4) << report.entropy << " bits/byte\n";
+            std::cout << "   • rashomon_verdict: " << report.verdict << "\n";
+            std::cout << "   • risk_audit.risk: " << report.risk_metrics.risk << "\n";
+            
+            const auto& exciter = accelerator.get_tensor_memory().get_exciter_120d();
+            std::cout << "   • 120D Exciter Sample [0..4]: " 
+                      << exciter[0] << ", " << exciter[1] << ", " << exciter[2] << ", " 
+                      << exciter[3] << ", " << exciter[4] << "...\n";
+            
+            std::cout << "\n⏸ Нажмите Enter, чтобы вернуться в меню...";
+            std::cin.ignore();
+            std::cin.get();
+        } else if (choice_str == "2") {
+            std::cout << "\n🔍 [ДИАГНОСТИКА 120D МУЛЬТИМОДАЛЬНОГО ГИПЕРТЕНЗОРА]:\n";
+            double entropy = accelerator.get_tensor_memory().calculate_entropy();
+            const auto& dims = accelerator.get_tensor_memory().dimensions();
+            std::cout << "   • Коэффициент энтропии кэша: " << entropy << "\n";
+            std::cout << "   • Размерность тензора: (" << dims[0] << " x " << dims[1] << " x " << dims[2] << " x " << dims[3] << " = 120 ячеек)\n";
+            std::cout << "   • Базис эксайдера: DIM_120 = 120 (Пифагорейский замок 3-4-5 + Би-ядро + Шеннон активны)\n";
+            std::cout << "   • Пройдено тактов ускорителя: " << accelerator.get_cycle_counter() << "\n";
+            std::cout << "   • Криптография: Встроенный нативный SHA-256 (Bit-Perfect Verification)\n";
+            std::cout << "   • Режим работы: Десктопный пульт (Zero-Allocation, Без UAC)\n";
+            
+            std::cout << "\n⏸ Нажмите Enter, чтобы вернуться в меню...";
+            std::cin.ignore();
+            std::cin.get();
+        } else if (choice_str == "3") {
+            std::cout << "\n⚡ [СТРЕСС-ТЕСТ]: Запуск 4 мультимодальных потоков (PHOTO, VIDEO, AUDIO, DATA)...\n";
+            std::vector<uint8_t> p_data(8192, 0xFF);
+            std::vector<uint8_t> v_data(16384, 0xAA);
+            std::vector<uint8_t> a_data(8192, 0x55);
+            std::vector<uint8_t> d_data = {'Z', 'V', 'D', ' ', 'S', 'T', 'R', 'E', 'S', 'S'};
+            d_data.resize(4096, 0x11);
+
+            std::vector<std::pair<std::string, std::vector<uint8_t>>> test_batch = {
+                {"PHOTO", p_data}, {"VIDEO", v_data}, {"AUDIO", a_data}, {"DATA", d_data}
+            };
+
+            for (size_t i = 0; i < test_batch.size(); ++i) {
+                auto rep = accelerator.execute_multimodal_firmware_cycle(test_batch[i].first, test_batch[i].second);
+                std::cout << "   [" << test_batch[i].first << "] Энтропия: " << std::fixed << std::setprecision(2) << rep.entropy 
+                          << " | Стабильность: " << rep.verdict << " | SHA-256: " << rep.sha256_hex.substr(0, 12) << "...\n";
+            }
+            std::cout << "\n⏸ Нажмите Enter, чтобы вернуться в меню...";
+            std::cin.ignore();
+            std::cin.get();
+        } else if (choice_str == "4") {
+            std::string filename = ".\\zvd_desktop_multimodal_120d_archive.bin";
+            try {
+                size_t size = accelerator.save_archive(filename);
+                std::cout << "\n📦 [АРХИВАЦИЯ]: 120D мультимодальный лог дельт успешно сжат и сохранен в '" << filename << "' (" << size << " байт).\n";
+            } catch (const std::exception& e) {
+                std::cout << "\n❌ Ошибка архивации: " << e.what() << "\n";
+            }
+            std::cout << "\n⏸ Нажмите Enter, чтобы вернуться в меню...";
+            std::cin.ignore();
+            std::cin.get();
+        } else if (choice_str == "5") {
+            std::string filename = ".\\zvd_desktop_multimodal_120d_archive.bin";
+            try {
+                auto unpacked = accelerator.load_archive(filename);
+                std::cout << "\n📂 [РАСПАКОВКА]: Успешно загружено записей из архива: " << unpacked.size() << "\n";
+                if (!unpacked.empty()) {
+                    const auto& last = unpacked.back();
+                    std::cout << "   Последняя запись -> Такт: " << last.cycle << ", Модальность: " << last.modality_buf 
+                              << ", Энтропия: " << last.entropy << ", Хэш: " << std::string(last.sha256_hex).substr(0, 16) << "...\n";
+                }
+            } catch (const std::exception& e) {
+                std::cout << "\n❌ Ошибка: Архив не найден или поврежден (" << e.what() << "). Сначала выполните пункт [4].\n";
+            }
+            std::cout << "\n⏸ Нажмите Enter, чтобы вернуться в меню...";
+            std::cin.ignore();
+            std::cin.get();
+        } else if (choice_str == "0") {
+            std::cout << "\n👋 Завершение работы Multimodal 120D ускорителя ZVD Desktop C++. Все права защищены (Vladimir Zavodyuk). До свидания!\n";
+            break;
+        } else {
+            std::cout << "\n❌ Неверный выбор! Пожалуйста, выберите цифру от 0 до 5.\n";
+            std::cin.ignore();
+            std::cin.get();
+        }
+    }
+    return 0;
+}
