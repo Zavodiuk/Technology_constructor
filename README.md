@@ -46,6 +46,8 @@ Verified in isolated sandbox builds under strict compiler enforcement (-std=c++2
  * Android Edge Mobile Accelerator (15.5 KB Standalone): 79.3\,\text{ns} per Double Pythagorean 3-4-5 Fold cycle (13.7x faster than dynamic STL baseline, 0 bytes heap allocation).
 5. Intellectual Property & Licensing
  * Author & Sole Rights Holder: Vladimir Zavodiuk (Varna, Bulgaria, European Union)
+
+ * АLL RIGHT RESERVED 
  * Direct Contact: glovesandfactories@gmail.com | Phone / WhatsApp / Viber: +359 877 724 745
  * Status: Open for full IP/patent acquisition, enterprise OEM licensing, and regional distribution partnerships.
  * 
