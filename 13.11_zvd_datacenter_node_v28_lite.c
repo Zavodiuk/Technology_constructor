@@ -4,11 +4,11 @@
  *  FILENAME:   zvd_datacenter_node_v28_lite.c
  *  VERSION:    2026.11-V28.4-LITE-PRODUCTION-READY-C17
  *
- *  AUTHOR:     Vladimir Zavodiuk (Владимир Заводюк)
+ *  AUTHOR:     Vladimir Zavodiuk
  *              Root-Architect / Varna, Bulgaria
  *
- *  COPYRIGHT:  Copyright (c) 2026 Vladimir Zavodiuk (Владимир Заводюк)
- *              ALL RIGHTS RESERVED / ВСЕ ПРАВА ЗАЩИЩЕНЫ
+ *  COPYRIGHT:  Copyright (c) 2026 Vladimir Zavodiuk 
+ *              ALL RIGHTS RESERVED 
  *
  *  LICENSE:    Proprietary. All rights reserved.
  * =============================================================================
