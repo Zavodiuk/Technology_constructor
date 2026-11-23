@@ -13,6 +13,8 @@
  *  LICENSE:    Proprietary. All rights reserved.
  * =============================================================================
  */
+#ifndef ZVD_DATACENTER_NODE_V28_INCLUDED
+#define ZVD_DATACENTER_NODE_V28_INCLUDED
 
 #define _GNU_SOURCE
 #include <stdint.h>
@@ -1408,3 +1410,4 @@ void run_gateway_mode(int listen_port, const char *target_ip, int target_port) {
     close(sockfd);
 #endif
 }
+#endif /* ZVD_DATACENTER_NODE_V28_INCLUDED */
