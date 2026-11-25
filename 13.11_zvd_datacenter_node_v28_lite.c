@@ -1238,11 +1238,14 @@ bool zvd_node_ingest_monolith_only(
     memset(out_pkt, 0, sizeof(ZVD_DatacenterPacket));
     out_pkt->original_size = len;
     out_pkt->fast_hash64 = zvd_fast_hash64(raw_data, len);
-
-    size_t sample_len = (len < 256) ? len : 256;
-    double sample_entropy = zvd_shannon_entropy(raw_data, sample_len);
-    out_pkt->entropy = (sample_entropy > ZVD_ENTROPY_BYPASS_THRESHOLD && len > 512) ? sample_entropy : zvd_shannon_entropy(raw_data, len);
-
+        if (len <= 512U) {
+        out_pkt->entropy = zvd_shannon_entropy(raw_data, len);
+    } else {
+        double sample_entropy = zvd_shannon_entropy(raw_data, 256U);
+        out_pkt->entropy = (sample_entropy > ZVD_ENTROPY_BYPASS_THRESHOLD)
+                               ? sample_entropy
+                               : zvd_shannon_entropy(raw_data, len);
+        }
     zvd_bicore_update_rotation(bi_core, out_pkt->entropy);
 
     alignas(64) float collapsed[ZVD_DIM_120];
